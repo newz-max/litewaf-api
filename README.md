@@ -71,4 +71,4 @@ docker run --rm -p 8080:8080 litewaf-api
 
 ## 部署环境
 
-项目默认以 Debian 12 作为主要部署系统。后端镜像运行时基于 `debian:12-slim`，便于和生产系统环境保持一致。
+项目推荐 Debian 12 minimal 作为宿主机基线，同时兼容主流 Linux + Docker Compose 环境。后端镜像当前运行时基于 `debian:12-slim`，后续可在稳定后评估 distroless 或 scratch 运行时。

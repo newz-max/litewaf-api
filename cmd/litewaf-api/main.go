@@ -41,6 +41,14 @@ func main() {
 	}
 	defer dataStore.Close()
 
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		if err := dataStore.Ping(context.Background()); err != nil {
+			logger.Error("healthcheck failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if cfg.AdminUsername != "" && cfg.AdminPassword != "" {
 		hash, err := auth.HashPassword(cfg.AdminPassword)
 		if err != nil {

@@ -10,6 +10,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/litewaf
 
 FROM debian:12-slim
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system litewaf \
     && useradd --system --gid litewaf --home-dir /app --shell /usr/sbin/nologin litewaf
 

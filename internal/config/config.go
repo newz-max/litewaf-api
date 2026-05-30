@@ -7,12 +7,14 @@ import (
 )
 
 type Config struct {
-	AppName     string
-	Env         string
-	HTTPAddr    string
-	LogLevel    slog.Level
-	DatabaseURL string
-	RedisAddr   string
+	AppName           string
+	Env               string
+	HTTPAddr          string
+	LogLevel          slog.Level
+	DatabaseURL       string
+	RedisAddr         string
+	GatewayConfigPath string
+	PublishOperator   string
 }
 
 func Load() Config {
@@ -23,6 +25,11 @@ func Load() Config {
 		LogLevel:    parseLogLevel(getEnv("LOG_LEVEL", "info")),
 		DatabaseURL: getEnv("DATABASE_URL", ""),
 		RedisAddr:   getEnv("REDIS_ADDR", ""),
+		GatewayConfigPath: getEnv(
+			"GATEWAY_CONFIG_PATH",
+			"/var/lib/litewaf/gateway/active.json",
+		),
+		PublishOperator: getEnv("PUBLISH_OPERATOR", "system"),
 	}
 }
 

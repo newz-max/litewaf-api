@@ -13,6 +13,7 @@ import (
 	"litewaf-api/internal/app"
 	"litewaf-api/internal/config"
 	"litewaf-api/internal/httpserver"
+	"litewaf-api/internal/store"
 )
 
 func main() {
@@ -21,7 +22,24 @@ func main() {
 		Level: cfg.LogLevel,
 	}))
 
-	application := app.New(cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	dataStore := store.Store(store.NewMemoryStore())
+	if cfg.DatabaseURL != "" {
+		pgStore, err := store.OpenPostgres(ctx, cfg.DatabaseURL)
+		if err != nil {
+			logger.Error("database connection failed", "error", err)
+			os.Exit(1)
+		}
+		dataStore = pgStore
+		logger.Info("database connected", "driver", "postgres")
+	} else {
+		logger.Warn("DATABASE_URL is empty, using in-memory store")
+	}
+	defer dataStore.Close()
+
+	application := app.New(cfg, dataStore)
 	server := httpserver.New(cfg, logger, application)
 
 	errCh := make(chan error, 1)
@@ -43,10 +61,10 @@ func main() {
 		logger.Info("shutdown signal received", "signal", sig.String())
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("server shutdown failed", "error", err)
 		os.Exit(1)
 	}

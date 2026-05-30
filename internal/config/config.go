@@ -3,7 +3,9 @@ package config
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 type Config struct {
@@ -15,6 +17,11 @@ type Config struct {
 	RedisAddr         string
 	GatewayConfigPath string
 	PublishOperator   string
+	AuthTokenSecret   string
+	AuthTokenTTL      time.Duration
+	AdminUsername     string
+	AdminPassword     string
+	AdminRole         string
 }
 
 func Load() Config {
@@ -30,6 +37,11 @@ func Load() Config {
 			"/var/lib/litewaf/gateway/active.json",
 		),
 		PublishOperator: getEnv("PUBLISH_OPERATOR", "system"),
+		AuthTokenSecret: getEnv("AUTH_TOKEN_SECRET", "dev-litewaf-change-me"),
+		AuthTokenTTL:    getEnvDuration("AUTH_TOKEN_TTL_MINUTES", 12*time.Hour),
+		AdminUsername:   getEnv("LITEWAF_ADMIN_USERNAME", "admin"),
+		AdminPassword:   getEnv("LITEWAF_ADMIN_PASSWORD", "admin123456"),
+		AdminRole:       getEnv("LITEWAF_ADMIN_ROLE", "admin"),
 	}
 }
 
@@ -39,6 +51,18 @@ func getEnv(key string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	minutes, err := strconv.Atoi(value)
+	if err != nil || minutes <= 0 {
+		return fallback
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 func parseLogLevel(value string) slog.Level {

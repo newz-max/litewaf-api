@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"litewaf-api/internal/app"
+	"litewaf-api/internal/auth"
 	"litewaf-api/internal/config"
 	"litewaf-api/internal/httpserver"
+	"litewaf-api/internal/model"
 	"litewaf-api/internal/store"
 )
 
@@ -38,6 +40,24 @@ func main() {
 		logger.Warn("DATABASE_URL is empty, using in-memory store")
 	}
 	defer dataStore.Close()
+
+	if cfg.AdminUsername != "" && cfg.AdminPassword != "" {
+		hash, err := auth.HashPassword(cfg.AdminPassword)
+		if err != nil {
+			logger.Error("admin password hash failed", "error", err)
+			os.Exit(1)
+		}
+		if _, err := dataStore.EnsureUser(context.Background(), model.User{
+			Username:     cfg.AdminUsername,
+			PasswordHash: hash,
+			Role:         cfg.AdminRole,
+			Enabled:      true,
+		}); err != nil {
+			logger.Error("admin bootstrap failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("admin user ensured", "username", cfg.AdminUsername, "role", cfg.AdminRole)
+	}
 
 	application := app.New(cfg, dataStore)
 	server := httpserver.New(cfg, logger, application)

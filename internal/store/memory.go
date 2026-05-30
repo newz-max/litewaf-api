@@ -15,10 +15,18 @@ type MemoryStore struct {
 	nextRuleID    int64
 	nextPolicyID  int64
 	nextPublishID int64
+	nextUserID    int64
+	nextAuditID   int64
+	nextAccessID  int64
+	nextRateID    int64
 	sites         map[int64]model.Site
 	rules         map[int64]model.Rule
 	policies      map[int64]model.Policy
 	publishes     map[int64]model.PublishRecord
+	users         map[int64]model.User
+	audits        map[int64]model.AuditLog
+	accessLists   map[int64]model.AccessListEntry
+	rateLimits    map[int64]model.RateLimitRule
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -27,10 +35,18 @@ func NewMemoryStore() *MemoryStore {
 		nextRuleID:    1,
 		nextPolicyID:  1,
 		nextPublishID: 1,
+		nextUserID:    1,
+		nextAuditID:   1,
+		nextAccessID:  1,
+		nextRateID:    1,
 		sites:         map[int64]model.Site{},
 		rules:         map[int64]model.Rule{},
 		policies:      map[int64]model.Policy{},
 		publishes:     map[int64]model.PublishRecord{},
+		users:         map[int64]model.User{},
+		audits:        map[int64]model.AuditLog{},
+		accessLists:   map[int64]model.AccessListEntry{},
+		rateLimits:    map[int64]model.RateLimitRule{},
 	}
 	store.seedRules()
 	return store
@@ -260,6 +276,209 @@ func (s *MemoryStore) NextPublishVersion(context.Context) (int64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return int64(len(s.publishes) + 1), nil
+}
+
+func (s *MemoryStore) GetPublishRecordByVersion(_ context.Context, version string) (model.PublishRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.publishes {
+		if item.Version == version {
+			return item, nil
+		}
+	}
+	return model.PublishRecord{}, ErrNotFound
+}
+
+func (s *MemoryStore) GetUserByUsername(_ context.Context, username string) (model.User, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.users {
+		if item.Username == username {
+			return item, nil
+		}
+	}
+	return model.User{}, ErrNotFound
+}
+
+func (s *MemoryStore) EnsureUser(_ context.Context, user model.User) (model.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, existing := range s.users {
+		if existing.Username == user.Username {
+			user.ID = id
+			user.CreatedAt = existing.CreatedAt
+			user.UpdatedAt = time.Now().UTC()
+			s.users[id] = user
+			return user, nil
+		}
+	}
+	now := time.Now().UTC()
+	user.ID = s.nextUserID
+	user.CreatedAt = now
+	user.UpdatedAt = now
+	s.users[user.ID] = user
+	s.nextUserID++
+	return user, nil
+}
+
+func (s *MemoryStore) ListAuditLogs(_ context.Context, filter model.AuditLogFilter) ([]model.AuditLog, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.AuditLog, 0, len(s.audits))
+	for _, item := range s.audits {
+		if auditMatches(item, filter) {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) CreateAuditLog(_ context.Context, item model.AuditLog) (model.AuditLog, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item.ID = s.nextAuditID
+	item.CreatedAt = time.Now().UTC()
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	s.audits[item.ID] = item
+	s.nextAuditID++
+	return item, nil
+}
+
+func (s *MemoryStore) ListAccessListEntries(context.Context) ([]model.AccessListEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.AccessListEntry, 0, len(s.accessLists))
+	for _, item := range s.accessLists {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetAccessListEntry(_ context.Context, id int64) (model.AccessListEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.accessLists[id]
+	if !ok {
+		return model.AccessListEntry{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) CreateAccessListEntry(_ context.Context, item model.AccessListEntry) (model.AccessListEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextAccessID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	s.accessLists[item.ID] = item
+	s.nextAccessID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateAccessListEntry(_ context.Context, id int64, item model.AccessListEntry) (model.AccessListEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.accessLists[id]
+	if !ok {
+		return model.AccessListEntry{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	s.accessLists[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteAccessListEntry(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.accessLists[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.accessLists, id)
+	return nil
+}
+
+func (s *MemoryStore) ListRateLimitRules(context.Context) ([]model.RateLimitRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RateLimitRule, 0, len(s.rateLimits))
+	for _, item := range s.rateLimits {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRateLimitRule(_ context.Context, id int64) (model.RateLimitRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.rateLimits[id]
+	if !ok {
+		return model.RateLimitRule{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRateLimitRule(_ context.Context, item model.RateLimitRule) (model.RateLimitRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextRateID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	s.rateLimits[item.ID] = item
+	s.nextRateID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRateLimitRule(_ context.Context, id int64, item model.RateLimitRule) (model.RateLimitRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.rateLimits[id]
+	if !ok {
+		return model.RateLimitRule{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	s.rateLimits[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteRateLimitRule(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.rateLimits[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.rateLimits, id)
+	return nil
+}
+
+func auditMatches(item model.AuditLog, filter model.AuditLogFilter) bool {
+	if filter.Actor != "" && item.Actor != filter.Actor {
+		return false
+	}
+	if filter.Action != "" && item.Action != filter.Action {
+		return false
+	}
+	if filter.ResourceType != "" && item.ResourceType != filter.ResourceType {
+		return false
+	}
+	if filter.Result != "" && item.Result != filter.Result {
+		return false
+	}
+	if !filter.Since.IsZero() && item.CreatedAt.Before(filter.Since) {
+		return false
+	}
+	if !filter.Until.IsZero() && item.CreatedAt.After(filter.Until) {
+		return false
+	}
+	return true
 }
 
 func (s *MemoryStore) bindingsExistLocked(policy model.Policy) bool {

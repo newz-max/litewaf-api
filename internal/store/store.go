@@ -38,6 +38,25 @@ type Store interface {
 	ListPublishRecords(context.Context) ([]model.PublishRecord, error)
 	CreatePublishRecord(context.Context, model.PublishRecord) (model.PublishRecord, error)
 	NextPublishVersion(context.Context) (int64, error)
+	GetPublishRecordByVersion(context.Context, string) (model.PublishRecord, error)
+
+	GetUserByUsername(context.Context, string) (model.User, error)
+	EnsureUser(context.Context, model.User) (model.User, error)
+
+	ListAuditLogs(context.Context, model.AuditLogFilter) ([]model.AuditLog, error)
+	CreateAuditLog(context.Context, model.AuditLog) (model.AuditLog, error)
+
+	ListAccessListEntries(context.Context) ([]model.AccessListEntry, error)
+	GetAccessListEntry(context.Context, int64) (model.AccessListEntry, error)
+	CreateAccessListEntry(context.Context, model.AccessListEntry) (model.AccessListEntry, error)
+	UpdateAccessListEntry(context.Context, int64, model.AccessListEntry) (model.AccessListEntry, error)
+	DeleteAccessListEntry(context.Context, int64) error
+
+	ListRateLimitRules(context.Context) ([]model.RateLimitRule, error)
+	GetRateLimitRule(context.Context, int64) (model.RateLimitRule, error)
+	CreateRateLimitRule(context.Context, model.RateLimitRule) (model.RateLimitRule, error)
+	UpdateRateLimitRule(context.Context, int64, model.RateLimitRule) (model.RateLimitRule, error)
+	DeleteRateLimitRule(context.Context, int64) error
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {

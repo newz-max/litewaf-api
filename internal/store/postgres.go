@@ -263,7 +263,7 @@ func (s *PostgresStore) DeletePolicy(ctx context.Context, id int64) error {
 
 func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.PublishRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, version, operator, status, config_path, checksum, note, created_at
+		SELECT id, version, operator, status, config_path, checksum, note, config_json, created_at
 		FROM publish_records
 		ORDER BY id DESC`)
 	if err != nil {
@@ -274,7 +274,7 @@ func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.Publish
 	var items []model.PublishRecord
 	for rows.Next() {
 		var item model.PublishRecord
-		if err := rows.Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.ConfigJSON, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
@@ -285,10 +285,10 @@ func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.Publish
 
 func (s *PostgresStore) CreatePublishRecord(ctx context.Context, record model.PublishRecord) (model.PublishRecord, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO publish_records (version, operator, status, config_path, checksum, note)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO publish_records (version, operator, status, config_path, checksum, note, config_json)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at`,
-		record.Version, record.Operator, record.Status, record.ConfigPath, record.Checksum, record.Note).
+		record.Version, record.Operator, record.Status, record.ConfigPath, record.Checksum, record.Note, record.ConfigJSON).
 		Scan(&record.ID, &record.CreatedAt)
 	record.Time = record.CreatedAt.Format(time.RFC3339)
 	return record, err
@@ -298,6 +298,211 @@ func (s *PostgresStore) NextPublishVersion(ctx context.Context) (int64, error) {
 	var value int64
 	err := s.db.QueryRowContext(ctx, `SELECT count(*) + 1 FROM publish_records`).Scan(&value)
 	return value, err
+}
+
+func (s *PostgresStore) GetPublishRecordByVersion(ctx context.Context, version string) (model.PublishRecord, error) {
+	var item model.PublishRecord
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, version, operator, status, config_path, checksum, note, config_json, created_at
+		FROM publish_records
+		WHERE version = $1`, version).
+		Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.ConfigJSON, &item.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.PublishRecord{}, ErrNotFound
+	}
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	return item, err
+}
+
+func (s *PostgresStore) GetUserByUsername(ctx context.Context, username string) (model.User, error) {
+	var item model.User
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, username, password_hash, role, enabled, created_at, updated_at
+		FROM users
+		WHERE username = $1`, username).
+		Scan(&item.ID, &item.Username, &item.PasswordHash, &item.Role, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.User{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) EnsureUser(ctx context.Context, user model.User) (model.User, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO users (username, password_hash, role, enabled)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (username) DO UPDATE
+		SET password_hash = EXCLUDED.password_hash,
+			role = EXCLUDED.role,
+			enabled = EXCLUDED.enabled,
+			updated_at = now()
+		RETURNING id, created_at, updated_at`,
+		user.Username, user.PasswordHash, user.Role, user.Enabled).
+		Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+	return user, err
+}
+
+func (s *PostgresStore) ListAuditLogs(ctx context.Context, filter model.AuditLogFilter) ([]model.AuditLog, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, actor, role, action, resource_type, resource_id, result, remote_addr, user_agent, message, created_at
+		FROM audit_logs
+		WHERE ($1 = '' OR actor = $1)
+			AND ($2 = '' OR action = $2)
+			AND ($3 = '' OR resource_type = $3)
+			AND ($4 = '' OR result = $4)
+			AND ($5::timestamptz IS NULL OR created_at >= $5)
+			AND ($6::timestamptz IS NULL OR created_at <= $6)
+		ORDER BY id DESC`,
+		filter.Actor, filter.Action, filter.ResourceType, filter.Result, nullableTime(filter.Since), nullableTime(filter.Until))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.AuditLog
+	for rows.Next() {
+		var item model.AuditLog
+		if err := rows.Scan(&item.ID, &item.Actor, &item.Role, &item.Action, &item.ResourceType, &item.ResourceID, &item.Result, &item.RemoteAddr, &item.UserAgent, &item.Message, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.Time = item.CreatedAt.Format(time.RFC3339)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) CreateAuditLog(ctx context.Context, item model.AuditLog) (model.AuditLog, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO audit_logs (actor, role, action, resource_type, resource_id, result, remote_addr, user_agent, message)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, created_at`,
+		item.Actor, item.Role, item.Action, item.ResourceType, item.ResourceID, item.Result, item.RemoteAddr, item.UserAgent, item.Message).
+		Scan(&item.ID, &item.CreatedAt)
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	return item, err
+}
+
+func (s *PostgresStore) ListAccessListEntries(ctx context.Context) ([]model.AccessListEntry, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, kind, target, value, action, site_id, enabled, created_at, updated_at
+		FROM access_list_entries
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.AccessListEntry
+	for rows.Next() {
+		var item model.AccessListEntry
+		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.Action, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetAccessListEntry(ctx context.Context, id int64) (model.AccessListEntry, error) {
+	var item model.AccessListEntry
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, kind, target, value, action, site_id, enabled, created_at, updated_at
+		FROM access_list_entries
+		WHERE id = $1`, id).
+		Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.Action, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AccessListEntry{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateAccessListEntry(ctx context.Context, item model.AccessListEntry) (model.AccessListEntry, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO access_list_entries (name, kind, target, value, action, site_id, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Kind, item.Target, item.Value, item.Action, item.SiteID, item.Enabled).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateAccessListEntry(ctx context.Context, id int64, item model.AccessListEntry) (model.AccessListEntry, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE access_list_entries
+		SET name = $2, kind = $3, target = $4, value = $5, action = $6, site_id = $7, enabled = $8, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Kind, item.Target, item.Value, item.Action, item.SiteID, item.Enabled).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AccessListEntry{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteAccessListEntry(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM access_list_entries WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLimitRule, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, site_id, enabled, created_at, updated_at
+		FROM rate_limit_rules
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RateLimitRule
+	for rows.Next() {
+		var item model.RateLimitRule
+		if err := rows.Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRateLimitRule(ctx context.Context, id int64) (model.RateLimitRule, error) {
+	var item model.RateLimitRule
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, site_id, enabled, created_at, updated_at
+		FROM rate_limit_rules
+		WHERE id = $1`, id).
+		Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RateLimitRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRateLimitRule(ctx context.Context, item model.RateLimitRule) (model.RateLimitRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rate_limit_rules (name, scope, match_value, threshold, window_sec, action, ban_duration_sec, site_id, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.SiteID, item.Enabled).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRateLimitRule(ctx context.Context, id int64, item model.RateLimitRule) (model.RateLimitRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE rate_limit_rules
+		SET name = $2, scope = $3, match_value = $4, threshold = $5, window_sec = $6, action = $7, ban_duration_sec = $8, site_id = $9, enabled = $10, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.SiteID, item.Enabled).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RateLimitRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteRateLimitRule(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM rate_limit_rules WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
 }
 
 func (s *PostgresStore) policyBindings(ctx context.Context, policyID int64) ([]int64, []int64, error) {
@@ -351,6 +556,13 @@ func validateRefs(ctx context.Context, tx *sql.Tx, table string, ids []int64) er
 		}
 	}
 	return nil
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
 }
 
 func replacePolicyBindings(ctx context.Context, tx *sql.Tx, policyID int64, siteIDs []int64, ruleIDs []int64) error {

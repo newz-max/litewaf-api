@@ -55,7 +55,62 @@ CREATE TABLE IF NOT EXISTS publish_records (
 	config_path TEXT NOT NULL,
 	checksum TEXT NOT NULL,
 	note TEXT NOT NULL DEFAULT '',
+	config_json TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS config_json TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS users (
+	id BIGSERIAL PRIMARY KEY,
+	username TEXT NOT NULL UNIQUE,
+	password_hash TEXT NOT NULL,
+	role TEXT NOT NULL,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+	id BIGSERIAL PRIMARY KEY,
+	actor TEXT NOT NULL,
+	role TEXT NOT NULL,
+	action TEXT NOT NULL,
+	resource_type TEXT NOT NULL,
+	resource_id TEXT NOT NULL DEFAULT '',
+	result TEXT NOT NULL,
+	remote_addr TEXT NOT NULL DEFAULT '',
+	user_agent TEXT NOT NULL DEFAULT '',
+	message TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS access_list_entries (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	target TEXT NOT NULL,
+	value TEXT NOT NULL,
+	action TEXT NOT NULL,
+	site_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rate_limit_rules (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	scope TEXT NOT NULL,
+	match_value TEXT NOT NULL DEFAULT '',
+	threshold INTEGER NOT NULL,
+	window_sec INTEGER NOT NULL,
+	action TEXT NOT NULL,
+	ban_duration_sec INTEGER NOT NULL DEFAULT 0,
+	site_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled)

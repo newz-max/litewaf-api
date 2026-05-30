@@ -1,7 +1,9 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -49,6 +51,30 @@ func Load() Config {
 	}
 }
 
+func (c Config) ValidateProduction() error {
+	if strings.ToLower(strings.TrimSpace(c.Env)) != "production" {
+		return nil
+	}
+
+	var unsafe []string
+	if isUnsafeSecret(c.AuthTokenSecret) {
+		unsafe = append(unsafe, "AUTH_TOKEN_SECRET")
+	}
+	if isUnsafeSecret(c.GatewayIngestionToken) {
+		unsafe = append(unsafe, "GATEWAY_INGESTION_TOKEN")
+	}
+	if isUnsafeSecret(c.AdminPassword) {
+		unsafe = append(unsafe, "LITEWAF_ADMIN_PASSWORD")
+	}
+	if isUnsafeDatabaseURL(c.DatabaseURL) {
+		unsafe = append(unsafe, "DATABASE_URL")
+	}
+	if len(unsafe) > 0 {
+		return fmt.Errorf("unsafe production configuration: %s", strings.Join(unsafe, ", "))
+	}
+	return nil
+}
+
 func getEnv(key string, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -88,4 +114,29 @@ func parseLogLevel(value string) slog.Level {
 	default:
 		return slog.LevelInfo
 	}
+}
+
+func isUnsafeSecret(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "change-me", "admin123456", "litewaf_dev_password", "dev-litewaf-change-me", "dev-gateway-change-me":
+		return true
+	default:
+		return false
+	}
+}
+
+func isUnsafeDatabaseURL(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return true
+	}
+	password, ok := parsed.User.Password()
+	if !ok {
+		return true
+	}
+	return isUnsafeSecret(password)
 }

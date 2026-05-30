@@ -32,6 +32,10 @@ go run ./cmd/litewaf-api
 | LITEWAF_ADMIN_USERNAME | admin | 初始化管理员账号 |
 | LITEWAF_ADMIN_PASSWORD | admin123456 | 初始化管理员密码，生产环境必须修改 |
 | LITEWAF_ADMIN_ROLE | admin | 初始化账号角色 |
+| GATEWAY_INGESTION_TOKEN | 空 | 网关日志上报令牌，生产环境必须设置 |
+| METRICS_ENABLED | false | 是否暴露 API Prometheus 指标 |
+
+当 `APP_ENV=production` 时，服务会拒绝空值或已知默认弱配置，包括默认管理员密码、默认 token 密钥、默认网关上报令牌，以及包含默认数据库密码的 `DATABASE_URL`。
 
 ## 接口
 

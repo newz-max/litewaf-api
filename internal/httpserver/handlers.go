@@ -335,11 +335,12 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
-			"sites":        len(sites),
-			"rules":        len(rules),
-			"policies":     len(policies),
-			"access_lists": len(accessLists),
-			"rate_limits":  len(rateLimits),
+			"sites":               len(sites),
+			"rules":               len(rules),
+			"policies":            len(policies),
+			"access_lists":        len(accessLists),
+			"rate_limits":         len(rateLimits),
+			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
 }
@@ -542,21 +543,53 @@ func (r ruleRequest) toModel() model.Rule {
 }
 
 type policyRequest struct {
-	Name          string  `json:"name"`
-	RiskThreshold int     `json:"risk_threshold"`
-	DefaultAction string  `json:"default_action"`
-	Enabled       *bool   `json:"enabled"`
-	SiteIDs       []int64 `json:"site_ids"`
-	RuleIDs       []int64 `json:"rule_ids"`
+	Name                       string   `json:"name"`
+	RiskThreshold              int      `json:"risk_threshold"`
+	DefaultAction              string   `json:"default_action"`
+	NormalizationEnabled       *bool    `json:"normalization_enabled"`
+	NormalizationDecodePasses  int      `json:"normalization_decode_passes"`
+	NormalizationMaxValueBytes int      `json:"normalization_max_value_bytes"`
+	BodyInspectionEnabled      *bool    `json:"body_inspection_enabled"`
+	BodyInspectionContentTypes []string `json:"body_inspection_content_types"`
+	BodyInspectionPathPrefixes []string `json:"body_inspection_path_prefixes"`
+	BodyInspectionMaxBytes     int      `json:"body_inspection_max_bytes"`
+	OversizedBodyAction        string   `json:"oversized_body_action"`
+	UploadInspectionEnabled    *bool    `json:"upload_inspection_enabled"`
+	UploadMaxBytes             int      `json:"upload_max_bytes"`
+	UploadSizeAction           string   `json:"upload_size_action"`
+	DynamicBanEnabled          *bool    `json:"dynamic_ban_enabled"`
+	DynamicBanDurationSec      int      `json:"dynamic_ban_duration_sec"`
+	DynamicBanScoreThreshold   int      `json:"dynamic_ban_score_threshold"`
+	DynamicBanTriggerCount     int      `json:"dynamic_ban_trigger_count"`
+	DynamicBanWindowSec        int      `json:"dynamic_ban_window_sec"`
+	Enabled                    *bool    `json:"enabled"`
+	SiteIDs                    []int64  `json:"site_ids"`
+	RuleIDs                    []int64  `json:"rule_ids"`
 }
 
 func (r policyRequest) toModel() model.Policy {
 	return model.Policy{
-		Name:          r.Name,
-		RiskThreshold: r.RiskThreshold,
-		DefaultAction: r.DefaultAction,
-		SiteIDs:       cloneIDs(r.SiteIDs),
-		RuleIDs:       cloneIDs(r.RuleIDs),
+		Name:                       r.Name,
+		RiskThreshold:              r.RiskThreshold,
+		DefaultAction:              r.DefaultAction,
+		NormalizationEnabled:       boolValue(r.NormalizationEnabled, true),
+		NormalizationDecodePasses:  r.NormalizationDecodePasses,
+		NormalizationMaxValueBytes: r.NormalizationMaxValueBytes,
+		BodyInspectionEnabled:      boolValue(r.BodyInspectionEnabled, false),
+		BodyInspectionContentTypes: cloneStrings(r.BodyInspectionContentTypes),
+		BodyInspectionPathPrefixes: cloneStrings(r.BodyInspectionPathPrefixes),
+		BodyInspectionMaxBytes:     r.BodyInspectionMaxBytes,
+		OversizedBodyAction:        r.OversizedBodyAction,
+		UploadInspectionEnabled:    boolValue(r.UploadInspectionEnabled, false),
+		UploadMaxBytes:             r.UploadMaxBytes,
+		UploadSizeAction:           r.UploadSizeAction,
+		DynamicBanEnabled:          boolValue(r.DynamicBanEnabled, false),
+		DynamicBanDurationSec:      r.DynamicBanDurationSec,
+		DynamicBanScoreThreshold:   r.DynamicBanScoreThreshold,
+		DynamicBanTriggerCount:     r.DynamicBanTriggerCount,
+		DynamicBanWindowSec:        r.DynamicBanWindowSec,
+		SiteIDs:                    cloneIDs(r.SiteIDs),
+		RuleIDs:                    cloneIDs(r.RuleIDs),
 	}
 }
 
@@ -582,27 +615,31 @@ func (r accessListRequest) toModel() model.AccessListEntry {
 }
 
 type rateLimitRequest struct {
-	Name        string `json:"name"`
-	Scope       string `json:"scope"`
-	MatchValue  string `json:"match_value"`
-	Threshold   int    `json:"threshold"`
-	WindowSec   int    `json:"window_sec"`
-	Action      string `json:"action"`
-	BanDuration int    `json:"ban_duration_sec"`
-	SiteID      int64  `json:"site_id"`
-	Enabled     *bool  `json:"enabled"`
+	Name               string `json:"name"`
+	Scope              string `json:"scope"`
+	MatchValue         string `json:"match_value"`
+	Threshold          int    `json:"threshold"`
+	WindowSec          int    `json:"window_sec"`
+	Action             string `json:"action"`
+	BanDuration        int    `json:"ban_duration_sec"`
+	ViolationThreshold int    `json:"violation_threshold"`
+	ViolationWindowSec int    `json:"violation_window_sec"`
+	SiteID             int64  `json:"site_id"`
+	Enabled            *bool  `json:"enabled"`
 }
 
 func (r rateLimitRequest) toModel() model.RateLimitRule {
 	return model.RateLimitRule{
-		Name:        r.Name,
-		Scope:       r.Scope,
-		MatchValue:  r.MatchValue,
-		Threshold:   r.Threshold,
-		WindowSec:   r.WindowSec,
-		Action:      r.Action,
-		BanDuration: r.BanDuration,
-		SiteID:      r.SiteID,
+		Name:               r.Name,
+		Scope:              r.Scope,
+		MatchValue:         r.MatchValue,
+		Threshold:          r.Threshold,
+		WindowSec:          r.WindowSec,
+		Action:             r.Action,
+		BanDuration:        r.BanDuration,
+		ViolationThreshold: r.ViolationThreshold,
+		ViolationWindowSec: r.ViolationWindowSec,
+		SiteID:             r.SiteID,
 	}
 }
 
@@ -619,6 +656,15 @@ func cloneIDs(ids []int64) []int64 {
 	}
 	out := make([]int64, len(ids))
 	copy(out, ids)
+	return out
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	out := make([]string, len(values))
+	copy(out, values)
 	return out
 }
 
@@ -738,8 +784,8 @@ func validateRule(rule model.Rule) error {
 	if !oneOf(rule.Type, "sqli", "xss", "rce", "cc", "bot", "custom") {
 		return errors.New("rule type is unsupported")
 	}
-	if !oneOf(rule.Target, "args", "uri", "headers") {
-		return errors.New("rule target must be args, uri, or headers")
+	if !oneOf(rule.Target, "args", "uri", "headers", "normalized_uri", "normalized_path", "normalized_args", "normalized_headers", "body", "body_json", "body_form", "upload_filename", "upload_extension", "upload_mime", "upload_size") {
+		return errors.New("rule target is unsupported")
 	}
 	if !oneOf(rule.Action, "pass", "block", "log-only") {
 		return errors.New("rule action must be pass, block, or log-only")
@@ -747,7 +793,12 @@ func validateRule(rule model.Rule) error {
 	if rule.Expression == "" {
 		return errors.New("rule expression is required")
 	}
-	if err := validateRegex(rule.Expression); err != nil {
+	if rule.Target == "upload_size" {
+		value, err := strconv.Atoi(rule.Expression)
+		if err != nil || value < 0 {
+			return errors.New("upload_size rule expression must be a non-negative integer")
+		}
+	} else if err := validateRegex(rule.Expression); err != nil {
 		return errors.New("rule expression is invalid")
 	}
 	if rule.Score < 0 || rule.Score > 1000 {
@@ -759,12 +810,46 @@ func validateRule(rule model.Rule) error {
 func normalizePolicy(policy *model.Policy) {
 	policy.Name = strings.TrimSpace(policy.Name)
 	policy.DefaultAction = strings.ToLower(strings.TrimSpace(policy.DefaultAction))
+	policy.OversizedBodyAction = strings.ToLower(strings.TrimSpace(policy.OversizedBodyAction))
+	policy.UploadSizeAction = strings.ToLower(strings.TrimSpace(policy.UploadSizeAction))
 	if policy.DefaultAction == "" {
 		policy.DefaultAction = "block"
 	}
 	if policy.RiskThreshold == 0 {
 		policy.RiskThreshold = 100
 	}
+	if policy.NormalizationDecodePasses == 0 {
+		policy.NormalizationDecodePasses = 2
+	}
+	if policy.NormalizationMaxValueBytes == 0 {
+		policy.NormalizationMaxValueBytes = 4096
+	}
+	if policy.BodyInspectionMaxBytes == 0 {
+		policy.BodyInspectionMaxBytes = 65536
+	}
+	if policy.OversizedBodyAction == "" {
+		policy.OversizedBodyAction = "log-only"
+	}
+	if policy.UploadMaxBytes == 0 {
+		policy.UploadMaxBytes = 10485760
+	}
+	if policy.UploadSizeAction == "" {
+		policy.UploadSizeAction = "block"
+	}
+	if policy.DynamicBanDurationSec == 0 {
+		policy.DynamicBanDurationSec = 300
+	}
+	if policy.DynamicBanScoreThreshold == 0 {
+		policy.DynamicBanScoreThreshold = 200
+	}
+	if policy.DynamicBanTriggerCount == 0 {
+		policy.DynamicBanTriggerCount = 3
+	}
+	if policy.DynamicBanWindowSec == 0 {
+		policy.DynamicBanWindowSec = 60
+	}
+	policy.BodyInspectionContentTypes = normalizeStringList(policy.BodyInspectionContentTypes, true)
+	policy.BodyInspectionPathPrefixes = normalizeStringList(policy.BodyInspectionPathPrefixes, false)
 }
 
 func validatePolicy(policy model.Policy) error {
@@ -776,6 +861,36 @@ func validatePolicy(policy model.Policy) error {
 	}
 	if !oneOf(policy.DefaultAction, "pass", "block", "log-only") {
 		return errors.New("policy default_action must be pass, block, or log-only")
+	}
+	if policy.NormalizationDecodePasses < 1 || policy.NormalizationDecodePasses > 5 {
+		return errors.New("policy normalization_decode_passes must be between 1 and 5")
+	}
+	if policy.NormalizationMaxValueBytes < 128 || policy.NormalizationMaxValueBytes > 65536 {
+		return errors.New("policy normalization_max_value_bytes must be between 128 and 65536")
+	}
+	if policy.BodyInspectionMaxBytes < 1 || policy.BodyInspectionMaxBytes > 1048576 {
+		return errors.New("policy body_inspection_max_bytes must be between 1 and 1048576")
+	}
+	if !oneOf(policy.OversizedBodyAction, "pass", "block", "log-only") {
+		return errors.New("policy oversized_body_action must be pass, block, or log-only")
+	}
+	if policy.UploadMaxBytes < 1 || policy.UploadMaxBytes > 1073741824 {
+		return errors.New("policy upload_max_bytes must be between 1 and 1073741824")
+	}
+	if !oneOf(policy.UploadSizeAction, "pass", "block", "log-only") {
+		return errors.New("policy upload_size_action must be pass, block, or log-only")
+	}
+	if policy.DynamicBanDurationSec < 1 || policy.DynamicBanDurationSec > 86400 {
+		return errors.New("policy dynamic_ban_duration_sec must be between 1 and 86400")
+	}
+	if policy.DynamicBanScoreThreshold < 1 || policy.DynamicBanScoreThreshold > 10000 {
+		return errors.New("policy dynamic_ban_score_threshold must be between 1 and 10000")
+	}
+	if policy.DynamicBanTriggerCount < 1 || policy.DynamicBanTriggerCount > 1000 {
+		return errors.New("policy dynamic_ban_trigger_count must be between 1 and 1000")
+	}
+	if policy.DynamicBanWindowSec < 1 || policy.DynamicBanWindowSec > 86400 {
+		return errors.New("policy dynamic_ban_window_sec must be between 1 and 86400")
 	}
 	if len(policy.SiteIDs) == 0 {
 		return errors.New("policy site_ids is required")
@@ -837,6 +952,12 @@ func normalizeRateLimit(item *model.RateLimitRule) {
 	if item.Action == "" {
 		item.Action = "block"
 	}
+	if item.ViolationThreshold == 0 && item.BanDuration > 0 {
+		item.ViolationThreshold = 3
+	}
+	if item.ViolationWindowSec == 0 && item.ViolationThreshold > 0 {
+		item.ViolationWindowSec = item.WindowSec
+	}
 }
 
 func validateRateLimit(item model.RateLimitRule) error {
@@ -855,10 +976,42 @@ func validateRateLimit(item model.RateLimitRule) error {
 	if item.BanDuration < 0 {
 		return errors.New("rate limit ban_duration_sec cannot be negative")
 	}
+	if item.ViolationThreshold < 0 {
+		return errors.New("rate limit violation_threshold cannot be negative")
+	}
+	if item.ViolationWindowSec < 0 {
+		return errors.New("rate limit violation_window_sec cannot be negative")
+	}
+	if item.ViolationThreshold > 0 && (item.ViolationWindowSec <= 0 || item.BanDuration <= 0) {
+		return errors.New("rate limit repeated violation settings require positive violation_window_sec and ban_duration_sec")
+	}
+	if item.ViolationWindowSec > 0 && item.ViolationThreshold <= 0 {
+		return errors.New("rate limit violation_threshold must be positive when violation_window_sec is set")
+	}
 	if !oneOf(item.Action, "block", "log-only") {
 		return errors.New("rate limit action must be block or log-only")
 	}
 	return nil
+}
+
+func countAdvancedProtection(policies []model.Policy, rules []model.Rule, rateLimits []model.RateLimitRule) int {
+	count := 0
+	for _, policy := range policies {
+		if policy.NormalizationEnabled || policy.BodyInspectionEnabled || policy.UploadInspectionEnabled || policy.DynamicBanEnabled {
+			count++
+		}
+	}
+	for _, rule := range rules {
+		if oneOf(rule.Target, "normalized_uri", "normalized_path", "normalized_args", "normalized_headers", "body", "body_json", "body_form", "upload_filename", "upload_extension", "upload_mime", "upload_size") {
+			count++
+		}
+	}
+	for _, rule := range rateLimits {
+		if rule.ViolationThreshold > 0 || rule.ViolationWindowSec > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func parseAuditFilter(w http.ResponseWriter, r *http.Request) (model.AuditLogFilter, bool) {
@@ -936,4 +1089,21 @@ func oneOf(value string, allowed ...string) bool {
 		}
 	}
 	return false
+}
+
+func normalizeStringList(values []string, lower bool) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		item := strings.TrimSpace(value)
+		if lower {
+			item = strings.ToLower(item)
+		}
+		if item == "" || seen[item] {
+			continue
+		}
+		seen[item] = true
+		out = append(out, item)
+	}
+	return out
 }

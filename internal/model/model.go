@@ -27,15 +27,31 @@ type Rule struct {
 }
 
 type Policy struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	RiskThreshold int       `json:"risk_threshold"`
-	DefaultAction string    `json:"default_action"`
-	Enabled       bool      `json:"enabled"`
-	SiteIDs       []int64   `json:"site_ids"`
-	RuleIDs       []int64   `json:"rule_ids"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                         int64     `json:"id"`
+	Name                       string    `json:"name"`
+	RiskThreshold              int       `json:"risk_threshold"`
+	DefaultAction              string    `json:"default_action"`
+	NormalizationEnabled       bool      `json:"normalization_enabled"`
+	NormalizationDecodePasses  int       `json:"normalization_decode_passes"`
+	NormalizationMaxValueBytes int       `json:"normalization_max_value_bytes"`
+	BodyInspectionEnabled      bool      `json:"body_inspection_enabled"`
+	BodyInspectionContentTypes []string  `json:"body_inspection_content_types"`
+	BodyInspectionPathPrefixes []string  `json:"body_inspection_path_prefixes"`
+	BodyInspectionMaxBytes     int       `json:"body_inspection_max_bytes"`
+	OversizedBodyAction        string    `json:"oversized_body_action"`
+	UploadInspectionEnabled    bool      `json:"upload_inspection_enabled"`
+	UploadMaxBytes             int       `json:"upload_max_bytes"`
+	UploadSizeAction           string    `json:"upload_size_action"`
+	DynamicBanEnabled          bool      `json:"dynamic_ban_enabled"`
+	DynamicBanDurationSec      int       `json:"dynamic_ban_duration_sec"`
+	DynamicBanScoreThreshold   int       `json:"dynamic_ban_score_threshold"`
+	DynamicBanTriggerCount     int       `json:"dynamic_ban_trigger_count"`
+	DynamicBanWindowSec        int       `json:"dynamic_ban_window_sec"`
+	Enabled                    bool      `json:"enabled"`
+	SiteIDs                    []int64   `json:"site_ids"`
+	RuleIDs                    []int64   `json:"rule_ids"`
+	CreatedAt                  time.Time `json:"created_at"`
+	UpdatedAt                  time.Time `json:"updated_at"`
 }
 
 type PublishRecord struct {
@@ -122,47 +138,63 @@ type AccessLogFilter struct {
 }
 
 type WAFEvent struct {
-	Event        string    `json:"event,omitempty"`
-	ID           int64     `json:"id"`
-	RequestID    string    `json:"request_id"`
-	SiteID       int64     `json:"site_id"`
-	EventType    string    `json:"event_type"`
-	RuleID       int64     `json:"rule_id"`
-	RuleType     string    `json:"rule_type"`
-	Target       string    `json:"target"`
-	Action       string    `json:"action"`
-	Disposition  string    `json:"disposition"`
-	ClientIP     string    `json:"client_ip"`
-	Method       string    `json:"method"`
-	URI          string    `json:"uri"`
-	Summary      string    `json:"summary"`
-	AccessListID int64     `json:"access_list_id"`
-	RateLimitID  int64     `json:"rate_limit_id"`
-	CreatedAt    time.Time `json:"created_at"`
-	Time         string    `json:"time"`
+	Event           string    `json:"event,omitempty"`
+	ID              int64     `json:"id"`
+	RequestID       string    `json:"request_id"`
+	SiteID          int64     `json:"site_id"`
+	EventType       string    `json:"event_type"`
+	RuleID          int64     `json:"rule_id"`
+	RuleType        string    `json:"rule_type"`
+	Target          string    `json:"target"`
+	Action          string    `json:"action"`
+	Disposition     string    `json:"disposition"`
+	ClientIP        string    `json:"client_ip"`
+	Method          string    `json:"method"`
+	URI             string    `json:"uri"`
+	Summary         string    `json:"summary"`
+	AccessListID    int64     `json:"access_list_id"`
+	RateLimitID     int64     `json:"rate_limit_id"`
+	AdvancedTarget  string    `json:"advanced_target"`
+	NormalizedValue string    `json:"normalized_value"`
+	Score           int       `json:"score"`
+	Threshold       int       `json:"threshold"`
+	MatchedRuleIDs  string    `json:"matched_rule_ids"`
+	BodyMetadata    string    `json:"body_metadata"`
+	UploadMetadata  string    `json:"upload_metadata"`
+	BanReason       string    `json:"ban_reason"`
+	BanDurationSec  int       `json:"ban_duration_sec"`
+	BanRemainingSec int       `json:"ban_remaining_sec"`
+	CreatedAt       time.Time `json:"created_at"`
+	Time            string    `json:"time"`
 }
 
 type WAFEventFilter struct {
-	SiteID      int64
-	ClientIP    string
-	RuleID      int64
-	Action      string
-	Disposition string
-	EventType   string
-	Since       time.Time
-	Until       time.Time
-	Pagination  Pagination
+	SiteID         int64
+	ClientIP       string
+	RuleID         int64
+	Action         string
+	Disposition    string
+	EventType      string
+	AdvancedTarget string
+	MinScore       int
+	Since          time.Time
+	Until          time.Time
+	Pagination     Pagination
 }
 
 type ObservabilitySummary struct {
-	Requests        int64          `json:"requests"`
-	BlockedRequests int64          `json:"blocked_requests"`
-	WAFMatches      int64          `json:"waf_matches"`
-	RateLimited     int64          `json:"rate_limited"`
-	TopIPs          []SummaryCount `json:"top_ips"`
-	TopURIs         []SummaryCount `json:"top_uris"`
-	TopRules        []SummaryCount `json:"top_rules"`
-	AttackTypes     []SummaryCount `json:"attack_types"`
+	Requests         int64          `json:"requests"`
+	BlockedRequests  int64          `json:"blocked_requests"`
+	WAFMatches       int64          `json:"waf_matches"`
+	RateLimited      int64          `json:"rate_limited"`
+	ScoreBlocks      int64          `json:"score_blocks"`
+	BodyDetections   int64          `json:"body_detections"`
+	UploadDetections int64          `json:"upload_detections"`
+	DynamicBans      int64          `json:"dynamic_bans"`
+	TopIPs           []SummaryCount `json:"top_ips"`
+	TopURIs          []SummaryCount `json:"top_uris"`
+	TopRules         []SummaryCount `json:"top_rules"`
+	AttackTypes      []SummaryCount `json:"attack_types"`
 }
 
 type SummaryCount struct {
@@ -190,16 +222,18 @@ type AccessListEntry struct {
 }
 
 type RateLimitRule struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Scope       string    `json:"scope"`
-	MatchValue  string    `json:"match_value"`
-	Threshold   int       `json:"threshold"`
-	WindowSec   int       `json:"window_sec"`
-	Action      string    `json:"action"`
-	BanDuration int       `json:"ban_duration_sec"`
-	SiteID      int64     `json:"site_id"`
-	Enabled     bool      `json:"enabled"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Scope              string    `json:"scope"`
+	MatchValue         string    `json:"match_value"`
+	Threshold          int       `json:"threshold"`
+	WindowSec          int       `json:"window_sec"`
+	Action             string    `json:"action"`
+	BanDuration        int       `json:"ban_duration_sec"`
+	ViolationThreshold int       `json:"violation_threshold"`
+	ViolationWindowSec int       `json:"violation_window_sec"`
+	SiteID             int64     `json:"site_id"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }

@@ -438,6 +438,22 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		if item.EventType == "rate-limit" || item.RateLimitID > 0 {
 			summary.RateLimited++
 		}
+		switch item.EventType {
+		case "score-threshold":
+			summary.ScoreBlocks++
+		case "body-inspection":
+			summary.BodyDetections++
+		case "upload-inspection":
+			summary.UploadDetections++
+		case "dynamic-ban":
+			summary.DynamicBans++
+		}
+		switch item.AdvancedTarget {
+		case "body", "body_json", "body_form":
+			summary.BodyDetections++
+		case "upload", "upload_filename", "upload_extension", "upload_mime", "upload_size":
+			summary.UploadDetections++
+		}
 		if item.Disposition == "blocked" || item.Disposition == "rejected" {
 			summary.BlockedRequests++
 		}
@@ -631,6 +647,12 @@ func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 		return false
 	}
 	if filter.EventType != "" && item.EventType != filter.EventType {
+		return false
+	}
+	if filter.AdvancedTarget != "" && item.AdvancedTarget != filter.AdvancedTarget && item.Target != filter.AdvancedTarget {
+		return false
+	}
+	if filter.MinScore > 0 && item.Score < filter.MinScore {
 		return false
 	}
 	return summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until)

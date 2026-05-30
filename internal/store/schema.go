@@ -30,10 +30,43 @@ CREATE TABLE IF NOT EXISTS policies (
 	name TEXT NOT NULL,
 	risk_threshold INTEGER NOT NULL DEFAULT 100,
 	default_action TEXT NOT NULL DEFAULT 'block',
+	normalization_enabled BOOLEAN NOT NULL DEFAULT true,
+	normalization_decode_passes INTEGER NOT NULL DEFAULT 2,
+	normalization_max_value_bytes INTEGER NOT NULL DEFAULT 4096,
+	body_inspection_enabled BOOLEAN NOT NULL DEFAULT false,
+	body_inspection_content_types TEXT NOT NULL DEFAULT '',
+	body_inspection_path_prefixes TEXT NOT NULL DEFAULT '',
+	body_inspection_max_bytes INTEGER NOT NULL DEFAULT 65536,
+	oversized_body_action TEXT NOT NULL DEFAULT 'log-only',
+	upload_inspection_enabled BOOLEAN NOT NULL DEFAULT false,
+	upload_max_bytes INTEGER NOT NULL DEFAULT 10485760,
+	upload_size_action TEXT NOT NULL DEFAULT 'block',
+	dynamic_ban_enabled BOOLEAN NOT NULL DEFAULT false,
+	dynamic_ban_duration_sec INTEGER NOT NULL DEFAULT 300,
+	dynamic_ban_score_threshold INTEGER NOT NULL DEFAULT 200,
+	dynamic_ban_trigger_count INTEGER NOT NULL DEFAULT 3,
+	dynamic_ban_window_sec INTEGER NOT NULL DEFAULT 60,
 	enabled BOOLEAN NOT NULL DEFAULT true,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS normalization_enabled BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS normalization_decode_passes INTEGER NOT NULL DEFAULT 2;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS normalization_max_value_bytes INTEGER NOT NULL DEFAULT 4096;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS body_inspection_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS body_inspection_content_types TEXT NOT NULL DEFAULT '';
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS body_inspection_path_prefixes TEXT NOT NULL DEFAULT '';
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS body_inspection_max_bytes INTEGER NOT NULL DEFAULT 65536;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS oversized_body_action TEXT NOT NULL DEFAULT 'log-only';
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS upload_inspection_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS upload_max_bytes INTEGER NOT NULL DEFAULT 10485760;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS upload_size_action TEXT NOT NULL DEFAULT 'block';
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS dynamic_ban_enabled BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS dynamic_ban_duration_sec INTEGER NOT NULL DEFAULT 300;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS dynamic_ban_score_threshold INTEGER NOT NULL DEFAULT 200;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS dynamic_ban_trigger_count INTEGER NOT NULL DEFAULT 3;
+ALTER TABLE policies ADD COLUMN IF NOT EXISTS dynamic_ban_window_sec INTEGER NOT NULL DEFAULT 60;
 
 CREATE TABLE IF NOT EXISTS policy_sites (
 	policy_id BIGINT NOT NULL REFERENCES policies(id) ON DELETE CASCADE,
@@ -123,8 +156,29 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	summary TEXT NOT NULL DEFAULT '',
 	access_list_id BIGINT NOT NULL DEFAULT 0,
 	rate_limit_id BIGINT NOT NULL DEFAULT 0,
+	advanced_target TEXT NOT NULL DEFAULT '',
+	normalized_value TEXT NOT NULL DEFAULT '',
+	score INTEGER NOT NULL DEFAULT 0,
+	threshold INTEGER NOT NULL DEFAULT 0,
+	matched_rule_ids TEXT NOT NULL DEFAULT '',
+	body_metadata TEXT NOT NULL DEFAULT '',
+	upload_metadata TEXT NOT NULL DEFAULT '',
+	ban_reason TEXT NOT NULL DEFAULT '',
+	ban_duration_sec INTEGER NOT NULL DEFAULT 0,
+	ban_remaining_sec INTEGER NOT NULL DEFAULT 0,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS advanced_target TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS normalized_value TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS score INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS threshold INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS matched_rule_ids TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS body_metadata TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS upload_metadata TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_duration_sec INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_remaining_sec INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_waf_events_created_at ON waf_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_waf_events_site_id ON waf_events (site_id);
@@ -156,11 +210,16 @@ CREATE TABLE IF NOT EXISTS rate_limit_rules (
 	window_sec INTEGER NOT NULL,
 	action TEXT NOT NULL,
 	ban_duration_sec INTEGER NOT NULL DEFAULT 0,
+	violation_threshold INTEGER NOT NULL DEFAULT 0,
+	violation_window_sec INTEGER NOT NULL DEFAULT 0,
 	site_id BIGINT NOT NULL DEFAULT 0,
 	enabled BOOLEAN NOT NULL DEFAULT true,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS violation_threshold INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS violation_window_sec INTEGER NOT NULL DEFAULT 0;
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled)
 SELECT 'MVP SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\()', 80, true

@@ -62,10 +62,20 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent) (model.WAFEvent, error) {
 	createdAt := nullableTime(item.CreatedAt)
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO waf_events (request_id, site_id, event_type, rule_id, rule_type, target, action, disposition, client_ip, method, uri, summary, access_list_id, rate_limit_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, now()))
+		INSERT INTO waf_events (
+			request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
+			client_ip, method, uri, summary, access_list_id, rate_limit_id,
+			advanced_target, normalized_value, score, threshold, matched_rule_ids,
+			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
+			created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, COALESCE($25::timestamptz, now()))
 		RETURNING id, created_at`,
-		item.RequestID, item.SiteID, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition, item.ClientIP, item.Method, item.URI, item.Summary, item.AccessListID, item.RateLimitID, createdAt).
+		item.RequestID, item.SiteID, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition,
+		item.ClientIP, item.Method, item.URI, item.Summary, item.AccessListID, item.RateLimitID,
+		item.AdvancedTarget, item.NormalizedValue, item.Score, item.Threshold, item.MatchedRuleIDs,
+		item.BodyMetadata, item.UploadMetadata, item.BanReason, item.BanDurationSec, item.BanRemainingSec,
+		createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	return item, err
@@ -78,7 +88,11 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, request_id, site_id, event_type, rule_id, rule_type, target, action, disposition, client_ip, method, uri, summary, access_list_id, rate_limit_id, created_at
+		SELECT id, request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
+			client_ip, method, uri, summary, access_list_id, rate_limit_id,
+			advanced_target, normalized_value, score, threshold, matched_rule_ids,
+			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
+			created_at
 		FROM waf_events
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2 = '' OR client_ip = $2)
@@ -86,12 +100,14 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			AND ($4 = '' OR action = $4)
 			AND ($5 = '' OR disposition = $5)
 			AND ($6 = '' OR event_type = $6)
-			AND ($7::timestamptz IS NULL OR created_at >= $7)
-			AND ($8::timestamptz IS NULL OR created_at <= $8)
+			AND ($7 = '' OR advanced_target = $7 OR target = $7)
+			AND ($8::integer = 0 OR score >= $8)
+			AND ($9::timestamptz IS NULL OR created_at >= $9)
+			AND ($10::timestamptz IS NULL OR created_at <= $10)
 		ORDER BY id DESC
-		LIMIT $9 OFFSET $10`,
+		LIMIT $11 OFFSET $12`,
 		filter.SiteID, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
-		nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
+		filter.AdvancedTarget, filter.MinScore, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +115,13 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 	var items []model.WAFEvent
 	for rows.Next() {
 		var item model.WAFEvent
-		if err := rows.Scan(&item.ID, &item.RequestID, &item.SiteID, &item.EventType, &item.RuleID, &item.RuleType, &item.Target, &item.Action, &item.Disposition, &item.ClientIP, &item.Method, &item.URI, &item.Summary, &item.AccessListID, &item.RateLimitID, &item.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&item.ID, &item.RequestID, &item.SiteID, &item.EventType, &item.RuleID, &item.RuleType, &item.Target, &item.Action, &item.Disposition,
+			&item.ClientIP, &item.Method, &item.URI, &item.Summary, &item.AccessListID, &item.RateLimitID,
+			&item.AdvancedTarget, &item.NormalizedValue, &item.Score, &item.Threshold, &item.MatchedRuleIDs,
+			&item.BodyMetadata, &item.UploadMetadata, &item.BanReason, &item.BanDurationSec, &item.BanRemainingSec,
+			&item.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
@@ -126,12 +148,16 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT count(*),
 			count(*) FILTER (WHERE disposition IN ('blocked', 'rejected')),
-			count(*) FILTER (WHERE event_type = 'rate-limit' OR rate_limit_id > 0)
+			count(*) FILTER (WHERE event_type = 'rate-limit' OR rate_limit_id > 0),
+			count(*) FILTER (WHERE event_type = 'score-threshold'),
+			count(*) FILTER (WHERE event_type = 'body-inspection' OR advanced_target IN ('body', 'body_json', 'body_form')),
+			count(*) FILTER (WHERE event_type = 'upload-inspection' OR advanced_target IN ('upload', 'upload_filename', 'upload_extension', 'upload_mime', 'upload_size')),
+			count(*) FILTER (WHERE event_type = 'dynamic-ban')
 		FROM waf_events
 		WHERE ($1::timestamptz IS NULL OR created_at >= $1)
 			AND ($2::timestamptz IS NULL OR created_at <= $2)`,
 		nullableTime(filter.Since), nullableTime(filter.Until)).
-		Scan(&summary.WAFMatches, &eventBlocked, &eventRateLimited); err != nil {
+		Scan(&summary.WAFMatches, &eventBlocked, &eventRateLimited, &summary.ScoreBlocks, &summary.BodyDetections, &summary.UploadDetections, &summary.DynamicBans); err != nil {
 		return summary, err
 	}
 	summary.BlockedRequests += eventBlocked

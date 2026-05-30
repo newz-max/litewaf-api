@@ -99,12 +99,18 @@ func normalizeWAFEvent(item *model.WAFEvent) {
 	item.EventType = strings.ToLower(strings.TrimSpace(item.EventType))
 	item.RuleType = strings.ToLower(strings.TrimSpace(item.RuleType))
 	item.Target = strings.ToLower(strings.TrimSpace(item.Target))
+	item.AdvancedTarget = strings.ToLower(strings.TrimSpace(item.AdvancedTarget))
 	item.Action = strings.ToLower(strings.TrimSpace(item.Action))
 	item.Disposition = strings.ToLower(strings.TrimSpace(item.Disposition))
 	item.ClientIP = strings.TrimSpace(item.ClientIP)
 	item.Method = strings.ToUpper(strings.TrimSpace(item.Method))
 	item.URI = strings.TrimSpace(item.URI)
-	item.Summary = strings.TrimSpace(item.Summary)
+	item.Summary = boundedSummary(strings.TrimSpace(item.Summary), 512)
+	item.NormalizedValue = boundedSummary(strings.TrimSpace(item.NormalizedValue), 512)
+	item.MatchedRuleIDs = strings.TrimSpace(item.MatchedRuleIDs)
+	item.BodyMetadata = boundedSummary(strings.TrimSpace(item.BodyMetadata), 1024)
+	item.UploadMetadata = boundedSummary(strings.TrimSpace(item.UploadMetadata), 1024)
+	item.BanReason = strings.TrimSpace(item.BanReason)
 }
 
 func validateWAFEvent(item model.WAFEvent) error {
@@ -153,10 +159,11 @@ func parseAccessLogFilter(w http.ResponseWriter, r *http.Request) (model.AccessL
 func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEventFilter, bool) {
 	query := r.URL.Query()
 	filter := model.WAFEventFilter{
-		ClientIP:    strings.TrimSpace(query.Get("client_ip")),
-		Action:      strings.ToLower(strings.TrimSpace(query.Get("action"))),
-		Disposition: strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
-		EventType:   strings.ToLower(strings.TrimSpace(query.Get("event_type"))),
+		ClientIP:       strings.TrimSpace(query.Get("client_ip")),
+		Action:         strings.ToLower(strings.TrimSpace(query.Get("action"))),
+		Disposition:    strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
+		EventType:      strings.ToLower(strings.TrimSpace(query.Get("event_type"))),
+		AdvancedTarget: strings.ToLower(strings.TrimSpace(query.Get("advanced_target"))),
 	}
 	var ok bool
 	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {
@@ -165,6 +172,11 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 	if filter.RuleID, ok = parseOptionalInt64(w, query.Get("rule_id"), "rule_id"); !ok {
 		return model.WAFEventFilter{}, false
 	}
+	minScore, ok := parseOptionalInt64(w, query.Get("min_score"), "min_score")
+	if !ok {
+		return model.WAFEventFilter{}, false
+	}
+	filter.MinScore = int(minScore)
 	if filter.Since, filter.Until, ok = parseTimeRange(w, r); !ok {
 		return model.WAFEventFilter{}, false
 	}
@@ -172,6 +184,13 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 		return model.WAFEventFilter{}, false
 	}
 	return filter, true
+}
+
+func boundedSummary(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	return value[:limit]
 }
 
 func parseSummaryFilter(w http.ResponseWriter, r *http.Request) (model.ObservabilitySummaryFilter, bool) {

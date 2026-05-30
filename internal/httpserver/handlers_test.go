@@ -190,6 +190,51 @@ func TestObservabilityIngestionAndQueries(t *testing.T) {
 	}
 }
 
+func TestAdvancedWAFEventIngestionQueryAndSummary(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"req-advanced","site_id":2,"event_type":"score-threshold","rule_id":9,"rule_type":"custom","target":"body_json","advanced_target":"body_json","action":"block","disposition":"blocked","client_ip":"192.0.2.20","method":"POST","uri":"/api/login","summary":"matched body value","normalized_value":"select password","score":220,"threshold":200,"matched_rule_ids":"8,9","body_metadata":"content_type=application/json","upload_metadata":"","ban_reason":"score-threshold","ban_duration_sec":300,"ban_remaining_sec":299}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest advanced waf status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?advanced_target=body_json&min_score=200", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query advanced attack status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var attackResponse struct {
+		Items []model.WAFEvent `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&attackResponse); err != nil {
+		t.Fatalf("decode attack logs: %v", err)
+	}
+	if len(attackResponse.Items) != 1 || attackResponse.Items[0].Score != 220 || attackResponse.Items[0].AdvancedTarget != "body_json" {
+		t.Fatalf("unexpected advanced attack logs: %+v", attackResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/observability/summary", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var summaryResponse struct {
+		Item model.ObservabilitySummary `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&summaryResponse); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if summaryResponse.Item.ScoreBlocks != 1 || summaryResponse.Item.BodyDetections != 1 {
+		t.Fatalf("unexpected advanced summary: %+v", summaryResponse.Item)
+	}
+}
+
 func TestObservabilityIngestionRequiresGatewayToken(t *testing.T) {
 	handler := testServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(`{"request_id":"req-1","method":"GET","uri":"/","status":200,"disposition":"proxied"}`))

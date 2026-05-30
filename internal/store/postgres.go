@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"litewaf-api/internal/model"
@@ -156,7 +157,14 @@ func (s *PostgresStore) DeleteRule(ctx context.Context, id int64) error {
 
 func (s *PostgresStore) ListPolicies(ctx context.Context) ([]model.Policy, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, risk_threshold, default_action, enabled, created_at, updated_at
+		SELECT id, name, risk_threshold, default_action,
+			normalization_enabled, normalization_decode_passes, normalization_max_value_bytes,
+			body_inspection_enabled, body_inspection_content_types, body_inspection_path_prefixes,
+			body_inspection_max_bytes, oversized_body_action,
+			upload_inspection_enabled, upload_max_bytes, upload_size_action,
+			dynamic_ban_enabled, dynamic_ban_duration_sec, dynamic_ban_score_threshold,
+			dynamic_ban_trigger_count, dynamic_ban_window_sec,
+			enabled, created_at, updated_at
 		FROM policies
 		ORDER BY id`)
 	if err != nil {
@@ -167,9 +175,22 @@ func (s *PostgresStore) ListPolicies(ctx context.Context) ([]model.Policy, error
 	var items []model.Policy
 	for rows.Next() {
 		var item model.Policy
-		if err := rows.Scan(&item.ID, &item.Name, &item.RiskThreshold, &item.DefaultAction, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var bodyContentTypes string
+		var bodyPathPrefixes string
+		if err := rows.Scan(
+			&item.ID, &item.Name, &item.RiskThreshold, &item.DefaultAction,
+			&item.NormalizationEnabled, &item.NormalizationDecodePasses, &item.NormalizationMaxValueBytes,
+			&item.BodyInspectionEnabled, &bodyContentTypes, &bodyPathPrefixes,
+			&item.BodyInspectionMaxBytes, &item.OversizedBodyAction,
+			&item.UploadInspectionEnabled, &item.UploadMaxBytes, &item.UploadSizeAction,
+			&item.DynamicBanEnabled, &item.DynamicBanDurationSec, &item.DynamicBanScoreThreshold,
+			&item.DynamicBanTriggerCount, &item.DynamicBanWindowSec,
+			&item.Enabled, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
+		item.BodyInspectionContentTypes = splitCSV(bodyContentTypes)
+		item.BodyInspectionPathPrefixes = splitCSV(bodyPathPrefixes)
 		item.SiteIDs, item.RuleIDs, err = s.policyBindings(ctx, item.ID)
 		if err != nil {
 			return nil, err
@@ -181,17 +202,37 @@ func (s *PostgresStore) ListPolicies(ctx context.Context) ([]model.Policy, error
 
 func (s *PostgresStore) GetPolicy(ctx context.Context, id int64) (model.Policy, error) {
 	var item model.Policy
+	var bodyContentTypes string
+	var bodyPathPrefixes string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, risk_threshold, default_action, enabled, created_at, updated_at
+		SELECT id, name, risk_threshold, default_action,
+			normalization_enabled, normalization_decode_passes, normalization_max_value_bytes,
+			body_inspection_enabled, body_inspection_content_types, body_inspection_path_prefixes,
+			body_inspection_max_bytes, oversized_body_action,
+			upload_inspection_enabled, upload_max_bytes, upload_size_action,
+			dynamic_ban_enabled, dynamic_ban_duration_sec, dynamic_ban_score_threshold,
+			dynamic_ban_trigger_count, dynamic_ban_window_sec,
+			enabled, created_at, updated_at
 		FROM policies
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.RiskThreshold, &item.DefaultAction, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+		Scan(
+			&item.ID, &item.Name, &item.RiskThreshold, &item.DefaultAction,
+			&item.NormalizationEnabled, &item.NormalizationDecodePasses, &item.NormalizationMaxValueBytes,
+			&item.BodyInspectionEnabled, &bodyContentTypes, &bodyPathPrefixes,
+			&item.BodyInspectionMaxBytes, &item.OversizedBodyAction,
+			&item.UploadInspectionEnabled, &item.UploadMaxBytes, &item.UploadSizeAction,
+			&item.DynamicBanEnabled, &item.DynamicBanDurationSec, &item.DynamicBanScoreThreshold,
+			&item.DynamicBanTriggerCount, &item.DynamicBanWindowSec,
+			&item.Enabled, &item.CreatedAt, &item.UpdatedAt,
+		)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Policy{}, ErrNotFound
 	}
 	if err != nil {
 		return model.Policy{}, err
 	}
+	item.BodyInspectionContentTypes = splitCSV(bodyContentTypes)
+	item.BodyInspectionPathPrefixes = splitCSV(bodyPathPrefixes)
 	item.SiteIDs, item.RuleIDs, err = s.policyBindings(ctx, id)
 	return item, err
 }
@@ -210,10 +251,26 @@ func (s *PostgresStore) CreatePolicy(ctx context.Context, policy model.Policy) (
 		return model.Policy{}, err
 	}
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO policies (name, risk_threshold, default_action, enabled)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO policies (
+			name, risk_threshold, default_action,
+			normalization_enabled, normalization_decode_passes, normalization_max_value_bytes,
+			body_inspection_enabled, body_inspection_content_types, body_inspection_path_prefixes,
+			body_inspection_max_bytes, oversized_body_action,
+			upload_inspection_enabled, upload_max_bytes, upload_size_action,
+			dynamic_ban_enabled, dynamic_ban_duration_sec, dynamic_ban_score_threshold,
+			dynamic_ban_trigger_count, dynamic_ban_window_sec,
+			enabled
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		RETURNING id, created_at, updated_at`,
-		policy.Name, policy.RiskThreshold, policy.DefaultAction, policy.Enabled).
+		policy.Name, policy.RiskThreshold, policy.DefaultAction,
+		policy.NormalizationEnabled, policy.NormalizationDecodePasses, policy.NormalizationMaxValueBytes,
+		policy.BodyInspectionEnabled, joinCSV(policy.BodyInspectionContentTypes), joinCSV(policy.BodyInspectionPathPrefixes),
+		policy.BodyInspectionMaxBytes, policy.OversizedBodyAction,
+		policy.UploadInspectionEnabled, policy.UploadMaxBytes, policy.UploadSizeAction,
+		policy.DynamicBanEnabled, policy.DynamicBanDurationSec, policy.DynamicBanScoreThreshold,
+		policy.DynamicBanTriggerCount, policy.DynamicBanWindowSec,
+		policy.Enabled).
 		Scan(&policy.ID, &policy.CreatedAt, &policy.UpdatedAt)
 	if err != nil {
 		return model.Policy{}, err
@@ -239,10 +296,37 @@ func (s *PostgresStore) UpdatePolicy(ctx context.Context, id int64, policy model
 	}
 	err = tx.QueryRowContext(ctx, `
 		UPDATE policies
-		SET name = $2, risk_threshold = $3, default_action = $4, enabled = $5, updated_at = now()
+		SET name = $2,
+			risk_threshold = $3,
+			default_action = $4,
+			normalization_enabled = $5,
+			normalization_decode_passes = $6,
+			normalization_max_value_bytes = $7,
+			body_inspection_enabled = $8,
+			body_inspection_content_types = $9,
+			body_inspection_path_prefixes = $10,
+			body_inspection_max_bytes = $11,
+			oversized_body_action = $12,
+			upload_inspection_enabled = $13,
+			upload_max_bytes = $14,
+			upload_size_action = $15,
+			dynamic_ban_enabled = $16,
+			dynamic_ban_duration_sec = $17,
+			dynamic_ban_score_threshold = $18,
+			dynamic_ban_trigger_count = $19,
+			dynamic_ban_window_sec = $20,
+			enabled = $21,
+			updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, policy.Name, policy.RiskThreshold, policy.DefaultAction, policy.Enabled).
+		id, policy.Name, policy.RiskThreshold, policy.DefaultAction,
+		policy.NormalizationEnabled, policy.NormalizationDecodePasses, policy.NormalizationMaxValueBytes,
+		policy.BodyInspectionEnabled, joinCSV(policy.BodyInspectionContentTypes), joinCSV(policy.BodyInspectionPathPrefixes),
+		policy.BodyInspectionMaxBytes, policy.OversizedBodyAction,
+		policy.UploadInspectionEnabled, policy.UploadMaxBytes, policy.UploadSizeAction,
+		policy.DynamicBanEnabled, policy.DynamicBanDurationSec, policy.DynamicBanScoreThreshold,
+		policy.DynamicBanTriggerCount, policy.DynamicBanWindowSec,
+		policy.Enabled).
 		Scan(&policy.ID, &policy.CreatedAt, &policy.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Policy{}, ErrNotFound
@@ -445,7 +529,7 @@ func (s *PostgresStore) DeleteAccessListEntry(ctx context.Context, id int64) err
 
 func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLimitRule, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, site_id, enabled, created_at, updated_at
+		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled, created_at, updated_at
 		FROM rate_limit_rules
 		ORDER BY id`)
 	if err != nil {
@@ -455,7 +539,7 @@ func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLim
 	var items []model.RateLimitRule
 	for rows.Next() {
 		var item model.RateLimitRule
-		if err := rows.Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.ViolationThreshold, &item.ViolationWindowSec, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -466,10 +550,10 @@ func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLim
 func (s *PostgresStore) GetRateLimitRule(ctx context.Context, id int64) (model.RateLimitRule, error) {
 	var item model.RateLimitRule
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, site_id, enabled, created_at, updated_at
+		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled, created_at, updated_at
 		FROM rate_limit_rules
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+		Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.ViolationThreshold, &item.ViolationWindowSec, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RateLimitRule{}, ErrNotFound
 	}
@@ -478,10 +562,10 @@ func (s *PostgresStore) GetRateLimitRule(ctx context.Context, id int64) (model.R
 
 func (s *PostgresStore) CreateRateLimitRule(ctx context.Context, item model.RateLimitRule) (model.RateLimitRule, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO rate_limit_rules (name, scope, match_value, threshold, window_sec, action, ban_duration_sec, site_id, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO rate_limit_rules (name, scope, match_value, threshold, window_sec, action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.SiteID, item.Enabled).
+		item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.ViolationThreshold, item.ViolationWindowSec, item.SiteID, item.Enabled).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
@@ -489,10 +573,10 @@ func (s *PostgresStore) CreateRateLimitRule(ctx context.Context, item model.Rate
 func (s *PostgresStore) UpdateRateLimitRule(ctx context.Context, id int64, item model.RateLimitRule) (model.RateLimitRule, error) {
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE rate_limit_rules
-		SET name = $2, scope = $3, match_value = $4, threshold = $5, window_sec = $6, action = $7, ban_duration_sec = $8, site_id = $9, enabled = $10, updated_at = now()
+		SET name = $2, scope = $3, match_value = $4, threshold = $5, window_sec = $6, action = $7, ban_duration_sec = $8, violation_threshold = $9, violation_window_sec = $10, site_id = $11, enabled = $12, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.SiteID, item.Enabled).
+		id, item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.ViolationThreshold, item.ViolationWindowSec, item.SiteID, item.Enabled).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RateLimitRule{}, ErrNotFound
@@ -583,4 +667,33 @@ func replacePolicyBindings(ctx context.Context, tx *sql.Tx, policyID int64, site
 		}
 	}
 	return nil
+}
+
+func splitCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return []string{}
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func joinCSV(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		item := strings.TrimSpace(value)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return strings.Join(out, ",")
 }

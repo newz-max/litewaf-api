@@ -26,12 +26,14 @@ func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 		}
 
 		next.ServeHTTP(recorder, r)
+		duration := time.Since(start)
+		recordHTTPMetric(r.Method, r.URL.Path, recorder.status, duration)
 
 		logger.Info("http request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", recorder.status,
-			"duration_ms", time.Since(start).Milliseconds(),
+			"duration_ms", duration.Milliseconds(),
 			"remote_addr", r.RemoteAddr,
 			"user_agent", r.UserAgent(),
 		)

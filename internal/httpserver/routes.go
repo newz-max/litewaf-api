@@ -11,6 +11,7 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	handlers := newHandlers(logger, application)
 
 	mux.HandleFunc("GET /healthz", handlers.healthz)
+	mux.HandleFunc("GET /metrics", handlers.metrics)
 	mux.HandleFunc("GET /api/v1/version", handlers.version)
 	mux.HandleFunc("POST /api/v1/auth/login", handlers.login)
 
@@ -32,7 +33,11 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("PUT /api/v1/policies/{id}", handlers.require(permissionWrite, handlers.updatePolicy))
 	mux.HandleFunc("DELETE /api/v1/policies/{id}", handlers.require(permissionWrite, handlers.deletePolicy))
 
+	mux.HandleFunc("POST /api/v1/ingest/access-logs", handlers.requireGatewayIngestion(handlers.ingestAccessLog))
+	mux.HandleFunc("POST /api/v1/ingest/waf-events", handlers.requireGatewayIngestion(handlers.ingestWAFEvent))
+	mux.HandleFunc("GET /api/v1/access-logs", handlers.require(permissionRead, handlers.listAccessLogs))
 	mux.HandleFunc("GET /api/v1/attack-logs", handlers.require(permissionRead, handlers.listAttackLogs))
+	mux.HandleFunc("GET /api/v1/observability/summary", handlers.require(permissionRead, handlers.observabilitySummary))
 	mux.HandleFunc("GET /api/v1/releases", handlers.require(permissionRead, handlers.listReleases))
 	mux.HandleFunc("POST /api/v1/releases", handlers.require(permissionPublish, handlers.createRelease))
 	mux.HandleFunc("GET /api/v1/releases/preview", handlers.require(permissionPublish, handlers.previewRelease))

@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 
@@ -46,6 +47,23 @@ func (h handlers) require(permission string, next http.HandlerFunc) http.Handler
 		}
 		ctx := context.WithValue(r.Context(), actorContextKey{}, current)
 		next(w, r.WithContext(ctx))
+	}
+}
+
+func (h handlers) requireGatewayIngestion(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		expected := strings.TrimSpace(h.app.Config.GatewayIngestionToken)
+		if expected == "" {
+			writeError(w, http.StatusUnauthorized, "gateway ingestion token is not configured")
+			return
+		}
+		header := strings.TrimSpace(r.Header.Get("Authorization"))
+		token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		if !strings.HasPrefix(header, "Bearer ") || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+			writeError(w, http.StatusUnauthorized, "invalid gateway ingestion token")
+			return
+		}
+		next(w, r)
 	}
 }
 

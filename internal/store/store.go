@@ -46,6 +46,12 @@ type Store interface {
 	ListAuditLogs(context.Context, model.AuditLogFilter) ([]model.AuditLog, error)
 	CreateAuditLog(context.Context, model.AuditLog) (model.AuditLog, error)
 
+	CreateAccessLog(context.Context, model.AccessLog) (model.AccessLog, error)
+	ListAccessLogs(context.Context, model.AccessLogFilter) ([]model.AccessLog, error)
+	CreateWAFEvent(context.Context, model.WAFEvent) (model.WAFEvent, error)
+	ListWAFEvents(context.Context, model.WAFEventFilter) ([]model.WAFEvent, error)
+	GetObservabilitySummary(context.Context, model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error)
+
 	ListAccessListEntries(context.Context) ([]model.AccessListEntry, error)
 	GetAccessListEntry(context.Context, int64) (model.AccessListEntry, error)
 	CreateAccessListEntry(context.Context, model.AccessListEntry) (model.AccessListEntry, error)

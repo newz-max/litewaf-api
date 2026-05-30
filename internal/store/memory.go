@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,43 +12,51 @@ import (
 )
 
 type MemoryStore struct {
-	mu            sync.RWMutex
-	nextSiteID    int64
-	nextRuleID    int64
-	nextPolicyID  int64
-	nextPublishID int64
-	nextUserID    int64
-	nextAuditID   int64
-	nextAccessID  int64
-	nextRateID    int64
-	sites         map[int64]model.Site
-	rules         map[int64]model.Rule
-	policies      map[int64]model.Policy
-	publishes     map[int64]model.PublishRecord
-	users         map[int64]model.User
-	audits        map[int64]model.AuditLog
-	accessLists   map[int64]model.AccessListEntry
-	rateLimits    map[int64]model.RateLimitRule
+	mu              sync.RWMutex
+	nextSiteID      int64
+	nextRuleID      int64
+	nextPolicyID    int64
+	nextPublishID   int64
+	nextUserID      int64
+	nextAuditID     int64
+	nextAccessID    int64
+	nextRateID      int64
+	nextAccessLogID int64
+	nextWAFEventID  int64
+	sites           map[int64]model.Site
+	rules           map[int64]model.Rule
+	policies        map[int64]model.Policy
+	publishes       map[int64]model.PublishRecord
+	users           map[int64]model.User
+	audits          map[int64]model.AuditLog
+	accessLists     map[int64]model.AccessListEntry
+	rateLimits      map[int64]model.RateLimitRule
+	accessLogs      map[int64]model.AccessLog
+	wafEvents       map[int64]model.WAFEvent
 }
 
 func NewMemoryStore() *MemoryStore {
 	store := &MemoryStore{
-		nextSiteID:    1,
-		nextRuleID:    1,
-		nextPolicyID:  1,
-		nextPublishID: 1,
-		nextUserID:    1,
-		nextAuditID:   1,
-		nextAccessID:  1,
-		nextRateID:    1,
-		sites:         map[int64]model.Site{},
-		rules:         map[int64]model.Rule{},
-		policies:      map[int64]model.Policy{},
-		publishes:     map[int64]model.PublishRecord{},
-		users:         map[int64]model.User{},
-		audits:        map[int64]model.AuditLog{},
-		accessLists:   map[int64]model.AccessListEntry{},
-		rateLimits:    map[int64]model.RateLimitRule{},
+		nextSiteID:      1,
+		nextRuleID:      1,
+		nextPolicyID:    1,
+		nextPublishID:   1,
+		nextUserID:      1,
+		nextAuditID:     1,
+		nextAccessID:    1,
+		nextRateID:      1,
+		nextAccessLogID: 1,
+		nextWAFEventID:  1,
+		sites:           map[int64]model.Site{},
+		rules:           map[int64]model.Rule{},
+		policies:        map[int64]model.Policy{},
+		publishes:       map[int64]model.PublishRecord{},
+		users:           map[int64]model.User{},
+		audits:          map[int64]model.AuditLog{},
+		accessLists:     map[int64]model.AccessListEntry{},
+		rateLimits:      map[int64]model.RateLimitRule{},
+		accessLogs:      map[int64]model.AccessLog{},
+		wafEvents:       map[int64]model.WAFEvent{},
 	}
 	store.seedRules()
 	return store
@@ -345,6 +355,104 @@ func (s *MemoryStore) CreateAuditLog(_ context.Context, item model.AuditLog) (mo
 	return item, nil
 }
 
+func (s *MemoryStore) CreateAccessLog(_ context.Context, item model.AccessLog) (model.AccessLog, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item.ID = s.nextAccessLogID
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now().UTC()
+	}
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	s.accessLogs[item.ID] = item
+	s.nextAccessLogID++
+	return item, nil
+}
+
+func (s *MemoryStore) ListAccessLogs(_ context.Context, filter model.AccessLogFilter) ([]model.AccessLog, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.AccessLog, 0, len(s.accessLogs))
+	for _, item := range s.accessLogs {
+		if accessLogMatches(item, filter) {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	return paginate(items, filter.Pagination), nil
+}
+
+func (s *MemoryStore) CreateWAFEvent(_ context.Context, item model.WAFEvent) (model.WAFEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item.ID = s.nextWAFEventID
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now().UTC()
+	}
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	s.wafEvents[item.ID] = item
+	s.nextWAFEventID++
+	return item, nil
+}
+
+func (s *MemoryStore) ListWAFEvents(_ context.Context, filter model.WAFEventFilter) ([]model.WAFEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.WAFEvent, 0, len(s.wafEvents))
+	for _, item := range s.wafEvents {
+		if wafEventMatches(item, filter) {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	return paginate(items, filter.Pagination), nil
+}
+
+func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	limit := normalizeSummaryLimit(filter.Limit)
+	summary := model.ObservabilitySummary{}
+	ipCounts := map[string]int64{}
+	uriCounts := map[string]int64{}
+	ruleCounts := map[string]int64{}
+	typeCounts := map[string]int64{}
+	for _, item := range s.accessLogs {
+		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
+			continue
+		}
+		summary.Requests++
+		if item.Disposition == "blocked" || item.Disposition == "rejected" {
+			summary.BlockedRequests++
+		}
+		if item.Disposition == "rate-limited" {
+			summary.RateLimited++
+		}
+		increment(ipCounts, item.ClientIP)
+		increment(uriCounts, item.URI)
+	}
+	for _, item := range s.wafEvents {
+		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
+			continue
+		}
+		summary.WAFMatches++
+		if item.EventType == "rate-limit" || item.RateLimitID > 0 {
+			summary.RateLimited++
+		}
+		if item.Disposition == "blocked" || item.Disposition == "rejected" {
+			summary.BlockedRequests++
+		}
+		if item.RuleID > 0 {
+			increment(ruleCounts, strconvFormatInt(item.RuleID))
+		}
+		increment(typeCounts, item.EventType)
+	}
+	summary.TopIPs = topCounts(ipCounts, limit)
+	summary.TopURIs = topCounts(uriCounts, limit)
+	summary.TopRules = topCounts(ruleCounts, limit)
+	summary.AttackTypes = topCounts(typeCounts, limit)
+	return summary, nil
+}
+
 func (s *MemoryStore) ListAccessListEntries(context.Context) ([]model.AccessListEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -479,6 +587,131 @@ func auditMatches(item model.AuditLog, filter model.AuditLogFilter) bool {
 		return false
 	}
 	return true
+}
+
+func accessLogMatches(item model.AccessLog, filter model.AccessLogFilter) bool {
+	if filter.SiteID > 0 && item.SiteID != filter.SiteID {
+		return false
+	}
+	if filter.Host != "" && item.Host != filter.Host {
+		return false
+	}
+	if filter.ClientIP != "" && item.ClientIP != filter.ClientIP {
+		return false
+	}
+	if filter.Method != "" && item.Method != filter.Method {
+		return false
+	}
+	if filter.URI != "" && !stringsContains(item.URI, filter.URI) {
+		return false
+	}
+	if filter.Status > 0 && item.Status != filter.Status {
+		return false
+	}
+	if filter.Disposition != "" && item.Disposition != filter.Disposition {
+		return false
+	}
+	return summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until)
+}
+
+func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
+	if filter.SiteID > 0 && item.SiteID != filter.SiteID {
+		return false
+	}
+	if filter.ClientIP != "" && item.ClientIP != filter.ClientIP {
+		return false
+	}
+	if filter.RuleID > 0 && item.RuleID != filter.RuleID {
+		return false
+	}
+	if filter.Action != "" && item.Action != filter.Action {
+		return false
+	}
+	if filter.Disposition != "" && item.Disposition != filter.Disposition {
+		return false
+	}
+	if filter.EventType != "" && item.EventType != filter.EventType {
+		return false
+	}
+	return summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until)
+}
+
+func summaryTimeMatches(createdAt time.Time, since time.Time, until time.Time) bool {
+	if !since.IsZero() && createdAt.Before(since) {
+		return false
+	}
+	if !until.IsZero() && createdAt.After(until) {
+		return false
+	}
+	return true
+}
+
+func paginate[T any](items []T, pagination model.Pagination) []T {
+	offset := pagination.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []T{}
+	}
+	limit := normalizeLimit(pagination.Limit)
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
+}
+
+func normalizeLimit(limit int) int {
+	if limit <= 0 {
+		return 100
+	}
+	if limit > 500 {
+		return 500
+	}
+	return limit
+}
+
+func normalizeSummaryLimit(limit int) int {
+	if limit <= 0 {
+		return 10
+	}
+	if limit > 50 {
+		return 50
+	}
+	return limit
+}
+
+func increment(counts map[string]int64, key string) {
+	if key == "" {
+		return
+	}
+	counts[key]++
+}
+
+func topCounts(counts map[string]int64, limit int) []model.SummaryCount {
+	items := make([]model.SummaryCount, 0, len(counts))
+	for key, count := range counts {
+		items = append(items, model.SummaryCount{Key: key, Count: count})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Count == items[j].Count {
+			return items[i].Key < items[j].Key
+		}
+		return items[i].Count > items[j].Count
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items
+}
+
+func strconvFormatInt(value int64) string {
+	return strconv.FormatInt(value, 10)
+}
+
+func stringsContains(value string, substr string) bool {
+	return strings.Contains(value, substr)
 }
 
 func (s *MemoryStore) bindingsExistLocked(policy model.Policy) bool {

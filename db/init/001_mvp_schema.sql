@@ -82,6 +82,55 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS access_logs (
+	id BIGSERIAL PRIMARY KEY,
+	request_id TEXT NOT NULL DEFAULT '',
+	site_id BIGINT NOT NULL DEFAULT 0,
+	host TEXT NOT NULL DEFAULT '',
+	method TEXT NOT NULL DEFAULT '',
+	uri TEXT NOT NULL DEFAULT '',
+	status INTEGER NOT NULL DEFAULT 0,
+	upstream_status INTEGER NOT NULL DEFAULT 0,
+	duration_ms BIGINT NOT NULL DEFAULT 0,
+	client_ip TEXT NOT NULL DEFAULT '',
+	user_agent TEXT NOT NULL DEFAULT '',
+	disposition TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_access_logs_site_id ON access_logs (site_id);
+CREATE INDEX IF NOT EXISTS idx_access_logs_client_ip ON access_logs (client_ip);
+CREATE INDEX IF NOT EXISTS idx_access_logs_status ON access_logs (status);
+CREATE INDEX IF NOT EXISTS idx_access_logs_disposition ON access_logs (disposition);
+
+CREATE TABLE IF NOT EXISTS waf_events (
+	id BIGSERIAL PRIMARY KEY,
+	request_id TEXT NOT NULL DEFAULT '',
+	site_id BIGINT NOT NULL DEFAULT 0,
+	event_type TEXT NOT NULL DEFAULT '',
+	rule_id BIGINT NOT NULL DEFAULT 0,
+	rule_type TEXT NOT NULL DEFAULT '',
+	target TEXT NOT NULL DEFAULT '',
+	action TEXT NOT NULL DEFAULT '',
+	disposition TEXT NOT NULL DEFAULT '',
+	client_ip TEXT NOT NULL DEFAULT '',
+	method TEXT NOT NULL DEFAULT '',
+	uri TEXT NOT NULL DEFAULT '',
+	summary TEXT NOT NULL DEFAULT '',
+	access_list_id BIGINT NOT NULL DEFAULT 0,
+	rate_limit_id BIGINT NOT NULL DEFAULT 0,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_waf_events_created_at ON waf_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_waf_events_site_id ON waf_events (site_id);
+CREATE INDEX IF NOT EXISTS idx_waf_events_client_ip ON waf_events (client_ip);
+CREATE INDEX IF NOT EXISTS idx_waf_events_rule_id ON waf_events (rule_id);
+CREATE INDEX IF NOT EXISTS idx_waf_events_action ON waf_events (action);
+CREATE INDEX IF NOT EXISTS idx_waf_events_disposition ON waf_events (disposition);
+CREATE INDEX IF NOT EXISTS idx_waf_events_event_type ON waf_events (event_type);
+
 CREATE TABLE IF NOT EXISTS access_list_entries (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,

@@ -85,6 +85,97 @@ type AuditLogFilter struct {
 	Until        time.Time
 }
 
+type Pagination struct {
+	Limit  int
+	Offset int
+}
+
+type AccessLog struct {
+	Event          string    `json:"event,omitempty"`
+	ID             int64     `json:"id"`
+	RequestID      string    `json:"request_id"`
+	SiteID         int64     `json:"site_id"`
+	Host           string    `json:"host"`
+	Method         string    `json:"method"`
+	URI            string    `json:"uri"`
+	Status         int       `json:"status"`
+	UpstreamStatus int       `json:"upstream_status"`
+	DurationMS     int64     `json:"duration_ms"`
+	ClientIP       string    `json:"client_ip"`
+	UserAgent      string    `json:"user_agent"`
+	Disposition    string    `json:"disposition"`
+	CreatedAt      time.Time `json:"created_at"`
+	Time           string    `json:"time"`
+}
+
+type AccessLogFilter struct {
+	SiteID      int64
+	Host        string
+	ClientIP    string
+	Method      string
+	URI         string
+	Status      int
+	Disposition string
+	Since       time.Time
+	Until       time.Time
+	Pagination  Pagination
+}
+
+type WAFEvent struct {
+	Event        string    `json:"event,omitempty"`
+	ID           int64     `json:"id"`
+	RequestID    string    `json:"request_id"`
+	SiteID       int64     `json:"site_id"`
+	EventType    string    `json:"event_type"`
+	RuleID       int64     `json:"rule_id"`
+	RuleType     string    `json:"rule_type"`
+	Target       string    `json:"target"`
+	Action       string    `json:"action"`
+	Disposition  string    `json:"disposition"`
+	ClientIP     string    `json:"client_ip"`
+	Method       string    `json:"method"`
+	URI          string    `json:"uri"`
+	Summary      string    `json:"summary"`
+	AccessListID int64     `json:"access_list_id"`
+	RateLimitID  int64     `json:"rate_limit_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	Time         string    `json:"time"`
+}
+
+type WAFEventFilter struct {
+	SiteID      int64
+	ClientIP    string
+	RuleID      int64
+	Action      string
+	Disposition string
+	EventType   string
+	Since       time.Time
+	Until       time.Time
+	Pagination  Pagination
+}
+
+type ObservabilitySummary struct {
+	Requests        int64          `json:"requests"`
+	BlockedRequests int64          `json:"blocked_requests"`
+	WAFMatches      int64          `json:"waf_matches"`
+	RateLimited     int64          `json:"rate_limited"`
+	TopIPs          []SummaryCount `json:"top_ips"`
+	TopURIs         []SummaryCount `json:"top_uris"`
+	TopRules        []SummaryCount `json:"top_rules"`
+	AttackTypes     []SummaryCount `json:"attack_types"`
+}
+
+type SummaryCount struct {
+	Key   string `json:"key"`
+	Count int64  `json:"count"`
+}
+
+type ObservabilitySummaryFilter struct {
+	Since time.Time
+	Until time.Time
+	Limit int
+}
+
 type AccessListEntry struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`

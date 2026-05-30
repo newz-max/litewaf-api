@@ -9,19 +9,21 @@ import (
 )
 
 type Config struct {
-	AppName           string
-	Env               string
-	HTTPAddr          string
-	LogLevel          slog.Level
-	DatabaseURL       string
-	RedisAddr         string
-	GatewayConfigPath string
-	PublishOperator   string
-	AuthTokenSecret   string
-	AuthTokenTTL      time.Duration
-	AdminUsername     string
-	AdminPassword     string
-	AdminRole         string
+	AppName               string
+	Env                   string
+	HTTPAddr              string
+	LogLevel              slog.Level
+	DatabaseURL           string
+	RedisAddr             string
+	GatewayConfigPath     string
+	PublishOperator       string
+	AuthTokenSecret       string
+	AuthTokenTTL          time.Duration
+	AdminUsername         string
+	AdminPassword         string
+	AdminRole             string
+	GatewayIngestionToken string
+	MetricsEnabled        bool
 }
 
 func Load() Config {
@@ -36,12 +38,14 @@ func Load() Config {
 			"GATEWAY_CONFIG_PATH",
 			"/var/lib/litewaf/gateway/active.json",
 		),
-		PublishOperator: getEnv("PUBLISH_OPERATOR", "system"),
-		AuthTokenSecret: getEnv("AUTH_TOKEN_SECRET", "dev-litewaf-change-me"),
-		AuthTokenTTL:    getEnvDuration("AUTH_TOKEN_TTL_MINUTES", 12*time.Hour),
-		AdminUsername:   getEnv("LITEWAF_ADMIN_USERNAME", "admin"),
-		AdminPassword:   getEnv("LITEWAF_ADMIN_PASSWORD", "admin123456"),
-		AdminRole:       getEnv("LITEWAF_ADMIN_ROLE", "admin"),
+		PublishOperator:       getEnv("PUBLISH_OPERATOR", "system"),
+		AuthTokenSecret:       getEnv("AUTH_TOKEN_SECRET", "dev-litewaf-change-me"),
+		AuthTokenTTL:          getEnvDuration("AUTH_TOKEN_TTL_MINUTES", 12*time.Hour),
+		AdminUsername:         getEnv("LITEWAF_ADMIN_USERNAME", "admin"),
+		AdminPassword:         getEnv("LITEWAF_ADMIN_PASSWORD", "admin123456"),
+		AdminRole:             getEnv("LITEWAF_ADMIN_ROLE", "admin"),
+		GatewayIngestionToken: getEnv("GATEWAY_INGESTION_TOKEN", ""),
+		MetricsEnabled:        getEnvBool("METRICS_ENABLED", false),
 	}
 }
 
@@ -63,6 +67,14 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(minutes) * time.Minute
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
 func parseLogLevel(value string) slog.Level {

@@ -271,10 +271,6 @@ func (h handlers) deletePolicy(w http.ResponseWriter, r *http.Request) {
 	h.writeNoContent(w, err)
 }
 
-func (h handlers) listAttackLogs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, envelope{"items": []envelope{}})
-}
-
 func (h handlers) listReleases(w http.ResponseWriter, r *http.Request) {
 	items, err := h.app.Store.ListPublishRecords(r.Context())
 	h.writeList(w, items, err)

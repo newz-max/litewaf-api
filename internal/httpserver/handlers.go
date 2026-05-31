@@ -333,6 +333,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	policies, _ := h.app.Store.ListPolicies(r.Context())
 	accessLists, _ := h.app.Store.ListAccessListEntries(r.Context())
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
+	ccSummary := ccProtectionSummary(rateLimits)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -340,9 +341,29 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"policies":            len(policies),
 			"access_lists":        len(accessLists),
 			"rate_limits":         len(rateLimits),
+			"cc_protection":       ccSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
+}
+
+func ccProtectionSummary(rateLimits []model.RateLimitRule) envelope {
+	enabled := 0
+	warnings := []string{}
+	for _, item := range rateLimits {
+		if item.Enabled {
+			enabled++
+			rule := publish.CCProtectionFromRateLimit(item)
+			if rule.Match.Path == "/" && rule.Match.PathMatch == "prefix" && rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec <= 60 {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name))
+			}
+		}
+	}
+	return envelope{
+		"rules":    len(rateLimits),
+		"enabled":  enabled,
+		"warnings": warnings,
+	}
 }
 
 func (h handlers) rollbackRelease(w http.ResponseWriter, r *http.Request) {
@@ -615,17 +636,20 @@ func (r accessListRequest) toModel() model.AccessListEntry {
 }
 
 type rateLimitRequest struct {
-	Name               string `json:"name"`
-	Scope              string `json:"scope"`
-	MatchValue         string `json:"match_value"`
-	Threshold          int    `json:"threshold"`
-	WindowSec          int    `json:"window_sec"`
-	Action             string `json:"action"`
-	BanDuration        int    `json:"ban_duration_sec"`
-	ViolationThreshold int    `json:"violation_threshold"`
-	ViolationWindowSec int    `json:"violation_window_sec"`
-	SiteID             int64  `json:"site_id"`
-	Enabled            *bool  `json:"enabled"`
+	Name               string   `json:"name"`
+	Scope              string   `json:"scope"`
+	MatchValue         string   `json:"match_value"`
+	PathMatch          string   `json:"path_match"`
+	Methods            []string `json:"methods"`
+	Threshold          int      `json:"threshold"`
+	WindowSec          int      `json:"window_sec"`
+	Action             string   `json:"action"`
+	CCAction           string   `json:"cc_action"`
+	BanDuration        int      `json:"ban_duration_sec"`
+	ViolationThreshold int      `json:"violation_threshold"`
+	ViolationWindowSec int      `json:"violation_window_sec"`
+	SiteID             int64    `json:"site_id"`
+	Enabled            *bool    `json:"enabled"`
 }
 
 func (r rateLimitRequest) toModel() model.RateLimitRule {
@@ -633,9 +657,12 @@ func (r rateLimitRequest) toModel() model.RateLimitRule {
 		Name:               r.Name,
 		Scope:              r.Scope,
 		MatchValue:         r.MatchValue,
+		PathMatch:          r.PathMatch,
+		Methods:            cloneStrings(r.Methods),
 		Threshold:          r.Threshold,
 		WindowSec:          r.WindowSec,
 		Action:             r.Action,
+		CCAction:           r.CCAction,
 		BanDuration:        r.BanDuration,
 		ViolationThreshold: r.ViolationThreshold,
 		ViolationWindowSec: r.ViolationWindowSec,
@@ -948,9 +975,18 @@ func normalizeRateLimit(item *model.RateLimitRule) {
 	item.Name = strings.TrimSpace(item.Name)
 	item.Scope = strings.ToLower(strings.TrimSpace(item.Scope))
 	item.MatchValue = strings.TrimSpace(item.MatchValue)
+	item.PathMatch = strings.ToLower(strings.TrimSpace(item.PathMatch))
+	item.Methods = normalizeHTTPMethods(item.Methods)
 	item.Action = strings.ToLower(strings.TrimSpace(item.Action))
+	item.CCAction = strings.ToLower(strings.TrimSpace(item.CCAction))
+	if item.PathMatch == "" {
+		item.PathMatch = "exact"
+	}
 	if item.Action == "" {
 		item.Action = "block"
+	}
+	if item.CCAction == "" {
+		item.CCAction = item.Action
 	}
 	if item.ViolationThreshold == 0 && item.BanDuration > 0 {
 		item.ViolationThreshold = 3

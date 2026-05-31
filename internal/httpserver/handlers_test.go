@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 
 	"litewaf-api/internal/app"
@@ -292,5 +293,202 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte("litewaf_api_up 1")) {
 		t.Fatalf("metrics body missing api up metric: %s", rec.Body.String())
+	}
+}
+
+func TestCCProtectionRulesEmptyList(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/cc-protection/rules", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode cc protection rules: %v", err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("expected empty list, got %+v", response.Items)
+	}
+}
+
+func TestCCProtectionRulesMapRateLimits(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Login brute force","scope":"uri","match_value":"/api/login","threshold":10,"window_sec":60,"action":"block","ban_duration_sec":600,"site_id":7}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rate-limits", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rate limit status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/cc-protection/rules?site_id=7&enabled=true", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list cc protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode cc protection list: %v", err)
+	}
+	if len(listResponse.Items) != 1 {
+		t.Fatalf("expected 1 cc protection rule, got %+v", listResponse.Items)
+	}
+	item := listResponse.Items[0]
+	if item.Module != "cc-protection" || item.Category != "rate-limit" {
+		t.Fatalf("unexpected module/category: %+v", item)
+	}
+	if item.Match.Path != "/api/login" || item.Match.PathMatch != "exact" || len(item.Match.Methods) != 0 {
+		t.Fatalf("unexpected match mapping: %+v", item.Match)
+	}
+	if item.Limit.Counter != "client_ip_path" || item.Limit.Threshold != 10 || item.Limit.WindowSec != 60 || item.Limit.BanDurationSec != 600 {
+		t.Fatalf("unexpected limit mapping: %+v", item.Limit)
+	}
+	if item.Action.Type != "block" || item.Priority != 100 || item.SiteID != 7 || !item.Enabled {
+		t.Fatalf("unexpected action or metadata mapping: %+v", item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/cc-protection/rules/"+strconv.FormatInt(item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get cc protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var getResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&getResponse); err != nil {
+		t.Fatalf("decode cc protection item: %v", err)
+	}
+	if getResponse.Item.ID != item.ID || getResponse.Item.Module != "cc-protection" {
+		t.Fatalf("unexpected cc protection item: %+v", getResponse.Item)
+	}
+}
+
+func TestCCProtectionRulesFilterValidation(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	for _, path := range []string{
+		"/api/v1/cc-protection/rules?site_id=-1",
+		"/api/v1/cc-protection/rules?enabled=yes",
+	} {
+		req := withToken(httptest.NewRequest(http.MethodGet, path, nil), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+func TestCCProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"API limit","site_id":3,"match":{"path":"/api/","path_match":"prefix","methods":["get","POST"]},"limit":{"counter":"client_ip_path","threshold":120,"window_sec":60,"ban_duration_sec":60},"action":{"type":"rate-limit"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/rules", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create cc protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create cc protection: %v", err)
+	}
+	if createResponse.Item.Match.PathMatch != "prefix" || len(createResponse.Item.Match.Methods) != 2 || createResponse.Item.Limit.Counter != "client_ip_path" {
+		t.Fatalf("unexpected created cc protection mapping: %+v", createResponse.Item)
+	}
+	if createResponse.Item.Action.Type != "rate-limit" {
+		t.Fatalf("expected user-facing action mapping to rate-limit, got %+v", createResponse.Item.Action)
+	}
+
+	updateBody := bytes.NewBufferString(`{"name":"Login ban","site_id":3,"enabled":false,"match":{"path":"/api/login","path_match":"exact","methods":["POST"]},"limit":{"counter":"client_ip","threshold":10,"window_sec":60,"ban_duration_sec":600},"action":{"type":"ban"}}`)
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/cc-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), updateBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update cc protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updateResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&updateResponse); err != nil {
+		t.Fatalf("decode update cc protection: %v", err)
+	}
+	if updateResponse.Item.Enabled || updateResponse.Item.Match.Path != "/api/login" || updateResponse.Item.Limit.Counter != "client_ip" {
+		t.Fatalf("unexpected updated cc protection: %+v", updateResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=cc_protection_rule", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode audit logs: %v", err)
+	}
+	if len(auditResponse.Items) < 2 {
+		t.Fatalf("expected create and update audit logs, got %+v", auditResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodDelete, "/api/v1/cc-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete cc protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCCProtectionWriteValidationAndAuthorization(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	invalidBodies := []string{
+		`{"name":"bad","match":{"path":"api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"regex"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact","methods":["TRACE"]},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"cookie","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":0,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":0},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1,"ban_duration_sec":-1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"challenge"}}`,
+	}
+	for _, body := range invalidBodies {
+		req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/rules", bytes.NewBufferString(body)), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	validBody := bytes.NewBufferString(`{"name":"API limit","match":{"path":"/api/","path_match":"prefix"},"limit":{"counter":"client_ip_path","threshold":120,"window_sec":60},"action":{"type":"rate-limit"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/rules", validBody), readonlyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly create status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }

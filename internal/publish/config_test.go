@@ -103,7 +103,7 @@ func TestGenerateExtendedGatewayConfigIncludesAdvancedProtection(t *testing.T) {
 		t.Fatalf("create policy: %v", err)
 	}
 	_, err = dataStore.CreateRateLimitRule(ctx, model.RateLimitRule{
-		Name: "CC", Scope: "ip", Threshold: 10, WindowSec: 60, Action: "block", BanDuration: 300, ViolationThreshold: 3, ViolationWindowSec: 120, Enabled: true,
+		Name: "CC", Scope: "ip", MatchValue: "/login", PathMatch: "exact", Methods: []string{"POST"}, Threshold: 10, WindowSec: 60, Action: "block", CCAction: "ban", BanDuration: 300, ViolationThreshold: 3, ViolationWindowSec: 120, Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create rate limit: %v", err)
@@ -120,6 +120,19 @@ func TestGenerateExtendedGatewayConfigIncludesAdvancedProtection(t *testing.T) {
 	}
 	if config.RateLimits[0].ViolationThreshold != 3 {
 		t.Fatalf("expected repeated violation settings, got %+v", config.RateLimits[0])
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected protection_rules output, got %+v", config.ProtectionRules)
+	}
+	ccRule := config.ProtectionRules[0]
+	if ccRule.Module != "cc-protection" || ccRule.Category != "rate-limit" {
+		t.Fatalf("unexpected protection rule identity: %+v", ccRule)
+	}
+	if ccRule.Match.Path != "/login" || ccRule.Match.PathMatch != "exact" || len(ccRule.Match.Methods) != 1 || ccRule.Match.Methods[0] != "POST" {
+		t.Fatalf("unexpected protection rule match: %+v", ccRule.Match)
+	}
+	if ccRule.Limit.Counter != "client_ip" || ccRule.Action.Type != "ban" {
+		t.Fatalf("unexpected protection rule limit/action: %+v", ccRule)
 	}
 }
 

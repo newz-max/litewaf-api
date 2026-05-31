@@ -156,6 +156,11 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	summary TEXT NOT NULL DEFAULT '',
 	access_list_id BIGINT NOT NULL DEFAULT 0,
 	rate_limit_id BIGINT NOT NULL DEFAULT 0,
+	module TEXT NOT NULL DEFAULT '',
+	category TEXT NOT NULL DEFAULT '',
+	rule_name TEXT NOT NULL DEFAULT '',
+	counter TEXT NOT NULL DEFAULT '',
+	window_sec INTEGER NOT NULL DEFAULT 0,
 	advanced_target TEXT NOT NULL DEFAULT '',
 	normalized_value TEXT NOT NULL DEFAULT '',
 	score INTEGER NOT NULL DEFAULT 0,
@@ -168,6 +173,12 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	ban_remaining_sec INTEGER NOT NULL DEFAULT 0,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS module TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS rule_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS counter TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS window_sec INTEGER NOT NULL DEFAULT 0;
 
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS advanced_target TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS normalized_value TEXT NOT NULL DEFAULT '';
@@ -220,6 +231,9 @@ CREATE TABLE IF NOT EXISTS rate_limit_rules (
 
 ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS violation_threshold INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS violation_window_sec INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS path_match TEXT NOT NULL DEFAULT '';
+ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS methods TEXT NOT NULL DEFAULT '';
+ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS cc_action TEXT NOT NULL DEFAULT '';
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled)
 SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true

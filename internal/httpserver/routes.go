@@ -56,4 +56,10 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("GET /api/v1/rate-limits/{id}", handlers.require(permissionRead, handlers.getRateLimit))
 	mux.HandleFunc("PUT /api/v1/rate-limits/{id}", handlers.require(permissionWrite, handlers.updateRateLimit))
 	mux.HandleFunc("DELETE /api/v1/rate-limits/{id}", handlers.require(permissionWrite, handlers.deleteRateLimit))
+
+	mux.HandleFunc("GET /api/v1/cc-protection/rules", handlers.require(permissionRead, handlers.listCCProtectionRules))
+	mux.HandleFunc("POST /api/v1/cc-protection/rules", handlers.require(permissionWrite, handlers.createCCProtectionRule))
+	mux.HandleFunc("GET /api/v1/cc-protection/rules/{id}", handlers.require(permissionRead, handlers.getCCProtectionRule))
+	mux.HandleFunc("PUT /api/v1/cc-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateCCProtectionRule))
+	mux.HandleFunc("DELETE /api/v1/cc-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteCCProtectionRule))
 }

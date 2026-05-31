@@ -154,6 +154,11 @@ type WAFEvent struct {
 	Summary         string    `json:"summary"`
 	AccessListID    int64     `json:"access_list_id"`
 	RateLimitID     int64     `json:"rate_limit_id"`
+	Module          string    `json:"module"`
+	Category        string    `json:"category"`
+	RuleName        string    `json:"rule_name"`
+	Counter         string    `json:"counter"`
+	WindowSec       int       `json:"window_sec"`
 	AdvancedTarget  string    `json:"advanced_target"`
 	NormalizedValue string    `json:"normalized_value"`
 	Score           int       `json:"score"`
@@ -226,9 +231,12 @@ type RateLimitRule struct {
 	Name               string    `json:"name"`
 	Scope              string    `json:"scope"`
 	MatchValue         string    `json:"match_value"`
+	PathMatch          string    `json:"path_match"`
+	Methods            []string  `json:"methods"`
 	Threshold          int       `json:"threshold"`
 	WindowSec          int       `json:"window_sec"`
 	Action             string    `json:"action"`
+	CCAction           string    `json:"cc_action"`
 	BanDuration        int       `json:"ban_duration_sec"`
 	ViolationThreshold int       `json:"violation_threshold"`
 	ViolationWindowSec int       `json:"violation_window_sec"`
@@ -236,4 +244,36 @@ type RateLimitRule struct {
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+type ProtectionRule struct {
+	ID        int64                `json:"id"`
+	Name      string               `json:"name"`
+	Module    string               `json:"module"`
+	Category  string               `json:"category"`
+	SiteID    int64                `json:"site_id"`
+	Enabled   bool                 `json:"enabled"`
+	Priority  int                  `json:"priority"`
+	Match     ProtectionRuleMatch  `json:"match"`
+	Limit     ProtectionRuleLimit  `json:"limit"`
+	Action    ProtectionRuleAction `json:"action"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
+}
+
+type ProtectionRuleMatch struct {
+	Path      string   `json:"path"`
+	PathMatch string   `json:"path_match"`
+	Methods   []string `json:"methods"`
+}
+
+type ProtectionRuleLimit struct {
+	Counter        string `json:"counter"`
+	Threshold      int    `json:"threshold"`
+	WindowSec      int    `json:"window_sec"`
+	BanDurationSec int    `json:"ban_duration_sec"`
+}
+
+type ProtectionRuleAction struct {
+	Type string `json:"type"`
 }

@@ -65,14 +65,16 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 		INSERT INTO waf_events (
 			request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
 			client_ip, method, uri, summary, access_list_id, rate_limit_id,
+			module, category, rule_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
 			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, COALESCE($25::timestamptz, now()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, COALESCE($30::timestamptz, now()))
 		RETURNING id, created_at`,
 		item.RequestID, item.SiteID, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition,
 		item.ClientIP, item.Method, item.URI, item.Summary, item.AccessListID, item.RateLimitID,
+		item.Module, item.Category, item.RuleName, item.Counter, item.WindowSec,
 		item.AdvancedTarget, item.NormalizedValue, item.Score, item.Threshold, item.MatchedRuleIDs,
 		item.BodyMetadata, item.UploadMetadata, item.BanReason, item.BanDurationSec, item.BanRemainingSec,
 		createdAt).
@@ -90,6 +92,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
 			client_ip, method, uri, summary, access_list_id, rate_limit_id,
+			module, category, rule_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
 			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
 			created_at
@@ -118,6 +121,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 		if err := rows.Scan(
 			&item.ID, &item.RequestID, &item.SiteID, &item.EventType, &item.RuleID, &item.RuleType, &item.Target, &item.Action, &item.Disposition,
 			&item.ClientIP, &item.Method, &item.URI, &item.Summary, &item.AccessListID, &item.RateLimitID,
+			&item.Module, &item.Category, &item.RuleName, &item.Counter, &item.WindowSec,
 			&item.AdvancedTarget, &item.NormalizedValue, &item.Score, &item.Threshold, &item.MatchedRuleIDs,
 			&item.BodyMetadata, &item.UploadMetadata, &item.BanReason, &item.BanDurationSec, &item.BanRemainingSec,
 			&item.CreatedAt,

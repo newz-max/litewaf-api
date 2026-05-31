@@ -88,6 +88,36 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
+发布配置会保留旧 `rate_limits` 字段，并同步输出 CC 防护子集到 `protection_rules`：
+
+```json
+{
+  "rate_limits": [],
+  "protection_rules": [
+    {
+      "module": "cc-protection",
+      "category": "rate-limit",
+      "match": {
+        "path": "/api/login",
+        "path_match": "exact",
+        "methods": ["POST"]
+      },
+      "limit": {
+        "counter": "client_ip",
+        "threshold": 10,
+        "window_sec": 60,
+        "ban_duration_sec": 600
+      },
+      "action": {
+        "type": "ban"
+      }
+    }
+  ]
+}
+```
+
+发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。
+
 ## 黑白名单
 
 | 方法 | 路径 | 权限 | 说明 |
@@ -111,6 +141,55 @@ Authorization: Bearer <token>
 | DELETE | `/api/v1/rate-limits/{id}` | 写 | 删除限流规则 |
 
 限流支持 IP、URI、站点维度，重复违规可触发临时封禁。
+
+## CC 防护
+
+CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`category=rate-limit` 的防护规则模型呈现。第一阶段只覆盖 URL 访问频率限制、登录防爆破和 API 调用限流，不包含攻击防护、上传防护、Bot、人机验证或动态防护。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/cc-protection/rules` | 读 | 查询 CC 防护规则 |
+| POST | `/api/v1/cc-protection/rules` | 写 | 创建 CC 防护规则 |
+| GET | `/api/v1/cc-protection/rules/{id}` | 读 | 查询 CC 防护规则 |
+| PUT | `/api/v1/cc-protection/rules/{id}` | 写 | 更新 CC 防护规则 |
+| DELETE | `/api/v1/cc-protection/rules/{id}` | 写 | 删除 CC 防护规则 |
+
+列表支持过滤：
+
+- `site_id`：站点 ID。
+- `enabled`：`true` 或 `false`。
+
+请求示例：
+
+```json
+{
+  "name": "登录接口防爆破",
+  "site_id": 1,
+  "enabled": true,
+  "match": {
+    "path": "/api/login",
+    "path_match": "exact",
+    "methods": ["POST"]
+  },
+  "limit": {
+    "counter": "client_ip",
+    "threshold": 10,
+    "window_sec": 60,
+    "ban_duration_sec": 600
+  },
+  "action": {
+    "type": "ban"
+  }
+}
+```
+
+支持字段：
+
+- `match.path` 必须以 `/` 开头。
+- `match.path_match` 支持 `exact`、`prefix`。
+- `match.methods` 支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`、`OPTIONS`，空数组表示全部方法。
+- `limit.counter` 支持 `client_ip`、`client_ip_path`、`global`。
+- `action.type` 支持 `log-only`、`block`、`rate-limit`、`ban`。
 
 ## 日志和观测
 

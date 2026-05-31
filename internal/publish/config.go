@@ -53,17 +53,20 @@ type GatewayAccessListEntry struct {
 }
 
 type GatewayRateLimitRule struct {
-	ID                 int64  `json:"id"`
-	Name               string `json:"name"`
-	Scope              string `json:"scope"`
-	MatchValue         string `json:"match_value"`
-	Threshold          int    `json:"threshold"`
-	WindowSec          int    `json:"window_sec"`
-	Action             string `json:"action"`
-	BanDuration        int    `json:"ban_duration_sec"`
-	ViolationThreshold int    `json:"violation_threshold"`
-	ViolationWindowSec int    `json:"violation_window_sec"`
-	SiteID             int64  `json:"site_id"`
+	ID                 int64    `json:"id"`
+	Name               string   `json:"name"`
+	Scope              string   `json:"scope"`
+	MatchValue         string   `json:"match_value"`
+	PathMatch          string   `json:"path_match"`
+	Methods            []string `json:"methods"`
+	Threshold          int      `json:"threshold"`
+	WindowSec          int      `json:"window_sec"`
+	Action             string   `json:"action"`
+	CCAction           string   `json:"cc_action"`
+	BanDuration        int      `json:"ban_duration_sec"`
+	ViolationThreshold int      `json:"violation_threshold"`
+	ViolationWindowSec int      `json:"violation_window_sec"`
+	SiteID             int64    `json:"site_id"`
 }
 
 type GatewayPolicy struct {
@@ -90,11 +93,12 @@ type GatewayPolicy struct {
 }
 
 type ExtendedGatewayConfig struct {
-	Version     string                   `json:"version"`
-	GeneratedAt time.Time                `json:"generated_at"`
-	Sites       []GatewaySite            `json:"sites"`
-	AccessLists []GatewayAccessListEntry `json:"access_lists"`
-	RateLimits  []GatewayRateLimitRule   `json:"rate_limits"`
+	Version         string                   `json:"version"`
+	GeneratedAt     time.Time                `json:"generated_at"`
+	Sites           []GatewaySite            `json:"sites"`
+	AccessLists     []GatewayAccessListEntry `json:"access_lists"`
+	RateLimits      []GatewayRateLimitRule   `json:"rate_limits"`
+	ProtectionRules []model.ProtectionRule   `json:"protection_rules"`
 }
 
 func Generate(ctx context.Context, dataStore store.Store, version string) (GatewayConfig, []byte, string, error) {
@@ -160,11 +164,12 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	}
 
 	config := ExtendedGatewayConfig{
-		Version:     version,
-		GeneratedAt: time.Now().UTC(),
-		Sites:       []GatewaySite{},
-		AccessLists: []GatewayAccessListEntry{},
-		RateLimits:  []GatewayRateLimitRule{},
+		Version:         version,
+		GeneratedAt:     time.Now().UTC(),
+		Sites:           []GatewaySite{},
+		AccessLists:     []GatewayAccessListEntry{},
+		RateLimits:      []GatewayRateLimitRule{},
+		ProtectionRules: []model.ProtectionRule{},
 	}
 	for _, site := range sites {
 		if !site.Enabled {
@@ -215,14 +220,18 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			Name:               item.Name,
 			Scope:              item.Scope,
 			MatchValue:         item.MatchValue,
+			PathMatch:          item.PathMatch,
+			Methods:            cloneStrings(item.Methods),
 			Threshold:          item.Threshold,
 			WindowSec:          item.WindowSec,
 			Action:             item.Action,
+			CCAction:           item.CCAction,
 			BanDuration:        item.BanDuration,
 			ViolationThreshold: item.ViolationThreshold,
 			ViolationWindowSec: item.ViolationWindowSec,
 			SiteID:             item.SiteID,
 		})
+		config.ProtectionRules = append(config.ProtectionRules, CCProtectionFromRateLimit(item))
 	}
 
 	payload, err := json.MarshalIndent(config, "", "  ")
@@ -231,6 +240,84 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	}
 	sum := sha256.Sum256(payload)
 	return config, payload, hex.EncodeToString(sum[:]), nil
+}
+
+func CCProtectionFromRateLimit(item model.RateLimitRule) model.ProtectionRule {
+	path, pathMatch := ccProtectionPath(item)
+	return model.ProtectionRule{
+		ID:       item.ID,
+		Name:     item.Name,
+		Module:   "cc-protection",
+		Category: "rate-limit",
+		SiteID:   item.SiteID,
+		Enabled:  item.Enabled,
+		Priority: 100,
+		Match: model.ProtectionRuleMatch{
+			Path:      path,
+			PathMatch: pathMatch,
+			Methods:   cloneStrings(item.Methods),
+		},
+		Limit: model.ProtectionRuleLimit{
+			Counter:        ccProtectionCounter(item.Scope),
+			Threshold:      item.Threshold,
+			WindowSec:      item.WindowSec,
+			BanDurationSec: item.BanDuration,
+		},
+		Action: model.ProtectionRuleAction{
+			Type: ccProtectionAction(item),
+		},
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
+	}
+}
+
+func ccProtectionPath(item model.RateLimitRule) (string, string) {
+	pathMatch := item.PathMatch
+	if pathMatch == "" {
+		pathMatch = "exact"
+	}
+	if item.MatchValue != "" {
+		return item.MatchValue, pathMatch
+	}
+	if item.Scope == "site" || item.Scope == "ip" {
+		if item.PathMatch == "" {
+			pathMatch = "prefix"
+		}
+		return "/", pathMatch
+	}
+	return "/", "prefix"
+}
+
+func ccProtectionCounter(scope string) string {
+	switch scope {
+	case "ip":
+		return "client_ip"
+	case "uri":
+		return "client_ip_path"
+	case "site":
+		return "global"
+	default:
+		return "client_ip"
+	}
+}
+
+func ccProtectionAction(item model.RateLimitRule) string {
+	if item.CCAction != "" {
+		return item.CCAction
+	}
+	if item.Action == "" {
+		return "rate-limit"
+	}
+	return item.Action
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 func Validate(ctx context.Context, dataStore store.Store) error {

@@ -529,7 +529,7 @@ func (s *PostgresStore) DeleteAccessListEntry(ctx context.Context, id int64) err
 
 func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLimitRule, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled, created_at, updated_at
+		SELECT id, name, scope, match_value, path_match, methods, threshold, window_sec, action, cc_action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled, created_at, updated_at
 		FROM rate_limit_rules
 		ORDER BY id`)
 	if err != nil {
@@ -539,9 +539,11 @@ func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLim
 	var items []model.RateLimitRule
 	for rows.Next() {
 		var item model.RateLimitRule
-		if err := rows.Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.ViolationThreshold, &item.ViolationWindowSec, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var methods string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.PathMatch, &methods, &item.Threshold, &item.WindowSec, &item.Action, &item.CCAction, &item.BanDuration, &item.ViolationThreshold, &item.ViolationWindowSec, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item.Methods = splitMethods(methods)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -549,23 +551,25 @@ func (s *PostgresStore) ListRateLimitRules(ctx context.Context) ([]model.RateLim
 
 func (s *PostgresStore) GetRateLimitRule(ctx context.Context, id int64) (model.RateLimitRule, error) {
 	var item model.RateLimitRule
+	var methods string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, scope, match_value, threshold, window_sec, action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled, created_at, updated_at
+		SELECT id, name, scope, match_value, path_match, methods, threshold, window_sec, action, cc_action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled, created_at, updated_at
 		FROM rate_limit_rules
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.Threshold, &item.WindowSec, &item.Action, &item.BanDuration, &item.ViolationThreshold, &item.ViolationWindowSec, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+		Scan(&item.ID, &item.Name, &item.Scope, &item.MatchValue, &item.PathMatch, &methods, &item.Threshold, &item.WindowSec, &item.Action, &item.CCAction, &item.BanDuration, &item.ViolationThreshold, &item.ViolationWindowSec, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RateLimitRule{}, ErrNotFound
 	}
+	item.Methods = splitMethods(methods)
 	return item, err
 }
 
 func (s *PostgresStore) CreateRateLimitRule(ctx context.Context, item model.RateLimitRule) (model.RateLimitRule, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO rate_limit_rules (name, scope, match_value, threshold, window_sec, action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO rate_limit_rules (name, scope, match_value, path_match, methods, threshold, window_sec, action, cc_action, ban_duration_sec, violation_threshold, violation_window_sec, site_id, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.ViolationThreshold, item.ViolationWindowSec, item.SiteID, item.Enabled).
+		item.Name, item.Scope, item.MatchValue, item.PathMatch, joinMethods(item.Methods), item.Threshold, item.WindowSec, item.Action, item.CCAction, item.BanDuration, item.ViolationThreshold, item.ViolationWindowSec, item.SiteID, item.Enabled).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
@@ -573,15 +577,37 @@ func (s *PostgresStore) CreateRateLimitRule(ctx context.Context, item model.Rate
 func (s *PostgresStore) UpdateRateLimitRule(ctx context.Context, id int64, item model.RateLimitRule) (model.RateLimitRule, error) {
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE rate_limit_rules
-		SET name = $2, scope = $3, match_value = $4, threshold = $5, window_sec = $6, action = $7, ban_duration_sec = $8, violation_threshold = $9, violation_window_sec = $10, site_id = $11, enabled = $12, updated_at = now()
+		SET name = $2, scope = $3, match_value = $4, path_match = $5, methods = $6, threshold = $7, window_sec = $8, action = $9, cc_action = $10, ban_duration_sec = $11, violation_threshold = $12, violation_window_sec = $13, site_id = $14, enabled = $15, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.Scope, item.MatchValue, item.Threshold, item.WindowSec, item.Action, item.BanDuration, item.ViolationThreshold, item.ViolationWindowSec, item.SiteID, item.Enabled).
+		id, item.Name, item.Scope, item.MatchValue, item.PathMatch, joinMethods(item.Methods), item.Threshold, item.WindowSec, item.Action, item.CCAction, item.BanDuration, item.ViolationThreshold, item.ViolationWindowSec, item.SiteID, item.Enabled).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RateLimitRule{}, ErrNotFound
 	}
 	return item, err
+}
+
+func splitMethods(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func joinMethods(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.Join(values, ",")
 }
 
 func (s *PostgresStore) DeleteRateLimitRule(ctx context.Context, id int64) error {

@@ -457,6 +457,8 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		}
 		if item.RuleID > 0 {
 			increment(ruleCounts, strconvFormatInt(item.RuleID))
+		} else if item.RuleName != "" {
+			increment(ruleCounts, item.RuleName)
 		}
 		increment(typeCounts, item.EventType)
 	}

@@ -184,6 +184,8 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	ban_reason TEXT NOT NULL DEFAULT '',
 	ban_duration_sec INTEGER NOT NULL DEFAULT 0,
 	ban_remaining_sec INTEGER NOT NULL DEFAULT 0,
+	challenge_mode TEXT NOT NULL DEFAULT '',
+	challenge_result TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -205,6 +207,8 @@ ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS upload_metadata TEXT NOT NULL DE
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_duration_sec INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_remaining_sec INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS challenge_mode TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS challenge_result TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_waf_events_created_at ON waf_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_waf_events_site_id ON waf_events (site_id);
@@ -277,6 +281,28 @@ ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS methods TEXT NOT NU
 ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS extensions TEXT NOT NULL DEFAULT '';
 ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS max_bytes INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
+
+CREATE TABLE IF NOT EXISTS bot_protection_rules (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	path TEXT NOT NULL DEFAULT '/',
+	path_match TEXT NOT NULL DEFAULT 'prefix',
+	methods TEXT NOT NULL DEFAULT '',
+	challenge_mode TEXT NOT NULL DEFAULT 'js-challenge',
+	verify_ttl_sec INTEGER NOT NULL DEFAULT 300,
+	failure_action TEXT NOT NULL DEFAULT 'block',
+	site_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	priority INTEGER NOT NULL DEFAULT 100,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE bot_protection_rules ADD COLUMN IF NOT EXISTS methods TEXT NOT NULL DEFAULT '';
+ALTER TABLE bot_protection_rules ADD COLUMN IF NOT EXISTS challenge_mode TEXT NOT NULL DEFAULT 'js-challenge';
+ALTER TABLE bot_protection_rules ADD COLUMN IF NOT EXISTS verify_ttl_sec INTEGER NOT NULL DEFAULT 300;
+ALTER TABLE bot_protection_rules ADD COLUMN IF NOT EXISTS failure_action TEXT NOT NULL DEFAULT 'block';
+ALTER TABLE bot_protection_rules ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
 SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true, 'attack-protection', 'managed', 'sqli', 'SQL 注入防护', 100

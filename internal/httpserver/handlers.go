@@ -337,10 +337,12 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	accessLists, _ := h.app.Store.ListAccessListEntries(r.Context())
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
 	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
+	botRules, _ := h.app.Store.ListBotProtectionRules(r.Context())
 	ccSummary := ccProtectionSummary(rateLimits)
 	accessControlSummary := accessControlSummary(accessLists)
 	attackSummary := attackProtectionSummary(rules)
 	uploadSummary := uploadProtectionSummary(uploadRules)
+	botSummary := botProtectionSummary(botRules)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -352,6 +354,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"cc_protection":       ccSummary,
 			"attack_protection":   attackSummary,
 			"upload_protection":   uploadSummary,
+			"bot_protection":      botSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
@@ -479,6 +482,43 @@ func uploadProtectionSummary(rules []model.UploadProtectionRule) envelope {
 		"block":           block,
 		"log_only":        logOnly,
 		"warnings":        warnings,
+	}
+}
+
+func botProtectionSummary(rules []model.BotProtectionRule) envelope {
+	enabled := 0
+	challenges := 0
+	block := 0
+	logOnly := 0
+	warnings := []string{}
+	for _, item := range rules {
+		if !item.Enabled {
+			continue
+		}
+		enabled++
+		if item.ChallengeMode == "js-challenge" {
+			challenges++
+		}
+		switch item.FailureAction {
+		case "log-only":
+			logOnly++
+		case "block":
+			block++
+			if item.Path == "/" && item.PathMatch == "prefix" {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用 JS Challenge 阻断", item.Name))
+			}
+			if len(item.Methods) == 0 {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用 JS Challenge 阻断", item.Name))
+			}
+		}
+	}
+	return envelope{
+		"rules":      len(rules),
+		"enabled":    enabled,
+		"challenges": challenges,
+		"block":      block,
+		"log_only":   logOnly,
+		"warnings":   warnings,
 	}
 }
 

@@ -68,15 +68,17 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 			module, category, rule_name, attack_type, group_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
 			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
+			challenge_mode, challenge_result,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, COALESCE($32::timestamptz, now()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, COALESCE($34::timestamptz, now()))
 		RETURNING id, created_at`,
 		item.RequestID, item.SiteID, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition,
 		item.ClientIP, item.Method, item.URI, item.Summary, item.AccessListID, item.RateLimitID,
 		item.Module, item.Category, item.RuleName, item.AttackType, item.GroupName, item.Counter, item.WindowSec,
 		item.AdvancedTarget, item.NormalizedValue, item.Score, item.Threshold, item.MatchedRuleIDs,
 		item.BodyMetadata, item.UploadMetadata, item.BanReason, item.BanDurationSec, item.BanRemainingSec,
+		item.ChallengeMode, item.ChallengeResult,
 		createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
@@ -95,6 +97,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			module, category, rule_name, attack_type, group_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
 			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
+			challenge_mode, challenge_result,
 			created_at
 		FROM waf_events
 		WHERE ($1::bigint = 0 OR site_id = $1)
@@ -106,13 +109,14 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			AND ($7 = '' OR module = $7)
 			AND ($8 = '' OR attack_type = $8)
 			AND ($9 = '' OR advanced_target = $9 OR target = $9)
-			AND ($10::integer = 0 OR score >= $10)
-			AND ($11::timestamptz IS NULL OR created_at >= $11)
-			AND ($12::timestamptz IS NULL OR created_at <= $12)
+			AND ($10 = '' OR challenge_result = $10)
+			AND ($11::integer = 0 OR score >= $11)
+			AND ($12::timestamptz IS NULL OR created_at >= $12)
+			AND ($13::timestamptz IS NULL OR created_at <= $13)
 		ORDER BY id DESC
-		LIMIT $13 OFFSET $14`,
+		LIMIT $14 OFFSET $15`,
 		filter.SiteID, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
-		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.MinScore, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
+		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +130,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			&item.Module, &item.Category, &item.RuleName, &item.AttackType, &item.GroupName, &item.Counter, &item.WindowSec,
 			&item.AdvancedTarget, &item.NormalizedValue, &item.Score, &item.Threshold, &item.MatchedRuleIDs,
 			&item.BodyMetadata, &item.UploadMetadata, &item.BanReason, &item.BanDurationSec, &item.BanRemainingSec,
+			&item.ChallengeMode, &item.ChallengeResult,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -196,6 +201,10 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 		return summary, err
 	}
 	summary.UploadProtection, err = s.uploadProtectionSummaryCounts(ctx, filter, limit)
+	if err != nil {
+		return summary, err
+	}
+	summary.BotProtection, err = s.botProtectionSummaryCounts(ctx, filter, limit)
 	return summary, err
 }
 
@@ -260,6 +269,34 @@ func (s *PostgresStore) uploadProtectionSummaryCounts(ctx context.Context, filte
 		SELECT action || '|' || disposition AS key, count(*) AS count
 		FROM waf_events
 		WHERE module = 'upload-protection'
+			AND action <> ''
+			AND ($1::timestamptz IS NULL OR created_at >= $1)
+			AND ($2::timestamptz IS NULL OR created_at <= $2)
+		GROUP BY key
+		ORDER BY count DESC, key ASC
+		LIMIT $3`, nullableTime(filter.Since), nullableTime(filter.Until), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.SummaryCount
+	for rows.Next() {
+		var item model.SummaryCount
+		if err := rows.Scan(&item.Key, &item.Count); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(item.Key) != "" {
+			items = append(items, item)
+		}
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) botProtectionSummaryCounts(ctx context.Context, filter model.ObservabilitySummaryFilter, limit int) ([]model.SummaryCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT challenge_result || '|' || action || '|' || disposition AS key, count(*) AS count
+		FROM waf_events
+		WHERE module = 'bot-protection'
 			AND action <> ''
 			AND ($1::timestamptz IS NULL OR created_at >= $1)
 			AND ($2::timestamptz IS NULL OR created_at <= $2)

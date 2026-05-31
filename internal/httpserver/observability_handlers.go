@@ -117,6 +117,8 @@ func normalizeWAFEvent(item *model.WAFEvent) {
 	item.BodyMetadata = boundedSummary(strings.TrimSpace(item.BodyMetadata), 1024)
 	item.UploadMetadata = boundedSummary(strings.TrimSpace(item.UploadMetadata), 1024)
 	item.BanReason = strings.TrimSpace(item.BanReason)
+	item.ChallengeMode = strings.ToLower(strings.TrimSpace(item.ChallengeMode))
+	item.ChallengeResult = strings.ToLower(strings.TrimSpace(item.ChallengeResult))
 }
 
 func validateWAFEvent(item model.WAFEvent) error {
@@ -165,13 +167,14 @@ func parseAccessLogFilter(w http.ResponseWriter, r *http.Request) (model.AccessL
 func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEventFilter, bool) {
 	query := r.URL.Query()
 	filter := model.WAFEventFilter{
-		ClientIP:       strings.TrimSpace(query.Get("client_ip")),
-		Action:         strings.ToLower(strings.TrimSpace(query.Get("action"))),
-		Disposition:    strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
-		EventType:      strings.ToLower(strings.TrimSpace(query.Get("event_type"))),
-		Module:         strings.ToLower(strings.TrimSpace(query.Get("module"))),
-		AttackType:     strings.ToLower(strings.TrimSpace(query.Get("attack_type"))),
-		AdvancedTarget: strings.ToLower(strings.TrimSpace(query.Get("advanced_target"))),
+		ClientIP:        strings.TrimSpace(query.Get("client_ip")),
+		Action:          strings.ToLower(strings.TrimSpace(query.Get("action"))),
+		Disposition:     strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
+		EventType:       strings.ToLower(strings.TrimSpace(query.Get("event_type"))),
+		Module:          strings.ToLower(strings.TrimSpace(query.Get("module"))),
+		AttackType:      strings.ToLower(strings.TrimSpace(query.Get("attack_type"))),
+		AdvancedTarget:  strings.ToLower(strings.TrimSpace(query.Get("advanced_target"))),
+		ChallengeResult: strings.ToLower(strings.TrimSpace(query.Get("challenge_result"))),
 	}
 	var ok bool
 	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {

@@ -254,6 +254,41 @@ func TestGenerateExtendedGatewayConfigIncludesUploadProtectionRules(t *testing.T
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesBotProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateBotProtectionRule(ctx, model.BotProtectionRule{
+		Name: "Admin challenge", Path: "/admin", PathMatch: "prefix", Methods: []string{"GET"},
+		ChallengeMode: "js-challenge", VerifyTTL: 600, FailureAction: "block", SiteID: 3, Enabled: true, Priority: 60,
+	})
+	if err != nil {
+		t.Fatalf("create bot protection rule: %v", err)
+	}
+	_, err = dataStore.CreateBotProtectionRule(ctx, model.BotProtectionRule{
+		Name: "Disabled", Path: "/login", PathMatch: "exact", ChallengeMode: "js-challenge", VerifyTTL: 300, FailureAction: "block", Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("create disabled bot protection rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-bot-protection")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected bot protection output, got %+v", config.ProtectionRules)
+	}
+	rule := config.ProtectionRules[0]
+	if rule.Module != "bot-protection" || rule.Category != "challenge" || rule.Action.Type != "block" {
+		t.Fatalf("unexpected bot protection identity/action: %+v", rule)
+	}
+	if rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || len(rule.Match.Methods) != 1 || rule.Priority != 60 {
+		t.Fatalf("unexpected bot protection match/priority: %+v", rule)
+	}
+	if rule.Challenge == nil || rule.Challenge.Mode != "js-challenge" || rule.Challenge.VerifyTTL != 600 || rule.Challenge.FailureAction != "block" {
+		t.Fatalf("unexpected bot protection challenge: %+v", rule.Challenge)
+	}
+}
+
 func TestValidateRejectsInvalidAccessControlRule(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
@@ -279,6 +314,20 @@ func TestValidateRejectsInvalidUploadProtectionRule(t *testing.T) {
 	}
 	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-upload-protection"); err == nil {
 		t.Fatal("expected invalid upload protection rule to block publish")
+	}
+}
+
+func TestValidateRejectsInvalidBotProtectionRule(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateBotProtectionRule(ctx, model.BotProtectionRule{
+		Name: "Bad path", Path: "admin", PathMatch: "prefix", ChallengeMode: "js-challenge", VerifyTTL: 300, FailureAction: "block", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create invalid bot rule: %v", err)
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-bot-protection"); err == nil {
+		t.Fatal("expected invalid bot protection rule to block publish")
 	}
 }
 

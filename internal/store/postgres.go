@@ -690,6 +690,72 @@ func (s *PostgresStore) DeleteUploadProtectionRule(ctx context.Context, id int64
 	return checkRowsAffected(result, err)
 }
 
+func (s *PostgresStore) ListBotProtectionRules(ctx context.Context) ([]model.BotProtectionRule, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, path, path_match, methods, challenge_mode, verify_ttl_sec, failure_action, site_id, enabled, priority, created_at, updated_at
+		FROM bot_protection_rules
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.BotProtectionRule
+	for rows.Next() {
+		var item model.BotProtectionRule
+		var methods string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Path, &item.PathMatch, &methods, &item.ChallengeMode, &item.VerifyTTL, &item.FailureAction, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Methods = splitMethods(methods)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetBotProtectionRule(ctx context.Context, id int64) (model.BotProtectionRule, error) {
+	var item model.BotProtectionRule
+	var methods string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, path, path_match, methods, challenge_mode, verify_ttl_sec, failure_action, site_id, enabled, priority, created_at, updated_at
+		FROM bot_protection_rules
+		WHERE id = $1`, id).
+		Scan(&item.ID, &item.Name, &item.Path, &item.PathMatch, &methods, &item.ChallengeMode, &item.VerifyTTL, &item.FailureAction, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.BotProtectionRule{}, ErrNotFound
+	}
+	item.Methods = splitMethods(methods)
+	return item, err
+}
+
+func (s *PostgresStore) CreateBotProtectionRule(ctx context.Context, item model.BotProtectionRule) (model.BotProtectionRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO bot_protection_rules (name, path, path_match, methods, challenge_mode, verify_ttl_sec, failure_action, site_id, enabled, priority)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Path, item.PathMatch, joinMethods(item.Methods), item.ChallengeMode, item.VerifyTTL, item.FailureAction, item.SiteID, item.Enabled, item.Priority).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateBotProtectionRule(ctx context.Context, id int64, item model.BotProtectionRule) (model.BotProtectionRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE bot_protection_rules
+		SET name = $2, path = $3, path_match = $4, methods = $5, challenge_mode = $6, verify_ttl_sec = $7, failure_action = $8, site_id = $9, enabled = $10, priority = $11, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Path, item.PathMatch, joinMethods(item.Methods), item.ChallengeMode, item.VerifyTTL, item.FailureAction, item.SiteID, item.Enabled, item.Priority).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.BotProtectionRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteBotProtectionRule(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM bot_protection_rules WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
 func (s *PostgresStore) policyBindings(ctx context.Context, policyID int64) ([]int64, []int64, error) {
 	siteIDs, err := queryIDs(ctx, s.db, `SELECT site_id FROM policy_sites WHERE policy_id = $1 ORDER BY site_id`, policyID)
 	if err != nil {

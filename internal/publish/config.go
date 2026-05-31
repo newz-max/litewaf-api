@@ -149,6 +149,10 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	if err != nil {
 		return ExtendedGatewayConfig{}, nil, "", err
 	}
+	botRules, err := dataStore.ListBotProtectionRules(ctx)
+	if err != nil {
+		return ExtendedGatewayConfig{}, nil, "", err
+	}
 
 	rulesByID := map[int64]model.Rule{}
 	for _, rule := range rules {
@@ -263,6 +267,12 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 		}
 		config.ProtectionRules = append(config.ProtectionRules, UploadProtectionFromRule(item))
 	}
+	for _, item := range botRules {
+		if !item.Enabled {
+			continue
+		}
+		config.ProtectionRules = append(config.ProtectionRules, BotProtectionFromRule(item))
+	}
 
 	payload, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -349,6 +359,54 @@ func UploadProtectionFromRule(item model.UploadProtectionRule) model.ProtectionR
 		},
 		Action: model.ProtectionRuleAction{
 			Type: item.Action,
+		},
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
+	}
+}
+
+func BotProtectionFromRule(item model.BotProtectionRule) model.ProtectionRule {
+	path := item.Path
+	if path == "" {
+		path = "/"
+	}
+	pathMatch := item.PathMatch
+	if pathMatch == "" {
+		pathMatch = "prefix"
+	}
+	mode := item.ChallengeMode
+	if mode == "" {
+		mode = "js-challenge"
+	}
+	verifyTTL := item.VerifyTTL
+	if verifyTTL == 0 {
+		verifyTTL = 300
+	}
+	failureAction := item.FailureAction
+	if failureAction == "" {
+		failureAction = "block"
+	}
+	return model.ProtectionRule{
+		ID:       item.ID,
+		Name:     item.Name,
+		Module:   "bot-protection",
+		Category: "challenge",
+		SiteID:   item.SiteID,
+		Enabled:  item.Enabled,
+		Priority: protectionPriority(item.Priority),
+		Match: model.ProtectionRuleMatch{
+			Path:      path,
+			PathMatch: pathMatch,
+			Methods:   cloneStrings(item.Methods),
+			Target:    "path",
+		},
+		Challenge: &model.ProtectionRuleChallenge{
+			Mode:          mode,
+			VerifyTTL:     verifyTTL,
+			FailureAction: failureAction,
+		},
+		Action: model.ProtectionRuleAction{
+			Type: failureAction,
 		},
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
@@ -494,6 +552,10 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 	if err != nil {
 		return err
 	}
+	botRules, err := dataStore.ListBotProtectionRules(ctx)
+	if err != nil {
+		return err
+	}
 
 	siteIDs := map[int64]bool{}
 	for _, site := range sites {
@@ -568,6 +630,13 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 	for _, item := range uploadRules {
 		if item.Enabled {
 			if err := validateUploadProtectionRule(item); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range botRules {
+		if item.Enabled {
+			if err := validateBotProtectionRule(item); err != nil {
 				return err
 			}
 		}
@@ -676,6 +745,36 @@ func validateUploadProtectionRule(item model.UploadProtectionRule) error {
 	}
 	if item.Priority < 0 {
 		return fmt.Errorf("upload protection rule %d priority cannot be negative", item.ID)
+	}
+	return nil
+}
+
+func validateBotProtectionRule(item model.BotProtectionRule) error {
+	if item.Name == "" {
+		return fmt.Errorf("bot protection rule %d name is required", item.ID)
+	}
+	if item.Path == "" || !strings.HasPrefix(item.Path, "/") {
+		return fmt.Errorf("bot protection rule %d path must start with /", item.ID)
+	}
+	if item.PathMatch != "" && item.PathMatch != "exact" && item.PathMatch != "prefix" {
+		return fmt.Errorf("bot protection rule %d path_match is unsupported", item.ID)
+	}
+	for _, method := range item.Methods {
+		if method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" {
+			return fmt.Errorf("bot protection rule %d method is unsupported", item.ID)
+		}
+	}
+	if item.ChallengeMode != "js-challenge" {
+		return fmt.Errorf("bot protection rule %d challenge mode is unsupported", item.ID)
+	}
+	if item.VerifyTTL <= 0 || item.VerifyTTL > 86400 {
+		return fmt.Errorf("bot protection rule %d verify_ttl_sec is invalid", item.ID)
+	}
+	if item.FailureAction != "block" && item.FailureAction != "log-only" {
+		return fmt.Errorf("bot protection rule %d failure_action is unsupported", item.ID)
+	}
+	if item.Priority < 0 {
+		return fmt.Errorf("bot protection rule %d priority cannot be negative", item.ID)
 	}
 	return nil
 }

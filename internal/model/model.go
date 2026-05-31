@@ -176,24 +176,27 @@ type WAFEvent struct {
 	BanReason       string    `json:"ban_reason"`
 	BanDurationSec  int       `json:"ban_duration_sec"`
 	BanRemainingSec int       `json:"ban_remaining_sec"`
+	ChallengeMode   string    `json:"challenge_mode"`
+	ChallengeResult string    `json:"challenge_result"`
 	CreatedAt       time.Time `json:"created_at"`
 	Time            string    `json:"time"`
 }
 
 type WAFEventFilter struct {
-	SiteID         int64
-	ClientIP       string
-	RuleID         int64
-	Action         string
-	Disposition    string
-	EventType      string
-	Module         string
-	AttackType     string
-	AdvancedTarget string
-	MinScore       int
-	Since          time.Time
-	Until          time.Time
-	Pagination     Pagination
+	SiteID          int64
+	ClientIP        string
+	RuleID          int64
+	Action          string
+	Disposition     string
+	EventType       string
+	Module          string
+	AttackType      string
+	AdvancedTarget  string
+	ChallengeResult string
+	MinScore        int
+	Since           time.Time
+	Until           time.Time
+	Pagination      Pagination
 }
 
 type ObservabilitySummary struct {
@@ -212,6 +215,7 @@ type ObservabilitySummary struct {
 	AttackTypes      []SummaryCount `json:"attack_types"`
 	AttackProtection []SummaryCount `json:"attack_protection"`
 	UploadProtection []SummaryCount `json:"upload_protection"`
+	BotProtection    []SummaryCount `json:"bot_protection"`
 }
 
 type AttackProtectionGroup struct {
@@ -289,19 +293,20 @@ type RateLimitRule struct {
 }
 
 type ProtectionRule struct {
-	ID        int64                 `json:"id"`
-	Name      string                `json:"name"`
-	Module    string                `json:"module"`
-	Category  string                `json:"category"`
-	SiteID    int64                 `json:"site_id"`
-	Enabled   bool                  `json:"enabled"`
-	Priority  int                   `json:"priority"`
-	Match     ProtectionRuleMatch   `json:"match"`
-	Limit     ProtectionRuleLimit   `json:"limit"`
-	Upload    *ProtectionRuleUpload `json:"upload,omitempty"`
-	Action    ProtectionRuleAction  `json:"action"`
-	CreatedAt time.Time             `json:"created_at"`
-	UpdatedAt time.Time             `json:"updated_at"`
+	ID        int64                    `json:"id"`
+	Name      string                   `json:"name"`
+	Module    string                   `json:"module"`
+	Category  string                   `json:"category"`
+	SiteID    int64                    `json:"site_id"`
+	Enabled   bool                     `json:"enabled"`
+	Priority  int                      `json:"priority"`
+	Match     ProtectionRuleMatch      `json:"match"`
+	Limit     ProtectionRuleLimit      `json:"limit"`
+	Upload    *ProtectionRuleUpload    `json:"upload,omitempty"`
+	Challenge *ProtectionRuleChallenge `json:"challenge,omitempty"`
+	Action    ProtectionRuleAction     `json:"action"`
+	CreatedAt time.Time                `json:"created_at"`
+	UpdatedAt time.Time                `json:"updated_at"`
 }
 
 type ProtectionRuleMatch struct {
@@ -327,6 +332,12 @@ type ProtectionRuleUpload struct {
 	MaxBytes   int      `json:"max_bytes"`
 }
 
+type ProtectionRuleChallenge struct {
+	Mode          string `json:"mode"`
+	VerifyTTL     int    `json:"verify_ttl_sec"`
+	FailureAction string `json:"failure_action"`
+}
+
 type ProtectionRuleAction struct {
 	Type string `json:"type"`
 }
@@ -345,4 +356,20 @@ type UploadProtectionRule struct {
 	Priority   int       `json:"priority"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type BotProtectionRule struct {
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	Path          string    `json:"path"`
+	PathMatch     string    `json:"path_match"`
+	Methods       []string  `json:"methods"`
+	ChallengeMode string    `json:"challenge_mode"`
+	VerifyTTL     int       `json:"verify_ttl_sec"`
+	FailureAction string    `json:"failure_action"`
+	SiteID        int64     `json:"site_id"`
+	Enabled       bool      `json:"enabled"`
+	Priority      int       `json:"priority"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }

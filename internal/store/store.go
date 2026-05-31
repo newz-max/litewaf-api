@@ -69,6 +69,12 @@ type Store interface {
 	CreateUploadProtectionRule(context.Context, model.UploadProtectionRule) (model.UploadProtectionRule, error)
 	UpdateUploadProtectionRule(context.Context, int64, model.UploadProtectionRule) (model.UploadProtectionRule, error)
 	DeleteUploadProtectionRule(context.Context, int64) error
+
+	ListBotProtectionRules(context.Context) ([]model.BotProtectionRule, error)
+	GetBotProtectionRule(context.Context, int64) (model.BotProtectionRule, error)
+	CreateBotProtectionRule(context.Context, model.BotProtectionRule) (model.BotProtectionRule, error)
+	UpdateBotProtectionRule(context.Context, int64, model.BotProtectionRule) (model.BotProtectionRule, error)
+	DeleteBotProtectionRule(context.Context, int64) error
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {

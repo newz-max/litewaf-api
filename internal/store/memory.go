@@ -24,6 +24,7 @@ type MemoryStore struct {
 	nextAccessID    int64
 	nextRateID      int64
 	nextUploadID    int64
+	nextBotID       int64
 	nextAccessLogID int64
 	nextWAFEventID  int64
 	sites           map[int64]model.Site
@@ -35,6 +36,7 @@ type MemoryStore struct {
 	accessLists     map[int64]model.AccessListEntry
 	rateLimits      map[int64]model.RateLimitRule
 	uploadRules     map[int64]model.UploadProtectionRule
+	botRules        map[int64]model.BotProtectionRule
 	accessLogs      map[int64]model.AccessLog
 	wafEvents       map[int64]model.WAFEvent
 }
@@ -50,6 +52,7 @@ func NewMemoryStore() *MemoryStore {
 		nextAccessID:    1,
 		nextRateID:      1,
 		nextUploadID:    1,
+		nextBotID:       1,
 		nextAccessLogID: 1,
 		nextWAFEventID:  1,
 		sites:           map[int64]model.Site{},
@@ -61,6 +64,7 @@ func NewMemoryStore() *MemoryStore {
 		accessLists:     map[int64]model.AccessListEntry{},
 		rateLimits:      map[int64]model.RateLimitRule{},
 		uploadRules:     map[int64]model.UploadProtectionRule{},
+		botRules:        map[int64]model.BotProtectionRule{},
 		accessLogs:      map[int64]model.AccessLog{},
 		wafEvents:       map[int64]model.WAFEvent{},
 	}
@@ -426,6 +430,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	attackProtectionCounts := map[string]int64{}
 	accessControlCounts := map[string]int64{}
 	uploadProtectionCounts := map[string]int64{}
+	botProtectionCounts := map[string]int64{}
 	for _, item := range s.accessLogs {
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
@@ -482,6 +487,9 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		if item.Module == "upload-protection" {
 			increment(uploadProtectionCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
 		}
+		if item.Module == "bot-protection" {
+			increment(botProtectionCounts, strings.Join([]string{item.ChallengeResult, item.Action, item.Disposition}, "|"))
+		}
 	}
 	summary.TopIPs = topCounts(ipCounts, limit)
 	summary.TopURIs = topCounts(uriCounts, limit)
@@ -490,6 +498,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	summary.AccessControl = topCounts(accessControlCounts, limit)
 	summary.AttackProtection = topCounts(attackProtectionCounts, limit)
 	summary.UploadProtection = topCounts(uploadProtectionCounts, limit)
+	summary.BotProtection = topCounts(botProtectionCounts, limit)
 	return summary, nil
 }
 
@@ -672,6 +681,67 @@ func (s *MemoryStore) DeleteUploadProtectionRule(_ context.Context, id int64) er
 	return nil
 }
 
+func (s *MemoryStore) ListBotProtectionRules(context.Context) ([]model.BotProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.BotProtectionRule, 0, len(s.botRules))
+	for _, item := range s.botRules {
+		item.Methods = cloneStrings(item.Methods)
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetBotProtectionRule(_ context.Context, id int64) (model.BotProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.botRules[id]
+	if !ok {
+		return model.BotProtectionRule{}, ErrNotFound
+	}
+	item.Methods = cloneStrings(item.Methods)
+	return item, nil
+}
+
+func (s *MemoryStore) CreateBotProtectionRule(_ context.Context, item model.BotProtectionRule) (model.BotProtectionRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextBotID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item.Methods = cloneStrings(item.Methods)
+	s.botRules[item.ID] = item
+	s.nextBotID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateBotProtectionRule(_ context.Context, id int64, item model.BotProtectionRule) (model.BotProtectionRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.botRules[id]
+	if !ok {
+		return model.BotProtectionRule{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	item.Methods = cloneStrings(item.Methods)
+	s.botRules[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteBotProtectionRule(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.botRules[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.botRules, id)
+	return nil
+}
+
 func auditMatches(item model.AuditLog, filter model.AuditLogFilter) bool {
 	if filter.Actor != "" && item.Actor != filter.Actor {
 		return false
@@ -745,6 +815,9 @@ func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 		return false
 	}
 	if filter.AdvancedTarget != "" && item.AdvancedTarget != filter.AdvancedTarget && item.Target != filter.AdvancedTarget {
+		return false
+	}
+	if filter.ChallengeResult != "" && item.ChallengeResult != filter.ChallengeResult {
 		return false
 	}
 	if filter.MinScore > 0 && item.Score < filter.MinScore {

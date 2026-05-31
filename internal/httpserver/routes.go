@@ -75,6 +75,12 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("PUT /api/v1/upload-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateUploadProtectionRule))
 	mux.HandleFunc("DELETE /api/v1/upload-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteUploadProtectionRule))
 
+	mux.HandleFunc("GET /api/v1/bot-protection/rules", handlers.require(permissionRead, handlers.listBotProtectionRules))
+	mux.HandleFunc("POST /api/v1/bot-protection/rules", handlers.require(permissionWrite, handlers.createBotProtectionRule))
+	mux.HandleFunc("GET /api/v1/bot-protection/rules/{id}", handlers.require(permissionRead, handlers.getBotProtectionRule))
+	mux.HandleFunc("PUT /api/v1/bot-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateBotProtectionRule))
+	mux.HandleFunc("DELETE /api/v1/bot-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteBotProtectionRule))
+
 	mux.HandleFunc("GET /api/v1/attack-protection/groups", handlers.require(permissionRead, handlers.listAttackProtectionGroups))
 	mux.HandleFunc("PUT /api/v1/attack-protection/groups/{attack_type}", handlers.require(permissionWrite, handlers.updateAttackProtectionGroup))
 }

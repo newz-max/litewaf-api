@@ -31,6 +31,16 @@ func TestGenerateGatewayConfig(t *testing.T) {
 	if len(rules) == 0 {
 		t.Fatal("expected baseline rules")
 	}
+	foundRCE := false
+	for _, rule := range rules {
+		if rule.Type == "rce" {
+			foundRCE = true
+			break
+		}
+	}
+	if !foundRCE {
+		t.Fatal("expected baseline RCE rule")
+	}
 
 	_, err = dataStore.CreatePolicy(ctx, model.Policy{
 		Name:          "Default",

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"litewaf-api/internal/defaults"
 	"litewaf-api/internal/model"
 )
 
@@ -67,10 +68,7 @@ func (s *MemoryStore) Close() error               { return nil }
 
 func (s *MemoryStore) seedRules() {
 	now := time.Now().UTC()
-	for _, rule := range []model.Rule{
-		{Name: "MVP SQLi baseline", Type: "sqli", Target: "args", Action: "block", Expression: "(?i)(union\\s+select|or\\s+1=1|sleep\\s*\\()", Score: 80, Enabled: true},
-		{Name: "MVP XSS baseline", Type: "xss", Target: "args", Action: "block", Expression: "(?i)(<script|javascript:|onerror\\s*=)", Score: 80, Enabled: true},
-	} {
+	for _, rule := range defaults.DefaultRules {
 		rule.ID = s.nextRuleID
 		rule.CreatedAt = now
 		rule.UpdatedAt = now

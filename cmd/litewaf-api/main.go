@@ -13,6 +13,7 @@ import (
 	"litewaf-api/internal/app"
 	"litewaf-api/internal/auth"
 	"litewaf-api/internal/config"
+	"litewaf-api/internal/defaults"
 	"litewaf-api/internal/httpserver"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/store"
@@ -52,6 +53,12 @@ func main() {
 		}
 		return
 	}
+
+	if err := defaults.SeedRules(context.Background(), dataStore); err != nil {
+		logger.Error("default rule seed failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("default rules ensured", "version", defaults.RuleSetVersion, "count", len(defaults.DefaultRules))
 
 	if cfg.AdminUsername != "" && cfg.AdminPassword != "" {
 		hash, err := auth.HashPassword(cfg.AdminPassword)

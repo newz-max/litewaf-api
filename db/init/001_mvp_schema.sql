@@ -160,9 +160,17 @@ CREATE TABLE IF NOT EXISTS rate_limit_rules (
 );
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled)
-SELECT 'MVP SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\()', 80, true
-WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'MVP SQLi baseline');
+SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true
+WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf SQLi baseline');
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled)
-SELECT 'MVP XSS baseline', 'xss', 'args', 'block', '(?i)(<script|javascript:|onerror\s*=)', 80, true
-WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'MVP XSS baseline');
+SELECT 'LiteWaf XSS baseline', 'xss', 'args', 'block', '(?i)(<script|javascript:|onerror\s*=|onload\s*=)', 80, true
+WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf XSS baseline');
+
+INSERT INTO rules (name, type, target, action, expression, score, enabled)
+SELECT 'LiteWaf RCE baseline', 'rce', 'args', 'block', '(?i)(;\s*(cat|curl|wget|bash|sh)\b|\|\s*(bash|sh)\b|\$\(|/bin/(bash|sh))', 90, true
+WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf RCE baseline');
+
+INSERT INTO rules (name, type, target, action, expression, score, enabled)
+SELECT 'LiteWaf normalized traversal baseline', 'rce', 'normalized_uri', 'block', '(?i)(\.\./|\.\.\\|/etc/passwd|/proc/self/environ)', 70, true
+WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf normalized traversal baseline');

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
 )
 
@@ -94,7 +95,7 @@ func (s *PostgresStore) DeleteSite(ctx context.Context, id int64) error {
 
 func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, type, target, action, expression, score, enabled, created_at, updated_at
+		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority, created_at, updated_at
 		FROM rules
 		ORDER BY id`)
 	if err != nil {
@@ -105,9 +106,10 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 	var items []model.Rule
 	for rows.Next() {
 		var item model.Rule
-		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.Target, &item.Action, &item.Expression, &item.Score, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Type, &item.Target, &item.Action, &item.Expression, &item.Score, &item.Enabled, &item.Module, &item.Category, &item.AttackType, &item.Group, &item.Priority, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item = attackmeta.NormalizeRule(item)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -116,33 +118,36 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 func (s *PostgresStore) GetRule(ctx context.Context, id int64) (model.Rule, error) {
 	var item model.Rule
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, type, target, action, expression, score, enabled, created_at, updated_at
+		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority, created_at, updated_at
 		FROM rules
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.Type, &item.Target, &item.Action, &item.Expression, &item.Score, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+		Scan(&item.ID, &item.Name, &item.Type, &item.Target, &item.Action, &item.Expression, &item.Score, &item.Enabled, &item.Module, &item.Category, &item.AttackType, &item.Group, &item.Priority, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Rule{}, ErrNotFound
 	}
-	return item, err
+	return attackmeta.NormalizeRule(item), err
 }
 
 func (s *PostgresStore) CreateRule(ctx context.Context, rule model.Rule) (model.Rule, error) {
+	rule = attackmeta.NormalizeRule(rule)
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO rules (name, type, target, action, expression, score, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at`,
-		rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled).
+		rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled, rule.Module, rule.Category, rule.AttackType, rule.Group, rule.Priority).
 		Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt)
 	return rule, err
 }
 
 func (s *PostgresStore) UpdateRule(ctx context.Context, id int64, rule model.Rule) (model.Rule, error) {
+	rule = attackmeta.NormalizeRule(rule)
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE rules
-		SET name = $2, type = $3, target = $4, action = $5, expression = $6, score = $7, enabled = $8, updated_at = now()
+		SET name = $2, type = $3, target = $4, action = $5, expression = $6, score = $7, enabled = $8,
+			module = $9, category = $10, attack_type = $11, group_name = $12, priority = $13, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled).
+		id, rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled, rule.Module, rule.Category, rule.AttackType, rule.Group, rule.Priority).
 		Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Rule{}, ErrNotFound

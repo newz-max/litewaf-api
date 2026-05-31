@@ -19,7 +19,12 @@
       "action": "block",
       "expression": "(?i)(union\\s+select|or\\s+1=1|sleep\\s*\\(|benchmark\\s*\\()",
       "score": 80,
-      "enabled": true
+      "enabled": true,
+      "module": "attack-protection",
+      "category": "managed",
+      "attack_type": "sqli",
+      "group": "SQL 注入防护",
+      "priority": 100
     },
     {
       "id": "litewaf-xss-baseline",
@@ -29,7 +34,12 @@
       "action": "block",
       "expression": "(?i)(<script|javascript:|onerror\\s*=|onload\\s*=)",
       "score": 80,
-      "enabled": true
+      "enabled": true,
+      "module": "attack-protection",
+      "category": "managed",
+      "attack_type": "xss",
+      "group": "XSS 防护",
+      "priority": 110
     },
     {
       "id": "litewaf-rce-baseline",
@@ -39,17 +49,27 @@
       "action": "block",
       "expression": "(?i)(;\\s*(cat|curl|wget|bash|sh)\\b|\\|\\s*(bash|sh)\\b|\\$\\(|/bin/(bash|sh))",
       "score": 90,
-      "enabled": true
+      "enabled": true,
+      "module": "attack-protection",
+      "category": "managed",
+      "attack_type": "rce",
+      "group": "RCE 防护",
+      "priority": 120
     },
     {
       "id": "litewaf-normalized-traversal-baseline",
       "name": "LiteWaf normalized traversal baseline",
-      "type": "rce",
-      "target": "normalized_uri",
+      "type": "path-traversal",
+      "target": "normalized_path",
       "action": "block",
       "expression": "(?i)(\\.\\./|\\.\\.\\\\|/etc/passwd|/proc/self/environ)",
       "score": 70,
-      "enabled": true
+      "enabled": true,
+      "module": "attack-protection",
+      "category": "managed",
+      "attack_type": "path-traversal",
+      "group": "路径穿越防护",
+      "priority": 130
     }
   ]
 }

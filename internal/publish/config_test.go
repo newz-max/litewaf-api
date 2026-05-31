@@ -118,6 +118,9 @@ func TestGenerateExtendedGatewayConfigIncludesAdvancedProtection(t *testing.T) {
 	if config.Sites[0].Rules[0].Target != "body_json" {
 		t.Fatalf("expected advanced rule target, got %+v", config.Sites[0].Rules[0])
 	}
+	if config.Sites[0].Rules[0].Module != "attack-protection" || config.Sites[0].Rules[0].AttackType != "xss" {
+		t.Fatalf("expected attack protection metadata, got %+v", config.Sites[0].Rules[0])
+	}
 	if config.RateLimits[0].ViolationThreshold != 3 {
 		t.Fatalf("expected repeated violation settings, got %+v", config.RateLimits[0])
 	}
@@ -133,6 +136,106 @@ func TestGenerateExtendedGatewayConfigIncludesAdvancedProtection(t *testing.T) {
 	}
 	if ccRule.Limit.Counter != "client_ip" || ccRule.Action.Type != "ban" {
 		t.Fatalf("unexpected protection rule limit/action: %+v", ccRule)
+	}
+}
+
+func TestGenerateExtendedGatewayConfigIncludesAttackProtectionMetadata(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	site, err := dataStore.CreateSite(ctx, model.Site{
+		Name: "Attack", Host: "attack.local", Upstream: "http://upstream", Mode: "protect", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	rules, err := dataStore.ListRules(ctx)
+	if err != nil {
+		t.Fatalf("list rules: %v", err)
+	}
+	var ids []int64
+	foundTraversal := false
+	for _, rule := range rules {
+		if rule.Module == "attack-protection" && rule.Category == "managed" {
+			ids = append(ids, rule.ID)
+		}
+		if rule.AttackType == "path-traversal" && rule.Target == "normalized_path" {
+			foundTraversal = true
+		}
+	}
+	if len(ids) != 4 || !foundTraversal {
+		t.Fatalf("expected four managed attack rules and traversal metadata, ids=%v foundTraversal=%v", ids, foundTraversal)
+	}
+	_, err = dataStore.CreatePolicy(ctx, model.Policy{
+		Name: "Attack", RiskThreshold: 100, DefaultAction: "block", Enabled: true, SiteIDs: []int64{site.ID}, RuleIDs: ids,
+	})
+	if err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-attack")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.Sites) != 1 || len(config.Sites[0].Rules) != 4 {
+		t.Fatalf("unexpected attack protection rules: %+v", config.Sites)
+	}
+	for _, rule := range config.Sites[0].Rules {
+		if rule.Module != "attack-protection" || rule.Category != "managed" || rule.AttackType == "" || rule.Group == "" || rule.Priority <= 0 {
+			t.Fatalf("missing attack protection metadata: %+v", rule)
+		}
+	}
+}
+
+func TestValidateRejectsInvalidAttackProtectionMetadata(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		rule model.Rule
+	}{
+		{
+			name: "unsupported attack type",
+			rule: model.Rule{
+				Name: "Bad attack type", Type: "custom", Target: "args", Action: "block", Expression: "(?i)bad", Score: 10, Enabled: true,
+				Module: "attack-protection", Category: "managed", AttackType: "unknown", Group: "Bad", Priority: 100,
+			},
+		},
+		{
+			name: "unsupported action",
+			rule: model.Rule{
+				Name: "Bad action", Type: "sqli", Target: "args", Action: "pass", Expression: "(?i)select", Score: 10, Enabled: true,
+				Module: "attack-protection", Category: "managed", AttackType: "sqli", Group: "SQL 注入防护", Priority: 100,
+			},
+		},
+		{
+			name: "missing priority",
+			rule: model.Rule{
+				Name: "Bad priority", Type: "sqli", Target: "args", Action: "block", Expression: "(?i)select", Score: 10, Enabled: true,
+				Module: "attack-protection", Category: "managed", AttackType: "sqli", Group: "SQL 注入防护", Priority: -1,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataStore := store.NewMemoryStore()
+			site, err := dataStore.CreateSite(ctx, model.Site{
+				Name: "Attack", Host: "attack.local", Upstream: "http://upstream", Mode: "protect", Enabled: true,
+			})
+			if err != nil {
+				t.Fatalf("create site: %v", err)
+			}
+			rule, err := dataStore.CreateRule(ctx, tt.rule)
+			if err != nil {
+				t.Fatalf("create rule: %v", err)
+			}
+			_, err = dataStore.CreatePolicy(ctx, model.Policy{
+				Name: "Attack", RiskThreshold: 100, DefaultAction: "block", Enabled: true, SiteIDs: []int64{site.ID}, RuleIDs: []int64{rule.ID},
+			})
+			if err != nil {
+				t.Fatalf("create policy: %v", err)
+			}
+			if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid"); err == nil {
+				t.Fatal("expected invalid attack protection metadata to block publish")
+			}
+		})
 	}
 }
 

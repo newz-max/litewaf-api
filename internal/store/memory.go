@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/defaults"
 	"litewaf-api/internal/model"
 )
@@ -69,6 +70,7 @@ func (s *MemoryStore) Close() error               { return nil }
 func (s *MemoryStore) seedRules() {
 	now := time.Now().UTC()
 	for _, rule := range defaults.DefaultRules {
+		rule = attackmeta.NormalizeRule(rule)
 		rule.ID = s.nextRuleID
 		rule.CreatedAt = now
 		rule.UpdatedAt = now
@@ -139,6 +141,7 @@ func (s *MemoryStore) ListRules(context.Context) ([]model.Rule, error) {
 	defer s.mu.RUnlock()
 	items := make([]model.Rule, 0, len(s.rules))
 	for _, item := range s.rules {
+		item = attackmeta.NormalizeRule(item)
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
@@ -152,13 +155,14 @@ func (s *MemoryStore) GetRule(_ context.Context, id int64) (model.Rule, error) {
 	if !ok {
 		return model.Rule{}, ErrNotFound
 	}
-	return item, nil
+	return attackmeta.NormalizeRule(item), nil
 }
 
 func (s *MemoryStore) CreateRule(_ context.Context, rule model.Rule) (model.Rule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
+	rule = attackmeta.NormalizeRule(rule)
 	rule.ID = s.nextRuleID
 	rule.CreatedAt = now
 	rule.UpdatedAt = now
@@ -177,6 +181,7 @@ func (s *MemoryStore) UpdateRule(_ context.Context, id int64, rule model.Rule) (
 	rule.ID = id
 	rule.CreatedAt = existing.CreatedAt
 	rule.UpdatedAt = time.Now().UTC()
+	rule = attackmeta.NormalizeRule(rule)
 	s.rules[id] = rule
 	return rule, nil
 }
@@ -414,6 +419,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	uriCounts := map[string]int64{}
 	ruleCounts := map[string]int64{}
 	typeCounts := map[string]int64{}
+	attackProtectionCounts := map[string]int64{}
 	for _, item := range s.accessLogs {
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
@@ -461,11 +467,15 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 			increment(ruleCounts, item.RuleName)
 		}
 		increment(typeCounts, item.EventType)
+		if item.Module == "attack-protection" {
+			increment(attackProtectionCounts, strings.Join([]string{item.AttackType, item.Action, item.Disposition}, "|"))
+		}
 	}
 	summary.TopIPs = topCounts(ipCounts, limit)
 	summary.TopURIs = topCounts(uriCounts, limit)
 	summary.TopRules = topCounts(ruleCounts, limit)
 	summary.AttackTypes = topCounts(typeCounts, limit)
+	summary.AttackProtection = topCounts(attackProtectionCounts, limit)
 	return summary, nil
 }
 
@@ -647,6 +657,12 @@ func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 		return false
 	}
 	if filter.EventType != "" && item.EventType != filter.EventType {
+		return false
+	}
+	if filter.Module != "" && item.Module != filter.Module {
+		return false
+	}
+	if filter.AttackType != "" && item.AttackType != filter.AttackType {
 		return false
 	}
 	if filter.AdvancedTarget != "" && item.AdvancedTarget != filter.AdvancedTarget && item.Target != filter.AdvancedTarget {

@@ -59,11 +59,13 @@ Authorization: Bearer <token>
 | PUT | `/api/v1/rules/{id}` | 写 | 更新规则 |
 | DELETE | `/api/v1/rules/{id}` | 写 | 删除规则 |
 
-规则字段：`name`、`type`、`target`、`action`、`expression`、`score`、`enabled`。
+规则字段：`name`、`type`、`target`、`action`、`expression`、`score`、`enabled`、`module`、`category`、`attack_type`、`group`、`priority`。
 
-支持类型：`sqli`、`xss`、`rce`、`cc`、`bot`、`custom`。
+支持类型：`sqli`、`xss`、`rce`、`path-traversal`、`cc`、`bot`、`custom`。
 
 支持动作：`pass`、`block`、`log-only`。
+
+托管攻击防护规则使用 `module=attack-protection`、`category=managed`，`attack_type` 支持 `sqli`、`xss`、`rce`、`path-traversal`。普通高级规则仍可通过规则 API 维护表达式；攻击防护模块只暴露托管规则组的启停、观察/阻断动作和优先级。
 
 ## 策略
 
@@ -88,7 +90,7 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
-发布配置会保留旧 `rate_limits` 字段，并同步输出 CC 防护子集到 `protection_rules`：
+发布配置会保留旧 `rate_limits` 字段，并同步输出 CC 防护子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
 
 ```json
 {
@@ -116,7 +118,7 @@ Authorization: Bearer <token>
 }
 ```
 
-发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。
+发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。
 
 ## 黑白名单
 
@@ -191,6 +193,40 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 - `limit.counter` 支持 `client_ip`、`client_ip_path`、`global`。
 - `action.type` 支持 `log-only`、`block`、`rate-limit`、`ban`。
 
+## 攻击防护
+
+攻击防护接口聚合现有托管规则，对外以 `module=attack-protection`、`category=managed` 的规则组模型呈现。当前阶段只覆盖 SQL 注入、XSS、RCE 和路径穿越，不包含访问控制、上传防护、Bot、人机验证或动态防护。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/attack-protection/groups` | 读 | 查询攻击防护托管规则组 |
+| PUT | `/api/v1/attack-protection/groups/{attack_type}` | 写 | 更新攻击防护组启停、动作和优先级 |
+
+`attack_type` 支持：
+
+- `sqli`
+- `xss`
+- `rce`
+- `path-traversal`
+
+请求示例：
+
+```json
+{
+  "enabled": true,
+  "action": "block",
+  "priority": 100
+}
+```
+
+支持字段：
+
+- `enabled`：控制该攻击类型下托管规则组是否启用。
+- `action`：支持 `log-only`、`block`，不支持 `pass` 或 challenge 类动作。
+- `priority`：正整数，用于发布配置和后台排序。
+
+管理员可以写入攻击防护组；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=attack_protection_group` 的审计日志。
+
 ## 日志和观测
 
 | 方法 | 路径 | 权限 | 说明 |
@@ -200,6 +236,14 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 | GET | `/api/v1/observability/summary` | 读 | 查询汇总指标 |
 | POST | `/api/v1/ingest/access-logs` | 网关令牌 | 接收访问日志 |
 | POST | `/api/v1/ingest/waf-events` | 网关令牌 | 接收 WAF 事件 |
+
+攻击日志支持 `module` 和 `attack_type` 过滤。例如：
+
+```text
+GET /api/v1/attack-logs?module=attack-protection&attack_type=sqli
+```
+
+攻击防护事件字段包括 `module`、`category`、`attack_type`、`group_name`、`rule_name`、`rule_id`、`target`、`action`、`score`、`summary` 和 `disposition`。观测汇总中的 `attack_protection` 按 `attack_type|action|disposition` 维度统计。
 
 ## 审计和系统
 

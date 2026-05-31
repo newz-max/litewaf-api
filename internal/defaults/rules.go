@@ -3,6 +3,7 @@ package defaults
 import (
 	"context"
 
+	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
 )
 
@@ -17,6 +18,11 @@ var DefaultRules = []model.Rule{
 		Expression: `(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()`,
 		Score:      80,
 		Enabled:    true,
+		Module:     attackmeta.Module,
+		Category:   attackmeta.Category,
+		AttackType: "sqli",
+		Group:      attackmeta.GroupName("sqli"),
+		Priority:   100,
 	},
 	{
 		Name:       "LiteWaf XSS baseline",
@@ -26,6 +32,11 @@ var DefaultRules = []model.Rule{
 		Expression: `(?i)(<script|javascript:|onerror\s*=|onload\s*=)`,
 		Score:      80,
 		Enabled:    true,
+		Module:     attackmeta.Module,
+		Category:   attackmeta.Category,
+		AttackType: "xss",
+		Group:      attackmeta.GroupName("xss"),
+		Priority:   110,
 	},
 	{
 		Name:       "LiteWaf RCE baseline",
@@ -35,15 +46,25 @@ var DefaultRules = []model.Rule{
 		Expression: `(?i)(;\s*(cat|curl|wget|bash|sh)\b|\|\s*(bash|sh)\b|\$\(|/bin/(bash|sh))`,
 		Score:      90,
 		Enabled:    true,
+		Module:     attackmeta.Module,
+		Category:   attackmeta.Category,
+		AttackType: "rce",
+		Group:      attackmeta.GroupName("rce"),
+		Priority:   120,
 	},
 	{
 		Name:       "LiteWaf normalized traversal baseline",
-		Type:       "rce",
-		Target:     "normalized_uri",
+		Type:       "path-traversal",
+		Target:     "normalized_path",
 		Action:     "block",
 		Expression: `(?i)(\.\./|\.\.\\|/etc/passwd|/proc/self/environ)`,
 		Score:      70,
 		Enabled:    true,
+		Module:     attackmeta.Module,
+		Category:   attackmeta.Category,
+		AttackType: "path-traversal",
+		Group:      attackmeta.GroupName("path-traversal"),
+		Priority:   130,
 	},
 }
 
@@ -71,6 +92,7 @@ func SeedRules(ctx context.Context, store RuleStore) error {
 	}
 
 	for _, rule := range DefaultRules {
+		rule = attackmeta.NormalizeRule(rule)
 		if current, ok := byName[rule.Name]; ok {
 			if _, err := store.UpdateRule(ctx, current.ID, rule); err != nil {
 				return err

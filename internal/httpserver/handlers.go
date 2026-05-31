@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"litewaf-api/internal/app"
+	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/auth"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/publish"
@@ -169,6 +170,7 @@ func (h handlers) createRule(w http.ResponseWriter, r *http.Request) {
 	input := req.toModel()
 	input.Enabled = boolValue(req.Enabled, true)
 	normalizeRule(&input)
+	input = attackmeta.NormalizeRule(input)
 	if err := validateRule(input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -190,6 +192,7 @@ func (h handlers) updateRule(w http.ResponseWriter, r *http.Request) {
 	input := req.toModel()
 	input.Enabled = boolValue(req.Enabled, true)
 	normalizeRule(&input)
+	input = attackmeta.NormalizeRule(input)
 	if err := validateRule(input); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -334,6 +337,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	accessLists, _ := h.app.Store.ListAccessListEntries(r.Context())
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
 	ccSummary := ccProtectionSummary(rateLimits)
+	attackSummary := attackProtectionSummary(rules)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -342,6 +346,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"access_lists":        len(accessLists),
 			"rate_limits":         len(rateLimits),
 			"cc_protection":       ccSummary,
+			"attack_protection":   attackSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
@@ -363,6 +368,33 @@ func ccProtectionSummary(rateLimits []model.RateLimitRule) envelope {
 		"rules":    len(rateLimits),
 		"enabled":  enabled,
 		"warnings": warnings,
+	}
+}
+
+func attackProtectionSummary(rules []model.Rule) envelope {
+	groups := attackProtectionGroupsFromRules(rules)
+	enabled := 0
+	observe := 0
+	block := 0
+	attackTypes := []string{}
+	for _, group := range groups {
+		attackTypes = append(attackTypes, group.AttackType)
+		if group.Enabled {
+			enabled++
+		}
+		switch group.Action {
+		case "log-only":
+			observe++
+		case "block":
+			block++
+		}
+	}
+	return envelope{
+		"groups":       len(groups),
+		"enabled":      enabled,
+		"observe":      observe,
+		"block":        block,
+		"attack_types": attackTypes,
 	}
 }
 
@@ -550,6 +582,11 @@ type ruleRequest struct {
 	Expression string `json:"expression"`
 	Score      int    `json:"score"`
 	Enabled    *bool  `json:"enabled"`
+	Module     string `json:"module"`
+	Category   string `json:"category"`
+	AttackType string `json:"attack_type"`
+	Group      string `json:"group"`
+	Priority   int    `json:"priority"`
 }
 
 func (r ruleRequest) toModel() model.Rule {
@@ -560,6 +597,11 @@ func (r ruleRequest) toModel() model.Rule {
 		Action:     r.Action,
 		Expression: r.Expression,
 		Score:      r.Score,
+		Module:     r.Module,
+		Category:   r.Category,
+		AttackType: r.AttackType,
+		Group:      r.Group,
+		Priority:   r.Priority,
 	}
 }
 
@@ -808,7 +850,7 @@ func validateRule(rule model.Rule) error {
 	if rule.Name == "" {
 		return errors.New("rule name is required")
 	}
-	if !oneOf(rule.Type, "sqli", "xss", "rce", "cc", "bot", "custom") {
+	if !oneOf(rule.Type, "sqli", "xss", "rce", "path-traversal", "cc", "bot", "custom") {
 		return errors.New("rule type is unsupported")
 	}
 	if !oneOf(rule.Target, "args", "uri", "headers", "normalized_uri", "normalized_path", "normalized_args", "normalized_headers", "body", "body_json", "body_form", "upload_filename", "upload_extension", "upload_mime", "upload_size") {
@@ -830,6 +872,18 @@ func validateRule(rule model.Rule) error {
 	}
 	if rule.Score < 0 || rule.Score > 1000 {
 		return errors.New("rule score must be between 0 and 1000")
+	}
+	if rule.Module != "" && rule.Module != attackmeta.Module {
+		return errors.New("rule module is unsupported")
+	}
+	if rule.Category != "" && rule.Category != attackmeta.Category {
+		return errors.New("rule category is unsupported")
+	}
+	if rule.AttackType != "" && !attackmeta.ValidAttackType(rule.AttackType) {
+		return errors.New("rule attack_type is unsupported")
+	}
+	if rule.Priority < 0 {
+		return errors.New("rule priority cannot be negative")
 	}
 	return nil
 }

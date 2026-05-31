@@ -34,6 +34,9 @@ func TestSeedRulesIsIdempotent(t *testing.T) {
 			t.Fatalf("duplicate default rule %q", rule.Name)
 		}
 		seen[rule.Name] = true
+		if rule.Module != "attack-protection" || rule.Category != "managed" || rule.AttackType == "" || rule.Group == "" || rule.Priority <= 0 {
+			t.Fatalf("expected managed attack metadata on default rule: %+v", rule)
+		}
 	}
 }
 
@@ -42,7 +45,7 @@ func TestDefaultRulesIncludeBaselineFamilies(t *testing.T) {
 	for _, rule := range defaults.DefaultRules {
 		types[rule.Type] = true
 	}
-	for _, typ := range []string{"sqli", "xss", "rce"} {
+	for _, typ := range []string{"sqli", "xss", "rce", "path-traversal"} {
 		if !types[typ] {
 			t.Fatalf("expected default %s rule", typ)
 		}

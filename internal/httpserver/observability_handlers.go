@@ -109,6 +109,8 @@ func normalizeWAFEvent(item *model.WAFEvent) {
 	item.Module = strings.ToLower(strings.TrimSpace(item.Module))
 	item.Category = strings.ToLower(strings.TrimSpace(item.Category))
 	item.RuleName = strings.TrimSpace(item.RuleName)
+	item.AttackType = strings.ToLower(strings.TrimSpace(item.AttackType))
+	item.GroupName = strings.TrimSpace(item.GroupName)
 	item.Counter = strings.TrimSpace(item.Counter)
 	item.NormalizedValue = boundedSummary(strings.TrimSpace(item.NormalizedValue), 512)
 	item.MatchedRuleIDs = strings.TrimSpace(item.MatchedRuleIDs)
@@ -167,6 +169,8 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 		Action:         strings.ToLower(strings.TrimSpace(query.Get("action"))),
 		Disposition:    strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
 		EventType:      strings.ToLower(strings.TrimSpace(query.Get("event_type"))),
+		Module:         strings.ToLower(strings.TrimSpace(query.Get("module"))),
+		AttackType:     strings.ToLower(strings.TrimSpace(query.Get("attack_type"))),
 		AdvancedTarget: strings.ToLower(strings.TrimSpace(query.Get("advanced_target"))),
 	}
 	var ok bool

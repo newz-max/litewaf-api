@@ -492,3 +492,150 @@ func TestCCProtectionWriteValidationAndAuthorization(t *testing.T) {
 		t.Fatalf("readonly create status = %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestAttackProtectionGroupsLifecycleAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-protection/groups", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list attack protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.AttackProtectionGroup `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode attack protection list: %v", err)
+	}
+	if len(listResponse.Items) != 4 {
+		t.Fatalf("expected 4 managed attack groups, got %+v", listResponse.Items)
+	}
+	foundTraversal := false
+	for _, item := range listResponse.Items {
+		if item.Module != "attack-protection" || item.Category != "managed" || item.RuleCount == 0 {
+			t.Fatalf("unexpected attack protection group: %+v", item)
+		}
+		if item.AttackType == "path-traversal" {
+			foundTraversal = true
+		}
+	}
+	if !foundTraversal {
+		t.Fatalf("expected path traversal group, got %+v", listResponse.Items)
+	}
+
+	body := bytes.NewBufferString(`{"enabled":false,"action":"log-only","priority":42}`)
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/attack-protection/groups/sqli", body), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update attack protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updateResponse struct {
+		Item model.AttackProtectionGroup `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&updateResponse); err != nil {
+		t.Fatalf("decode attack protection update: %v", err)
+	}
+	if updateResponse.Item.AttackType != "sqli" || updateResponse.Item.Enabled || updateResponse.Item.Action != "log-only" || updateResponse.Item.Priority != 42 {
+		t.Fatalf("unexpected updated attack protection group: %+v", updateResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=attack_protection_group", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode attack protection audits: %v", err)
+	}
+	if len(auditResponse.Items) == 0 || auditResponse.Items[0].Action != "update" {
+		t.Fatalf("expected attack protection audit, got %+v", auditResponse.Items)
+	}
+}
+
+func TestAttackProtectionValidationAndAuthorization(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	invalidBodies := map[string]string{
+		"/api/v1/attack-protection/groups/unknown":  `{"action":"block","priority":10}`,
+		"/api/v1/attack-protection/groups/sqli":     `{"action":"challenge","priority":10}`,
+		"/api/v1/attack-protection/groups/sqli?x=1": `{"action":"block","priority":0}`,
+	}
+	for path, body := range invalidBodies {
+		req := withToken(httptest.NewRequest(http.MethodPut, path, bytes.NewBufferString(body)), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s status = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-protection/groups", nil), readonlyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readonly list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/attack-protection/groups/sqli", bytes.NewBufferString(`{"action":"block","priority":10}`)), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly update status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAttackProtectionEventQueryAndSummary(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"req-attack","site_id":1,"event_type":"rule","rule_id":1,"rule_type":"sqli","target":"args","module":"attack-protection","category":"managed","attack_type":"sqli","group_name":"SQL 注入防护","rule_name":"LiteWaf SQLi baseline","action":"block","disposition":"blocked","client_ip":"192.0.2.30","method":"GET","uri":"/search?q=1","summary":"bounded match","score":80}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest attack protection waf status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?module=attack-protection&attack_type=sqli", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query attack protection logs status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var attackResponse struct {
+		Items []model.WAFEvent `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&attackResponse); err != nil {
+		t.Fatalf("decode attack protection logs: %v", err)
+	}
+	if len(attackResponse.Items) != 1 || attackResponse.Items[0].AttackType != "sqli" || attackResponse.Items[0].GroupName == "" {
+		t.Fatalf("unexpected attack protection logs: %+v", attackResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/observability/summary", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var summaryResponse struct {
+		Item model.ObservabilitySummary `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&summaryResponse); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summaryResponse.Item.AttackProtection) != 1 || summaryResponse.Item.AttackProtection[0].Key != "sqli|block|blocked" {
+		t.Fatalf("unexpected attack protection summary: %+v", summaryResponse.Item)
+	}
+}

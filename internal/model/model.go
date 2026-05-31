@@ -22,6 +22,11 @@ type Rule struct {
 	Expression string    `json:"expression"`
 	Score      int       `json:"score"`
 	Enabled    bool      `json:"enabled"`
+	Module     string    `json:"module"`
+	Category   string    `json:"category"`
+	AttackType string    `json:"attack_type"`
+	Group      string    `json:"group"`
+	Priority   int       `json:"priority"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -157,6 +162,8 @@ type WAFEvent struct {
 	Module          string    `json:"module"`
 	Category        string    `json:"category"`
 	RuleName        string    `json:"rule_name"`
+	AttackType      string    `json:"attack_type"`
+	GroupName       string    `json:"group_name"`
 	Counter         string    `json:"counter"`
 	WindowSec       int       `json:"window_sec"`
 	AdvancedTarget  string    `json:"advanced_target"`
@@ -180,6 +187,8 @@ type WAFEventFilter struct {
 	Action         string
 	Disposition    string
 	EventType      string
+	Module         string
+	AttackType     string
 	AdvancedTarget string
 	MinScore       int
 	Since          time.Time
@@ -200,6 +209,34 @@ type ObservabilitySummary struct {
 	TopURIs          []SummaryCount `json:"top_uris"`
 	TopRules         []SummaryCount `json:"top_rules"`
 	AttackTypes      []SummaryCount `json:"attack_types"`
+	AttackProtection []SummaryCount `json:"attack_protection"`
+}
+
+type AttackProtectionGroup struct {
+	ID               string                    `json:"id"`
+	Name             string                    `json:"name"`
+	Module           string                    `json:"module"`
+	Category         string                    `json:"category"`
+	AttackType       string                    `json:"attack_type"`
+	Action           string                    `json:"action"`
+	Enabled          bool                      `json:"enabled"`
+	Priority         int                       `json:"priority"`
+	RuleCount        int                       `json:"rule_count"`
+	EnabledRuleCount int                       `json:"enabled_rule_count"`
+	Rules            []AttackProtectionRuleRef `json:"rules"`
+	UpdatedAt        time.Time                 `json:"updated_at"`
+}
+
+type AttackProtectionRuleRef struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Target     string `json:"target"`
+	Action     string `json:"action"`
+	Score      int    `json:"score"`
+	Enabled    bool   `json:"enabled"`
+	AttackType string `json:"attack_type"`
+	Group      string `json:"group"`
 }
 
 type SummaryCount struct {

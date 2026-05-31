@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"time"
 
+	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/store"
 )
@@ -40,6 +41,11 @@ type GatewayRule struct {
 	Action     string `json:"action"`
 	Expression string `json:"expression"`
 	Score      int    `json:"score"`
+	Module     string `json:"module,omitempty"`
+	Category   string `json:"category,omitempty"`
+	AttackType string `json:"attack_type,omitempty"`
+	Group      string `json:"group,omitempty"`
+	Priority   int    `json:"priority,omitempty"`
 }
 
 type GatewayAccessListEntry struct {
@@ -193,6 +199,11 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 				Action:     rule.Action,
 				Expression: rule.Expression,
 				Score:      rule.Score,
+				Module:     rule.Module,
+				Category:   rule.Category,
+				AttackType: rule.AttackType,
+				Group:      rule.Group,
+				Priority:   rule.Priority,
 			})
 		}
 		config.Sites = append(config.Sites, gatewaySite)
@@ -356,6 +367,7 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 		if !rule.Enabled {
 			continue
 		}
+		rule = attackmeta.NormalizeRule(rule)
 		ruleIDs[rule.ID] = true
 		if rule.Expression == "" {
 			return fmt.Errorf("rule %d expression is required", rule.ID)
@@ -370,6 +382,9 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 			if _, err := fmt.Sscanf(rule.Expression, "%d", &size); err != nil || size < 0 {
 				return fmt.Errorf("rule %d upload_size expression is invalid", rule.ID)
 			}
+		}
+		if err := validateAttackProtectionRule(rule); err != nil {
+			return err
 		}
 	}
 	for _, policy := range policies {
@@ -405,6 +420,28 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 		if item.Enabled && item.ViolationThreshold > 0 && (item.ViolationWindowSec <= 0 || item.BanDuration <= 0) {
 			return fmt.Errorf("rate limit %d repeated violation settings are incomplete", item.ID)
 		}
+	}
+	return nil
+}
+
+func validateAttackProtectionRule(rule model.Rule) error {
+	if rule.Module != attackmeta.Module && rule.Category != attackmeta.Category {
+		return nil
+	}
+	if rule.Module != attackmeta.Module || rule.Category != attackmeta.Category {
+		return fmt.Errorf("rule %d attack protection metadata is incomplete", rule.ID)
+	}
+	if !attackmeta.ValidAttackType(rule.AttackType) {
+		return fmt.Errorf("rule %d attack protection attack_type is unsupported", rule.ID)
+	}
+	if rule.Action != "log-only" && rule.Action != "block" {
+		return fmt.Errorf("rule %d attack protection action is unsupported", rule.ID)
+	}
+	if rule.Priority <= 0 {
+		return fmt.Errorf("rule %d attack protection priority must be positive", rule.ID)
+	}
+	if rule.ID <= 0 {
+		return fmt.Errorf("rule %d attack protection rule reference is invalid", rule.ID)
 	}
 	return nil
 }

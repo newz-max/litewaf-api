@@ -21,9 +21,20 @@ CREATE TABLE IF NOT EXISTS rules (
 	expression TEXT NOT NULL,
 	score INTEGER NOT NULL DEFAULT 0,
 	enabled BOOLEAN NOT NULL DEFAULT true,
+	module TEXT NOT NULL DEFAULT '',
+	category TEXT NOT NULL DEFAULT '',
+	attack_type TEXT NOT NULL DEFAULT '',
+	group_name TEXT NOT NULL DEFAULT '',
+	priority INTEGER NOT NULL DEFAULT 100,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS module TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS attack_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
 
 CREATE TABLE IF NOT EXISTS policies (
 	id BIGSERIAL PRIMARY KEY,
@@ -159,6 +170,8 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	module TEXT NOT NULL DEFAULT '',
 	category TEXT NOT NULL DEFAULT '',
 	rule_name TEXT NOT NULL DEFAULT '',
+	attack_type TEXT NOT NULL DEFAULT '',
+	group_name TEXT NOT NULL DEFAULT '',
 	counter TEXT NOT NULL DEFAULT '',
 	window_sec INTEGER NOT NULL DEFAULT 0,
 	advanced_target TEXT NOT NULL DEFAULT '',
@@ -177,6 +190,8 @@ CREATE TABLE IF NOT EXISTS waf_events (
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS module TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS rule_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS attack_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS group_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS counter TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS window_sec INTEGER NOT NULL DEFAULT 0;
 
@@ -235,19 +250,24 @@ ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS path_match TEXT NOT NULL D
 ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS methods TEXT NOT NULL DEFAULT '';
 ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS cc_action TEXT NOT NULL DEFAULT '';
 
-INSERT INTO rules (name, type, target, action, expression, score, enabled)
-SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true
+INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
+SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true, 'attack-protection', 'managed', 'sqli', 'SQL 注入防护', 100
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf SQLi baseline');
 
-INSERT INTO rules (name, type, target, action, expression, score, enabled)
-SELECT 'LiteWaf XSS baseline', 'xss', 'args', 'block', '(?i)(<script|javascript:|onerror\s*=|onload\s*=)', 80, true
+INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
+SELECT 'LiteWaf XSS baseline', 'xss', 'args', 'block', '(?i)(<script|javascript:|onerror\s*=|onload\s*=)', 80, true, 'attack-protection', 'managed', 'xss', 'XSS 防护', 110
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf XSS baseline');
 
-INSERT INTO rules (name, type, target, action, expression, score, enabled)
-SELECT 'LiteWaf RCE baseline', 'rce', 'args', 'block', '(?i)(;\s*(cat|curl|wget|bash|sh)\b|\|\s*(bash|sh)\b|\$\(|/bin/(bash|sh))', 90, true
+INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
+SELECT 'LiteWaf RCE baseline', 'rce', 'args', 'block', '(?i)(;\s*(cat|curl|wget|bash|sh)\b|\|\s*(bash|sh)\b|\$\(|/bin/(bash|sh))', 90, true, 'attack-protection', 'managed', 'rce', 'RCE 防护', 120
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf RCE baseline');
 
-INSERT INTO rules (name, type, target, action, expression, score, enabled)
-SELECT 'LiteWaf normalized traversal baseline', 'rce', 'normalized_uri', 'block', '(?i)(\.\./|\.\.\\|/etc/passwd|/proc/self/environ)', 70, true
+INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
+SELECT 'LiteWaf normalized traversal baseline', 'path-traversal', 'normalized_path', 'block', '(?i)(\.\./|\.\.\\|/etc/passwd|/proc/self/environ)', 70, true, 'attack-protection', 'managed', 'path-traversal', '路径穿越防护', 130
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf normalized traversal baseline');
+
+UPDATE rules SET module = 'attack-protection', category = 'managed', attack_type = 'sqli', group_name = 'SQL 注入防护', priority = 100 WHERE name = 'LiteWaf SQLi baseline';
+UPDATE rules SET module = 'attack-protection', category = 'managed', attack_type = 'xss', group_name = 'XSS 防护', priority = 110 WHERE name = 'LiteWaf XSS baseline';
+UPDATE rules SET module = 'attack-protection', category = 'managed', attack_type = 'rce', group_name = 'RCE 防护', priority = 120 WHERE name = 'LiteWaf RCE baseline';
+UPDATE rules SET type = 'path-traversal', target = 'normalized_path', module = 'attack-protection', category = 'managed', attack_type = 'path-traversal', group_name = '路径穿越防护', priority = 130 WHERE name = 'LiteWaf normalized traversal baseline';
 `

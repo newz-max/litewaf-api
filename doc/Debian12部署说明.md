@@ -44,6 +44,12 @@ Disk: 为日志、数据库和规则配置预留独立目录
 
 生产部署默认使用 `deploy/docker-compose.prod.yml`、`.env.example` 和 `litewafctl.sh`，并在目标服务器拉取预构建镜像。示例 upstream 只用于本地验证，不属于生产默认拓扑。镜像仓库未准备好时，不建议在生产宿主机现场构建；可在 CI 或可信构建机上先发布镜像。
 
+可使用通用 PowerShell 脚本上传公开部署文件并触发远端安装：
+
+```powershell
+.\deploy\deploy.ps1 -HostName user@your-server
+```
+
 安装脚本不应执行以下操作：
 
 - 在宿主机安装 PostgreSQL、Redis、Node.js、Go 或 OpenResty。

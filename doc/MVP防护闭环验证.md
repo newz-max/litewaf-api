@@ -16,7 +16,13 @@ cd deploy
 docker compose -f docker-compose.prod.yml -f docker-compose.validation.yml --profile validation up -d
 ```
 
-生产部署不要在目标宿主机现场构建镜像。应将 `deploy/docker-compose.prod.yml`、`deploy/.env.example` 和 `deploy/litewafctl.sh` 上传到服务器后，在服务器上拉取预构建镜像：
+生产部署不要在目标宿主机现场构建镜像。可使用通用 PowerShell 部署脚本上传公开部署文件，并在服务器上拉取预构建镜像：
+
+```powershell
+.\deploy\deploy.ps1 -HostName user@your-server
+```
+
+也可以手动将 `deploy/docker-compose.prod.yml`、`deploy/.env.example` 和 `deploy/litewafctl.sh` 上传到服务器后执行：
 
 ```bash
 cd /opt/litewaf/current

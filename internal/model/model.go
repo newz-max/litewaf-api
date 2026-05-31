@@ -205,6 +205,7 @@ type ObservabilitySummary struct {
 	BodyDetections   int64          `json:"body_detections"`
 	UploadDetections int64          `json:"upload_detections"`
 	DynamicBans      int64          `json:"dynamic_bans"`
+	AccessControl    []SummaryCount `json:"access_control"`
 	TopIPs           []SummaryCount `json:"top_ips"`
 	TopURIs          []SummaryCount `json:"top_uris"`
 	TopRules         []SummaryCount `json:"top_rules"`
@@ -251,16 +252,19 @@ type ObservabilitySummaryFilter struct {
 }
 
 type AccessListEntry struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Target    string    `json:"target"`
-	Value     string    `json:"value"`
-	Action    string    `json:"action"`
-	SiteID    int64     `json:"site_id"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	Name          string    `json:"name"`
+	Kind          string    `json:"kind"`
+	Target        string    `json:"target"`
+	Value         string    `json:"value"`
+	MatchOperator string    `json:"match_operator"`
+	HeaderName    string    `json:"header_name"`
+	Action        string    `json:"action"`
+	SiteID        int64     `json:"site_id"`
+	Enabled       bool      `json:"enabled"`
+	Priority      int       `json:"priority"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type RateLimitRule struct {
@@ -299,9 +303,14 @@ type ProtectionRule struct {
 }
 
 type ProtectionRuleMatch struct {
-	Path      string   `json:"path"`
-	PathMatch string   `json:"path_match"`
-	Methods   []string `json:"methods"`
+	Path       string   `json:"path"`
+	PathMatch  string   `json:"path_match"`
+	Methods    []string `json:"methods"`
+	Target     string   `json:"target"`
+	Value      string   `json:"value"`
+	Operator   string   `json:"operator"`
+	HeaderName string   `json:"header_name"`
+	Host       string   `json:"host"`
 }
 
 type ProtectionRuleLimit struct {

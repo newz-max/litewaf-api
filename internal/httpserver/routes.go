@@ -51,6 +51,12 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("PUT /api/v1/access-lists/{id}", handlers.require(permissionWrite, handlers.updateAccessList))
 	mux.HandleFunc("DELETE /api/v1/access-lists/{id}", handlers.require(permissionWrite, handlers.deleteAccessList))
 
+	mux.HandleFunc("GET /api/v1/access-control/rules", handlers.require(permissionRead, handlers.listAccessControlRules))
+	mux.HandleFunc("POST /api/v1/access-control/rules", handlers.require(permissionWrite, handlers.createAccessControlRule))
+	mux.HandleFunc("GET /api/v1/access-control/rules/{id}", handlers.require(permissionRead, handlers.getAccessControlRule))
+	mux.HandleFunc("PUT /api/v1/access-control/rules/{id}", handlers.require(permissionWrite, handlers.updateAccessControlRule))
+	mux.HandleFunc("DELETE /api/v1/access-control/rules/{id}", handlers.require(permissionWrite, handlers.deleteAccessControlRule))
+
 	mux.HandleFunc("GET /api/v1/rate-limits", handlers.require(permissionRead, handlers.listRateLimits))
 	mux.HandleFunc("POST /api/v1/rate-limits", handlers.require(permissionWrite, handlers.createRateLimit))
 	mux.HandleFunc("GET /api/v1/rate-limits/{id}", handlers.require(permissionRead, handlers.getRateLimit))

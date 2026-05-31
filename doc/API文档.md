@@ -90,7 +90,7 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
-发布配置会保留旧 `rate_limits` 字段，并同步输出 CC 防护子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
+发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并同步输出 CC 防护和访问控制子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
 
 ```json
 {
@@ -113,12 +113,26 @@ Authorization: Bearer <token>
       "action": {
         "type": "ban"
       }
+    },
+    {
+      "module": "access-control",
+      "category": "access-control",
+      "priority": 100,
+      "match": {
+        "target": "path",
+        "path": "/admin",
+        "path_match": "prefix",
+        "methods": []
+      },
+      "action": {
+        "type": "block"
+      }
     }
   ]
 }
 ```
 
-发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。
+发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。
 
 ## 黑白名单
 
@@ -131,6 +145,57 @@ Authorization: Bearer <token>
 | DELETE | `/api/v1/access-lists/{id}` | 写 | 删除名单 |
 
 支持目标：`ip`、`cidr`、`uri`、`ua`。支持类型：`blacklist`、`whitelist`。
+
+## 访问控制
+
+访问控制接口复用现有黑白名单存储，对外以 `module=access-control`、`category=access-control` 的防护规则模型呈现。第一阶段覆盖 IP/CIDR、路径、Header 和 Host 条件，支持 `allow`、`log-only` 和 `block` 动作；旧 `/api/v1/access-lists` 接口和发布字段继续保留用于兼容。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/access-control/rules` | 读 | 查询访问控制规则 |
+| POST | `/api/v1/access-control/rules` | 写 | 创建访问控制规则 |
+| GET | `/api/v1/access-control/rules/{id}` | 读 | 查询访问控制规则 |
+| PUT | `/api/v1/access-control/rules/{id}` | 写 | 更新访问控制规则 |
+| DELETE | `/api/v1/access-control/rules/{id}` | 写 | 删除访问控制规则 |
+
+列表支持过滤：
+
+- `site_id`：站点 ID。
+- `enabled`：`true` 或 `false`。
+
+请求示例：
+
+```json
+{
+  "name": "管理后台路径阻断",
+  "site_id": 1,
+  "enabled": true,
+  "priority": 100,
+  "match": {
+    "target": "path",
+    "path": "/admin",
+    "path_match": "prefix",
+    "methods": []
+  },
+  "action": {
+    "type": "block"
+  }
+}
+```
+
+支持字段：
+
+- `module` 固定为 `access-control`，`category` 固定为 `access-control`；创建和更新时可省略，API 会填充默认值。
+- `match.target` 支持 `ip`、`cidr`、`path`、`header`、`host`。
+- `match.value` 用于 IP、CIDR 和 Header 值；`match.path` 用于路径条件；`match.host` 用于 Host 条件。
+- `match.path` 必须以 `/` 开头，`match.path_match` 支持 `exact`、`prefix`；prefix 匹配按路径段边界处理，`/admin` 不匹配 `/admin2`。
+- `match.header_name` 为 Header 条件必填，Header `operator` 支持 `exact`、`contains`。
+- Host `operator` 支持 `exact`、`suffix`。
+- `match.methods` 支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`、`OPTIONS`，空数组表示全部方法。
+- `action.type` 支持 `allow`、`log-only`、`block`。
+- `priority` 为正整数，用于发布配置和网关排序。
+
+管理员可以创建、更新和删除访问控制规则；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=access_control_rule` 的审计日志。
 
 ## 限流
 
@@ -237,13 +302,16 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 | POST | `/api/v1/ingest/access-logs` | 网关令牌 | 接收访问日志 |
 | POST | `/api/v1/ingest/waf-events` | 网关令牌 | 接收 WAF 事件 |
 
-攻击日志支持 `module` 和 `attack_type` 过滤。例如：
+攻击日志支持 `module`、`attack_type` 和 `action` 过滤。例如：
 
 ```text
 GET /api/v1/attack-logs?module=attack-protection&attack_type=sqli
+GET /api/v1/attack-logs?module=access-control&action=block
 ```
 
 攻击防护事件字段包括 `module`、`category`、`attack_type`、`group_name`、`rule_name`、`rule_id`、`target`、`action`、`score`、`summary` 和 `disposition`。观测汇总中的 `attack_protection` 按 `attack_type|action|disposition` 维度统计。
+
+访问控制事件字段包括 `module=access-control`、`category=access-control`、`rule_name`、`rule_id`、`target`、`action` 和 `disposition`。观测汇总中的 `access_control` 按 `action|disposition` 维度统计，例如 `block|blocked`、`log-only|observed` 或 `allow|allowed`。
 
 ## 审计和系统
 

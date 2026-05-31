@@ -317,6 +317,168 @@ func TestCCProtectionRulesEmptyList(t *testing.T) {
 	}
 }
 
+func TestAccessControlRulesEmptyList(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-control/rules", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode access control rules: %v", err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("expected empty list, got %+v", response.Items)
+	}
+}
+
+func TestAccessControlRulesMapAccessLists(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Admin block","kind":"blacklist","target":"uri","value":"/admin","match_operator":"prefix","action":"block","site_id":7,"priority":80}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-lists", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create access list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-control/rules?site_id=7&enabled=true", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list access control status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode access control list: %v", err)
+	}
+	if len(listResponse.Items) != 1 {
+		t.Fatalf("expected 1 access control rule, got %+v", listResponse.Items)
+	}
+	item := listResponse.Items[0]
+	if item.Module != "access-control" || item.Category != "access-control" || item.Action.Type != "block" {
+		t.Fatalf("unexpected access control identity: %+v", item)
+	}
+	if item.Match.Target != "path" || item.Match.Path != "/admin" || item.Match.PathMatch != "prefix" || item.Priority != 80 {
+		t.Fatalf("unexpected access control match: %+v", item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-control/rules/"+strconv.FormatInt(item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get access control status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccessControlRuleWriteLifecycleAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Trusted source","site_id":3,"priority":50,"match":{"target":"cidr","value":"10.0.0.0/8"},"action":{"type":"allow"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-control/rules", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create access control status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create access control: %v", err)
+	}
+	if createResponse.Item.Match.Target != "cidr" || createResponse.Item.Action.Type != "allow" || createResponse.Item.Priority != 50 {
+		t.Fatalf("unexpected created access control: %+v", createResponse.Item)
+	}
+
+	updateBody := bytes.NewBufferString(`{"name":"Header observe","site_id":3,"enabled":false,"match":{"target":"header","header_name":"X-Forwarded-For","value":"proxy","operator":"contains"},"action":{"type":"log-only"}}`)
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/access-control/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), updateBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update access control status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updateResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&updateResponse); err != nil {
+		t.Fatalf("decode update access control: %v", err)
+	}
+	if updateResponse.Item.Enabled || updateResponse.Item.Match.Target != "header" || updateResponse.Item.Action.Type != "log-only" {
+		t.Fatalf("unexpected updated access control: %+v", updateResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=access_control_rule", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode audit logs: %v", err)
+	}
+	if len(auditResponse.Items) < 2 {
+		t.Fatalf("expected create and update audit logs, got %+v", auditResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodDelete, "/api/v1/access-control/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete access control status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAccessControlWriteValidationAndAuthorization(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	invalidBodies := []string{
+		`{"name":"bad","match":{"target":"ip","value":"999.1.1.1"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"cidr","value":"10.0.0.0"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"path","path":"admin","path_match":"prefix"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"path","path":"/admin","path_match":"regex"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"header","value":"bot","operator":"contains"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"host","host":"example.com","operator":"contains"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"host","host":"example.com","operator":"exact"},"action":{"type":"challenge"}}`,
+		`{"name":"bad","priority":-1,"match":{"target":"host","host":"example.com","operator":"exact"},"action":{"type":"block"}}`,
+	}
+	for _, body := range invalidBodies {
+		req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-control/rules", bytes.NewBufferString(body)), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	validBody := bytes.NewBufferString(`{"name":"Admin path","match":{"target":"path","path":"/admin","path_match":"prefix"},"action":{"type":"block"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-control/rules", validBody), readonlyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCCProtectionRulesMapRateLimits(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

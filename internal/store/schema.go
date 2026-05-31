@@ -220,12 +220,19 @@ CREATE TABLE IF NOT EXISTS access_list_entries (
 	kind TEXT NOT NULL,
 	target TEXT NOT NULL,
 	value TEXT NOT NULL,
+	match_operator TEXT NOT NULL DEFAULT '',
+	header_name TEXT NOT NULL DEFAULT '',
 	action TEXT NOT NULL,
 	site_id BIGINT NOT NULL DEFAULT 0,
 	enabled BOOLEAN NOT NULL DEFAULT true,
+	priority INTEGER NOT NULL DEFAULT 100,
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE access_list_entries ADD COLUMN IF NOT EXISTS match_operator TEXT NOT NULL DEFAULT '';
+ALTER TABLE access_list_entries ADD COLUMN IF NOT EXISTS header_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE access_list_entries ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
 
 CREATE TABLE IF NOT EXISTS rate_limit_rules (
 	id BIGSERIAL PRIMARY KEY,

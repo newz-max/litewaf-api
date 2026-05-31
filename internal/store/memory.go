@@ -420,6 +420,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	ruleCounts := map[string]int64{}
 	typeCounts := map[string]int64{}
 	attackProtectionCounts := map[string]int64{}
+	accessControlCounts := map[string]int64{}
 	for _, item := range s.accessLogs {
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
@@ -470,11 +471,15 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		if item.Module == "attack-protection" {
 			increment(attackProtectionCounts, strings.Join([]string{item.AttackType, item.Action, item.Disposition}, "|"))
 		}
+		if item.Module == "access-control" {
+			increment(accessControlCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
+		}
 	}
 	summary.TopIPs = topCounts(ipCounts, limit)
 	summary.TopURIs = topCounts(uriCounts, limit)
 	summary.TopRules = topCounts(ruleCounts, limit)
 	summary.AttackTypes = topCounts(typeCounts, limit)
+	summary.AccessControl = topCounts(accessControlCounts, limit)
 	summary.AttackProtection = topCounts(attackProtectionCounts, limit)
 	return summary, nil
 }

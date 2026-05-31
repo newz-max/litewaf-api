@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"litewaf-api/internal/attackmeta"
@@ -49,13 +51,16 @@ type GatewayRule struct {
 }
 
 type GatewayAccessListEntry struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Kind   string `json:"kind"`
-	Target string `json:"target"`
-	Value  string `json:"value"`
-	Action string `json:"action"`
-	SiteID int64  `json:"site_id"`
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Target        string `json:"target"`
+	Value         string `json:"value"`
+	MatchOperator string `json:"match_operator,omitempty"`
+	HeaderName    string `json:"header_name,omitempty"`
+	Action        string `json:"action"`
+	SiteID        int64  `json:"site_id"`
+	Priority      int    `json:"priority"`
 }
 
 type GatewayRateLimitRule struct {
@@ -213,14 +218,18 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			continue
 		}
 		config.AccessLists = append(config.AccessLists, GatewayAccessListEntry{
-			ID:     item.ID,
-			Name:   item.Name,
-			Kind:   item.Kind,
-			Target: item.Target,
-			Value:  item.Value,
-			Action: item.Action,
-			SiteID: item.SiteID,
+			ID:            item.ID,
+			Name:          item.Name,
+			Kind:          item.Kind,
+			Target:        item.Target,
+			Value:         item.Value,
+			MatchOperator: item.MatchOperator,
+			HeaderName:    item.HeaderName,
+			Action:        item.Action,
+			SiteID:        item.SiteID,
+			Priority:      protectionPriority(item.Priority),
 		})
+		config.ProtectionRules = append(config.ProtectionRules, AccessControlFromAccessList(item))
 	}
 	for _, item := range rateLimits {
 		if !item.Enabled {
@@ -280,6 +289,90 @@ func CCProtectionFromRateLimit(item model.RateLimitRule) model.ProtectionRule {
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
 	}
+}
+
+func AccessControlFromAccessList(item model.AccessListEntry) model.ProtectionRule {
+	match := accessControlMatch(item)
+	return model.ProtectionRule{
+		ID:       item.ID,
+		Name:     item.Name,
+		Module:   "access-control",
+		Category: "access-control",
+		SiteID:   item.SiteID,
+		Enabled:  item.Enabled,
+		Priority: protectionPriority(item.Priority),
+		Match:    match,
+		Action: model.ProtectionRuleAction{
+			Type: accessControlAction(item),
+		},
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
+	}
+}
+
+func accessControlMatch(item model.AccessListEntry) model.ProtectionRuleMatch {
+	operator := item.MatchOperator
+	if operator == "" {
+		operator = defaultAccessControlOperator(item.Target)
+	}
+	match := model.ProtectionRuleMatch{
+		Target:     accessControlTarget(item.Target),
+		Value:      item.Value,
+		Operator:   operator,
+		HeaderName: item.HeaderName,
+		Methods:    []string{},
+	}
+	switch item.Target {
+	case "uri":
+		match.Target = "path"
+		match.Path = item.Value
+		match.PathMatch = operator
+	case "header":
+		match.Target = "header"
+	case "host":
+		match.Target = "host"
+		match.Host = item.Value
+	}
+	return match
+}
+
+func accessControlTarget(target string) string {
+	switch target {
+	case "uri":
+		return "path"
+	default:
+		return target
+	}
+}
+
+func defaultAccessControlOperator(target string) string {
+	switch target {
+	case "uri":
+		return "exact"
+	case "header":
+		return "exact"
+	case "host":
+		return "exact"
+	default:
+		return ""
+	}
+}
+
+func accessControlAction(item model.AccessListEntry) string {
+	if item.Action == "allow" || item.Kind == "whitelist" {
+		return "allow"
+	}
+	if item.Action == "log-only" {
+		return "log-only"
+	}
+	return "block"
+}
+
+func protectionPriority(priority int) int {
+	if priority <= 0 {
+		return 100
+	}
+	return priority
 }
 
 func ccProtectionPath(item model.RateLimitRule) (string, string) {
@@ -409,8 +502,10 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 		}
 	}
 	for _, item := range accessLists {
-		if item.Enabled && (item.Value == "" || item.Kind == "" || item.Target == "" || item.Action == "") {
-			return fmt.Errorf("access list %d is incomplete", item.ID)
+		if item.Enabled {
+			if err := validateAccessControlEntry(item); err != nil {
+				return err
+			}
 		}
 	}
 	for _, item := range rateLimits {
@@ -420,6 +515,54 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 		if item.Enabled && item.ViolationThreshold > 0 && (item.ViolationWindowSec <= 0 || item.BanDuration <= 0) {
 			return fmt.Errorf("rate limit %d repeated violation settings are incomplete", item.ID)
 		}
+	}
+	return nil
+}
+
+func validateAccessControlEntry(item model.AccessListEntry) error {
+	if item.Value == "" || item.Kind == "" || item.Target == "" || item.Action == "" {
+		return fmt.Errorf("access list %d is incomplete", item.ID)
+	}
+	if item.Priority < 0 {
+		return fmt.Errorf("access control rule %d priority cannot be negative", item.ID)
+	}
+	if item.Kind != "blacklist" && item.Kind != "whitelist" {
+		return fmt.Errorf("access control rule %d kind is unsupported", item.ID)
+	}
+	if item.Action != "allow" && item.Action != "block" && item.Action != "log-only" {
+		return fmt.Errorf("access control rule %d action is unsupported", item.ID)
+	}
+	switch item.Target {
+	case "ip":
+		if net.ParseIP(item.Value) == nil {
+			return fmt.Errorf("access control rule %d ip value is invalid", item.ID)
+		}
+	case "cidr":
+		if _, _, err := net.ParseCIDR(item.Value); err != nil {
+			return fmt.Errorf("access control rule %d cidr value is invalid", item.ID)
+		}
+	case "uri":
+		if !strings.HasPrefix(item.Value, "/") {
+			return fmt.Errorf("access control rule %d path must start with /", item.ID)
+		}
+		if item.MatchOperator != "" && item.MatchOperator != "exact" && item.MatchOperator != "prefix" {
+			return fmt.Errorf("access control rule %d path operator is unsupported", item.ID)
+		}
+	case "header":
+		if item.HeaderName == "" {
+			return fmt.Errorf("access control rule %d header name is required", item.ID)
+		}
+		if item.MatchOperator != "" && item.MatchOperator != "exact" && item.MatchOperator != "contains" {
+			return fmt.Errorf("access control rule %d header operator is unsupported", item.ID)
+		}
+	case "host":
+		if item.MatchOperator != "" && item.MatchOperator != "exact" && item.MatchOperator != "suffix" {
+			return fmt.Errorf("access control rule %d host operator is unsupported", item.ID)
+		}
+	case "ua":
+		return nil
+	default:
+		return fmt.Errorf("access control rule %d target is unsupported", item.ID)
 	}
 	return nil
 }

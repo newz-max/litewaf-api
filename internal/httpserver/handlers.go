@@ -337,6 +337,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	accessLists, _ := h.app.Store.ListAccessListEntries(r.Context())
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
 	ccSummary := ccProtectionSummary(rateLimits)
+	accessControlSummary := accessControlSummary(accessLists)
 	attackSummary := attackProtectionSummary(rules)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
@@ -344,12 +345,50 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"rules":               len(rules),
 			"policies":            len(policies),
 			"access_lists":        len(accessLists),
+			"access_control":      accessControlSummary,
 			"rate_limits":         len(rateLimits),
 			"cc_protection":       ccSummary,
 			"attack_protection":   attackSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
+}
+
+func accessControlSummary(accessLists []model.AccessListEntry) envelope {
+	enabled := 0
+	allow := 0
+	block := 0
+	logOnly := 0
+	warnings := []string{}
+	for _, item := range accessLists {
+		if !item.Enabled {
+			continue
+		}
+		enabled++
+		rule := publish.AccessControlFromAccessList(item)
+		switch rule.Action.Type {
+		case "allow":
+			allow++
+			if rule.Match.Target == "ip" && (rule.Match.Value == "0.0.0.0" || rule.Match.Value == "::") {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 使用较宽泛的来源放行", rule.Name))
+			}
+			if rule.Match.Target == "path" && rule.Match.Path == "/" && rule.Match.PathMatch == "prefix" {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用放行动作", rule.Name))
+			}
+		case "log-only":
+			logOnly++
+		case "block":
+			block++
+		}
+	}
+	return envelope{
+		"rules":    len(accessLists),
+		"enabled":  enabled,
+		"allow":    allow,
+		"block":    block,
+		"log_only": logOnly,
+		"warnings": warnings,
+	}
 }
 
 func ccProtectionSummary(rateLimits []model.RateLimitRule) envelope {
@@ -657,23 +696,29 @@ func (r policyRequest) toModel() model.Policy {
 }
 
 type accessListRequest struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Target  string `json:"target"`
-	Value   string `json:"value"`
-	Action  string `json:"action"`
-	SiteID  int64  `json:"site_id"`
-	Enabled *bool  `json:"enabled"`
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Target        string `json:"target"`
+	Value         string `json:"value"`
+	MatchOperator string `json:"match_operator"`
+	HeaderName    string `json:"header_name"`
+	Action        string `json:"action"`
+	SiteID        int64  `json:"site_id"`
+	Enabled       *bool  `json:"enabled"`
+	Priority      int    `json:"priority"`
 }
 
 func (r accessListRequest) toModel() model.AccessListEntry {
 	return model.AccessListEntry{
-		Name:   r.Name,
-		Kind:   r.Kind,
-		Target: r.Target,
-		Value:  r.Value,
-		Action: r.Action,
-		SiteID: r.SiteID,
+		Name:          r.Name,
+		Kind:          r.Kind,
+		Target:        r.Target,
+		Value:         r.Value,
+		MatchOperator: r.MatchOperator,
+		HeaderName:    r.HeaderName,
+		Action:        r.Action,
+		SiteID:        r.SiteID,
+		Priority:      r.Priority,
 	}
 }
 
@@ -987,12 +1032,17 @@ func normalizeAccessList(item *model.AccessListEntry) {
 	item.Kind = strings.ToLower(strings.TrimSpace(item.Kind))
 	item.Target = strings.ToLower(strings.TrimSpace(item.Target))
 	item.Value = strings.TrimSpace(item.Value)
+	item.MatchOperator = strings.ToLower(strings.TrimSpace(item.MatchOperator))
+	item.HeaderName = strings.TrimSpace(item.HeaderName)
 	item.Action = strings.ToLower(strings.TrimSpace(item.Action))
 	if item.Kind == "" {
 		item.Kind = "blacklist"
 	}
 	if item.Action == "" {
 		item.Action = "block"
+	}
+	if item.Priority == 0 {
+		item.Priority = 100
 	}
 }
 
@@ -1003,14 +1053,14 @@ func validateAccessList(item model.AccessListEntry) error {
 	if !oneOf(item.Kind, "blacklist", "whitelist") {
 		return errors.New("access list kind must be blacklist or whitelist")
 	}
-	if !oneOf(item.Target, "ip", "cidr", "uri", "ua") {
-		return errors.New("access list target must be ip, cidr, uri, or ua")
+	if !oneOf(item.Target, "ip", "cidr", "uri", "ua", "header", "host") {
+		return errors.New("access list target must be ip, cidr, uri, ua, header, or host")
 	}
 	if item.Value == "" {
 		return errors.New("access list value is required")
 	}
-	if !oneOf(item.Action, "allow", "block") {
-		return errors.New("access list action must be allow or block")
+	if !oneOf(item.Action, "allow", "block", "log-only") {
+		return errors.New("access list action must be allow, block, or log-only")
 	}
 	switch item.Target {
 	case "ip":
@@ -1021,6 +1071,17 @@ func validateAccessList(item model.AccessListEntry) error {
 		if _, _, err := net.ParseCIDR(item.Value); err != nil {
 			return errors.New("access list cidr value is invalid")
 		}
+	case "uri":
+		if !strings.HasPrefix(item.Value, "/") {
+			return errors.New("access list uri value must start with /")
+		}
+	case "header":
+		if item.HeaderName == "" {
+			return errors.New("access list header_name is required")
+		}
+	}
+	if item.Priority < 0 {
+		return errors.New("access list priority cannot be negative")
 	}
 	return nil
 }

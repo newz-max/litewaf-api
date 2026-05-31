@@ -472,7 +472,7 @@ func (s *PostgresStore) CreateAuditLog(ctx context.Context, item model.AuditLog)
 
 func (s *PostgresStore) ListAccessListEntries(ctx context.Context) ([]model.AccessListEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, kind, target, value, action, site_id, enabled, created_at, updated_at
+		SELECT id, name, kind, target, value, match_operator, header_name, action, site_id, enabled, priority, created_at, updated_at
 		FROM access_list_entries
 		ORDER BY id`)
 	if err != nil {
@@ -482,7 +482,7 @@ func (s *PostgresStore) ListAccessListEntries(ctx context.Context) ([]model.Acce
 	var items []model.AccessListEntry
 	for rows.Next() {
 		var item model.AccessListEntry
-		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.Action, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.MatchOperator, &item.HeaderName, &item.Action, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -493,10 +493,10 @@ func (s *PostgresStore) ListAccessListEntries(ctx context.Context) ([]model.Acce
 func (s *PostgresStore) GetAccessListEntry(ctx context.Context, id int64) (model.AccessListEntry, error) {
 	var item model.AccessListEntry
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, kind, target, value, action, site_id, enabled, created_at, updated_at
+		SELECT id, name, kind, target, value, match_operator, header_name, action, site_id, enabled, priority, created_at, updated_at
 		FROM access_list_entries
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.Action, &item.SiteID, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+		Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.MatchOperator, &item.HeaderName, &item.Action, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.AccessListEntry{}, ErrNotFound
 	}
@@ -505,10 +505,10 @@ func (s *PostgresStore) GetAccessListEntry(ctx context.Context, id int64) (model
 
 func (s *PostgresStore) CreateAccessListEntry(ctx context.Context, item model.AccessListEntry) (model.AccessListEntry, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO access_list_entries (name, kind, target, value, action, site_id, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO access_list_entries (name, kind, target, value, match_operator, header_name, action, site_id, enabled, priority)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.Kind, item.Target, item.Value, item.Action, item.SiteID, item.Enabled).
+		item.Name, item.Kind, item.Target, item.Value, item.MatchOperator, item.HeaderName, item.Action, item.SiteID, item.Enabled, item.Priority).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
@@ -516,10 +516,10 @@ func (s *PostgresStore) CreateAccessListEntry(ctx context.Context, item model.Ac
 func (s *PostgresStore) UpdateAccessListEntry(ctx context.Context, id int64, item model.AccessListEntry) (model.AccessListEntry, error) {
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE access_list_entries
-		SET name = $2, kind = $3, target = $4, value = $5, action = $6, site_id = $7, enabled = $8, updated_at = now()
+		SET name = $2, kind = $3, target = $4, value = $5, match_operator = $6, header_name = $7, action = $8, site_id = $9, enabled = $10, priority = $11, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.Kind, item.Target, item.Value, item.Action, item.SiteID, item.Enabled).
+		id, item.Name, item.Kind, item.Target, item.Value, item.MatchOperator, item.HeaderName, item.Action, item.SiteID, item.Enabled, item.Priority).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.AccessListEntry{}, ErrNotFound

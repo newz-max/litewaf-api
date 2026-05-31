@@ -185,6 +185,54 @@ func TestGenerateExtendedGatewayConfigIncludesAttackProtectionMetadata(t *testin
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesAccessControlProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateAccessListEntry(ctx, model.AccessListEntry{
+		Name: "Admin path block", Kind: "blacklist", Target: "uri", Value: "/admin", MatchOperator: "prefix", Action: "block", SiteID: 3, Enabled: true, Priority: 80,
+	})
+	if err != nil {
+		t.Fatalf("create access control entry: %v", err)
+	}
+	_, err = dataStore.CreateAccessListEntry(ctx, model.AccessListEntry{
+		Name: "Disabled", Kind: "blacklist", Target: "ip", Value: "203.0.113.1", Action: "block", Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("create disabled entry: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-access-control")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.AccessLists) != 1 {
+		t.Fatalf("expected legacy access list compatibility output, got %+v", config.AccessLists)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected access control protection rule output, got %+v", config.ProtectionRules)
+	}
+	rule := config.ProtectionRules[0]
+	if rule.Module != "access-control" || rule.Category != "access-control" || rule.Action.Type != "block" {
+		t.Fatalf("unexpected access control identity/action: %+v", rule)
+	}
+	if rule.Match.Target != "path" || rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || rule.Priority != 80 {
+		t.Fatalf("unexpected access control match/priority: %+v", rule)
+	}
+}
+
+func TestValidateRejectsInvalidAccessControlRule(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateAccessListEntry(ctx, model.AccessListEntry{
+		Name: "Bad path", Kind: "blacklist", Target: "uri", Value: "admin", MatchOperator: "prefix", Action: "block", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create invalid entry: %v", err)
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-access-control"); err == nil {
+		t.Fatal("expected invalid access control rule to block publish")
+	}
+}
+
 func TestValidateRejectsInvalidAttackProtectionMetadata(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {

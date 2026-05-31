@@ -35,7 +35,7 @@ deploy/              Compose、生产脚本和验证 upstream 配置
 doc/                 架构、部署、验证和使用文档
 rules/               默认规则集
 examples/            本地验证样例
-openspec/            规格和变更工作流
+../../openspec/       工作区级规格和变更工作流
 litewaf-dashboard    配套前端仓库
 litewaf-gateway      配套网关仓库
 ```

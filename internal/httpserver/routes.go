@@ -69,6 +69,12 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("PUT /api/v1/cc-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateCCProtectionRule))
 	mux.HandleFunc("DELETE /api/v1/cc-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteCCProtectionRule))
 
+	mux.HandleFunc("GET /api/v1/upload-protection/rules", handlers.require(permissionRead, handlers.listUploadProtectionRules))
+	mux.HandleFunc("POST /api/v1/upload-protection/rules", handlers.require(permissionWrite, handlers.createUploadProtectionRule))
+	mux.HandleFunc("GET /api/v1/upload-protection/rules/{id}", handlers.require(permissionRead, handlers.getUploadProtectionRule))
+	mux.HandleFunc("PUT /api/v1/upload-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateUploadProtectionRule))
+	mux.HandleFunc("DELETE /api/v1/upload-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteUploadProtectionRule))
+
 	mux.HandleFunc("GET /api/v1/attack-protection/groups", handlers.require(permissionRead, handlers.listAttackProtectionGroups))
 	mux.HandleFunc("PUT /api/v1/attack-protection/groups/{attack_type}", handlers.require(permissionWrite, handlers.updateAttackProtectionGroup))
 }

@@ -620,6 +620,76 @@ func (s *PostgresStore) DeleteRateLimitRule(ctx context.Context, id int64) error
 	return checkRowsAffected(result, err)
 }
 
+func (s *PostgresStore) ListUploadProtectionRules(ctx context.Context) ([]model.UploadProtectionRule, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, path, path_match, methods, extensions, max_bytes, action, site_id, enabled, priority, created_at, updated_at
+		FROM upload_protection_rules
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.UploadProtectionRule
+	for rows.Next() {
+		var item model.UploadProtectionRule
+		var methods string
+		var extensions string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Path, &item.PathMatch, &methods, &extensions, &item.MaxBytes, &item.Action, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Methods = splitMethods(methods)
+		item.Extensions = splitCSV(extensions)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetUploadProtectionRule(ctx context.Context, id int64) (model.UploadProtectionRule, error) {
+	var item model.UploadProtectionRule
+	var methods string
+	var extensions string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, path, path_match, methods, extensions, max_bytes, action, site_id, enabled, priority, created_at, updated_at
+		FROM upload_protection_rules
+		WHERE id = $1`, id).
+		Scan(&item.ID, &item.Name, &item.Path, &item.PathMatch, &methods, &extensions, &item.MaxBytes, &item.Action, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.UploadProtectionRule{}, ErrNotFound
+	}
+	item.Methods = splitMethods(methods)
+	item.Extensions = splitCSV(extensions)
+	return item, err
+}
+
+func (s *PostgresStore) CreateUploadProtectionRule(ctx context.Context, item model.UploadProtectionRule) (model.UploadProtectionRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO upload_protection_rules (name, path, path_match, methods, extensions, max_bytes, action, site_id, enabled, priority)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Path, item.PathMatch, joinMethods(item.Methods), joinCSV(item.Extensions), item.MaxBytes, item.Action, item.SiteID, item.Enabled, item.Priority).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateUploadProtectionRule(ctx context.Context, id int64, item model.UploadProtectionRule) (model.UploadProtectionRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE upload_protection_rules
+		SET name = $2, path = $3, path_match = $4, methods = $5, extensions = $6, max_bytes = $7, action = $8, site_id = $9, enabled = $10, priority = $11, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Path, item.PathMatch, joinMethods(item.Methods), joinCSV(item.Extensions), item.MaxBytes, item.Action, item.SiteID, item.Enabled, item.Priority).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.UploadProtectionRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteUploadProtectionRule(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM upload_protection_rules WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
 func (s *PostgresStore) policyBindings(ctx context.Context, policyID int64) ([]int64, []int64, error) {
 	siteIDs, err := queryIDs(ctx, s.db, `SELECT site_id FROM policy_sites WHERE policy_id = $1 ORDER BY site_id`, policyID)
 	if err != nil {

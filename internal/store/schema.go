@@ -257,6 +257,27 @@ ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS path_match TEXT NOT NULL D
 ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS methods TEXT NOT NULL DEFAULT '';
 ALTER TABLE rate_limit_rules ADD COLUMN IF NOT EXISTS cc_action TEXT NOT NULL DEFAULT '';
 
+CREATE TABLE IF NOT EXISTS upload_protection_rules (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	path TEXT NOT NULL DEFAULT '/',
+	path_match TEXT NOT NULL DEFAULT 'prefix',
+	methods TEXT NOT NULL DEFAULT '',
+	extensions TEXT NOT NULL DEFAULT '',
+	max_bytes INTEGER NOT NULL DEFAULT 0,
+	action TEXT NOT NULL DEFAULT 'block',
+	site_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	priority INTEGER NOT NULL DEFAULT 100,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS methods TEXT NOT NULL DEFAULT '';
+ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS extensions TEXT NOT NULL DEFAULT '';
+ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS max_bytes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE upload_protection_rules ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
+
 INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
 SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true, 'attack-protection', 'managed', 'sqli', 'SQL 注入防护', 100
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf SQLi baseline');

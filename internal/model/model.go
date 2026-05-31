@@ -211,6 +211,7 @@ type ObservabilitySummary struct {
 	TopRules         []SummaryCount `json:"top_rules"`
 	AttackTypes      []SummaryCount `json:"attack_types"`
 	AttackProtection []SummaryCount `json:"attack_protection"`
+	UploadProtection []SummaryCount `json:"upload_protection"`
 }
 
 type AttackProtectionGroup struct {
@@ -288,18 +289,19 @@ type RateLimitRule struct {
 }
 
 type ProtectionRule struct {
-	ID        int64                `json:"id"`
-	Name      string               `json:"name"`
-	Module    string               `json:"module"`
-	Category  string               `json:"category"`
-	SiteID    int64                `json:"site_id"`
-	Enabled   bool                 `json:"enabled"`
-	Priority  int                  `json:"priority"`
-	Match     ProtectionRuleMatch  `json:"match"`
-	Limit     ProtectionRuleLimit  `json:"limit"`
-	Action    ProtectionRuleAction `json:"action"`
-	CreatedAt time.Time            `json:"created_at"`
-	UpdatedAt time.Time            `json:"updated_at"`
+	ID        int64                 `json:"id"`
+	Name      string                `json:"name"`
+	Module    string                `json:"module"`
+	Category  string                `json:"category"`
+	SiteID    int64                 `json:"site_id"`
+	Enabled   bool                  `json:"enabled"`
+	Priority  int                   `json:"priority"`
+	Match     ProtectionRuleMatch   `json:"match"`
+	Limit     ProtectionRuleLimit   `json:"limit"`
+	Upload    *ProtectionRuleUpload `json:"upload,omitempty"`
+	Action    ProtectionRuleAction  `json:"action"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
 }
 
 type ProtectionRuleMatch struct {
@@ -320,6 +322,27 @@ type ProtectionRuleLimit struct {
 	BanDurationSec int    `json:"ban_duration_sec"`
 }
 
+type ProtectionRuleUpload struct {
+	Extensions []string `json:"extensions"`
+	MaxBytes   int      `json:"max_bytes"`
+}
+
 type ProtectionRuleAction struct {
 	Type string `json:"type"`
+}
+
+type UploadProtectionRule struct {
+	ID         int64     `json:"id"`
+	Name       string    `json:"name"`
+	Path       string    `json:"path"`
+	PathMatch  string    `json:"path_match"`
+	Methods    []string  `json:"methods"`
+	Extensions []string  `json:"extensions"`
+	MaxBytes   int       `json:"max_bytes"`
+	Action     string    `json:"action"`
+	SiteID     int64     `json:"site_id"`
+	Enabled    bool      `json:"enabled"`
+	Priority   int       `json:"priority"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }

@@ -23,6 +23,7 @@ type MemoryStore struct {
 	nextAuditID     int64
 	nextAccessID    int64
 	nextRateID      int64
+	nextUploadID    int64
 	nextAccessLogID int64
 	nextWAFEventID  int64
 	sites           map[int64]model.Site
@@ -33,6 +34,7 @@ type MemoryStore struct {
 	audits          map[int64]model.AuditLog
 	accessLists     map[int64]model.AccessListEntry
 	rateLimits      map[int64]model.RateLimitRule
+	uploadRules     map[int64]model.UploadProtectionRule
 	accessLogs      map[int64]model.AccessLog
 	wafEvents       map[int64]model.WAFEvent
 }
@@ -47,6 +49,7 @@ func NewMemoryStore() *MemoryStore {
 		nextAuditID:     1,
 		nextAccessID:    1,
 		nextRateID:      1,
+		nextUploadID:    1,
 		nextAccessLogID: 1,
 		nextWAFEventID:  1,
 		sites:           map[int64]model.Site{},
@@ -57,6 +60,7 @@ func NewMemoryStore() *MemoryStore {
 		audits:          map[int64]model.AuditLog{},
 		accessLists:     map[int64]model.AccessListEntry{},
 		rateLimits:      map[int64]model.RateLimitRule{},
+		uploadRules:     map[int64]model.UploadProtectionRule{},
 		accessLogs:      map[int64]model.AccessLog{},
 		wafEvents:       map[int64]model.WAFEvent{},
 	}
@@ -421,6 +425,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	typeCounts := map[string]int64{}
 	attackProtectionCounts := map[string]int64{}
 	accessControlCounts := map[string]int64{}
+	uploadProtectionCounts := map[string]int64{}
 	for _, item := range s.accessLogs {
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
@@ -474,6 +479,9 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		if item.Module == "access-control" {
 			increment(accessControlCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
 		}
+		if item.Module == "upload-protection" {
+			increment(uploadProtectionCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
+		}
 	}
 	summary.TopIPs = topCounts(ipCounts, limit)
 	summary.TopURIs = topCounts(uriCounts, limit)
@@ -481,6 +489,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	summary.AttackTypes = topCounts(typeCounts, limit)
 	summary.AccessControl = topCounts(accessControlCounts, limit)
 	summary.AttackProtection = topCounts(attackProtectionCounts, limit)
+	summary.UploadProtection = topCounts(uploadProtectionCounts, limit)
 	return summary, nil
 }
 
@@ -595,6 +604,71 @@ func (s *MemoryStore) DeleteRateLimitRule(_ context.Context, id int64) error {
 		return ErrNotFound
 	}
 	delete(s.rateLimits, id)
+	return nil
+}
+
+func (s *MemoryStore) ListUploadProtectionRules(context.Context) ([]model.UploadProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.UploadProtectionRule, 0, len(s.uploadRules))
+	for _, item := range s.uploadRules {
+		item.Methods = cloneStrings(item.Methods)
+		item.Extensions = cloneStrings(item.Extensions)
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetUploadProtectionRule(_ context.Context, id int64) (model.UploadProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.uploadRules[id]
+	if !ok {
+		return model.UploadProtectionRule{}, ErrNotFound
+	}
+	item.Methods = cloneStrings(item.Methods)
+	item.Extensions = cloneStrings(item.Extensions)
+	return item, nil
+}
+
+func (s *MemoryStore) CreateUploadProtectionRule(_ context.Context, item model.UploadProtectionRule) (model.UploadProtectionRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextUploadID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item.Methods = cloneStrings(item.Methods)
+	item.Extensions = cloneStrings(item.Extensions)
+	s.uploadRules[item.ID] = item
+	s.nextUploadID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateUploadProtectionRule(_ context.Context, id int64, item model.UploadProtectionRule) (model.UploadProtectionRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.uploadRules[id]
+	if !ok {
+		return model.UploadProtectionRule{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	item.Methods = cloneStrings(item.Methods)
+	item.Extensions = cloneStrings(item.Extensions)
+	s.uploadRules[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteUploadProtectionRule(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.uploadRules[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.uploadRules, id)
 	return nil
 }
 
@@ -777,5 +851,14 @@ func cloneIDs(ids []int64) []int64 {
 	}
 	out := make([]int64, len(ids))
 	copy(out, ids)
+	return out
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	out := make([]string, len(values))
+	copy(out, values)
 	return out
 }

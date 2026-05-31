@@ -219,6 +219,41 @@ func TestGenerateExtendedGatewayConfigIncludesAccessControlProtectionRules(t *te
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesUploadProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateUploadProtectionRule(ctx, model.UploadProtectionRule{
+		Name: "Script upload block", Path: "/upload", PathMatch: "prefix", Methods: []string{"POST"},
+		Extensions: []string{"php", "jsp"}, MaxBytes: 2097152, Action: "block", SiteID: 3, Enabled: true, Priority: 90,
+	})
+	if err != nil {
+		t.Fatalf("create upload protection rule: %v", err)
+	}
+	_, err = dataStore.CreateUploadProtectionRule(ctx, model.UploadProtectionRule{
+		Name: "Disabled", Path: "/upload", PathMatch: "prefix", Extensions: []string{"exe"}, Action: "block", Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("create disabled upload protection rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-upload-protection")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected upload protection output, got %+v", config.ProtectionRules)
+	}
+	rule := config.ProtectionRules[0]
+	if rule.Module != "upload-protection" || rule.Category != "upload" || rule.Action.Type != "block" {
+		t.Fatalf("unexpected upload protection identity/action: %+v", rule)
+	}
+	if rule.Match.Path != "/upload" || rule.Match.PathMatch != "prefix" || len(rule.Match.Methods) != 1 || rule.Priority != 90 {
+		t.Fatalf("unexpected upload protection match/priority: %+v", rule)
+	}
+	if rule.Upload == nil || len(rule.Upload.Extensions) != 2 || rule.Upload.MaxBytes != 2097152 {
+		t.Fatalf("unexpected upload protection constraints: %+v", rule.Upload)
+	}
+}
+
 func TestValidateRejectsInvalidAccessControlRule(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
@@ -230,6 +265,20 @@ func TestValidateRejectsInvalidAccessControlRule(t *testing.T) {
 	}
 	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-access-control"); err == nil {
 		t.Fatal("expected invalid access control rule to block publish")
+	}
+}
+
+func TestValidateRejectsInvalidUploadProtectionRule(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateUploadProtectionRule(ctx, model.UploadProtectionRule{
+		Name: "Bad path", Path: "upload", PathMatch: "prefix", Extensions: []string{"php"}, Action: "block", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create invalid upload rule: %v", err)
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-upload-protection"); err == nil {
+		t.Fatal("expected invalid upload protection rule to block publish")
 	}
 }
 

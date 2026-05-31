@@ -192,6 +192,10 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 		return summary, err
 	}
 	summary.AttackProtection, err = s.attackProtectionSummaryCounts(ctx, filter, limit)
+	if err != nil {
+		return summary, err
+	}
+	summary.UploadProtection, err = s.uploadProtectionSummaryCounts(ctx, filter, limit)
 	return summary, err
 }
 
@@ -229,6 +233,34 @@ func (s *PostgresStore) attackProtectionSummaryCounts(ctx context.Context, filte
 		FROM waf_events
 		WHERE module = 'attack-protection'
 			AND attack_type <> ''
+			AND ($1::timestamptz IS NULL OR created_at >= $1)
+			AND ($2::timestamptz IS NULL OR created_at <= $2)
+		GROUP BY key
+		ORDER BY count DESC, key ASC
+		LIMIT $3`, nullableTime(filter.Since), nullableTime(filter.Until), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.SummaryCount
+	for rows.Next() {
+		var item model.SummaryCount
+		if err := rows.Scan(&item.Key, &item.Count); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(item.Key) != "" {
+			items = append(items, item)
+		}
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) uploadProtectionSummaryCounts(ctx context.Context, filter model.ObservabilitySummaryFilter, limit int) ([]model.SummaryCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT action || '|' || disposition AS key, count(*) AS count
+		FROM waf_events
+		WHERE module = 'upload-protection'
+			AND action <> ''
 			AND ($1::timestamptz IS NULL OR created_at >= $1)
 			AND ($2::timestamptz IS NULL OR created_at <= $2)
 		GROUP BY key

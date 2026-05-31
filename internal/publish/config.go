@@ -145,6 +145,10 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	if err != nil {
 		return ExtendedGatewayConfig{}, nil, "", err
 	}
+	uploadRules, err := dataStore.ListUploadProtectionRules(ctx)
+	if err != nil {
+		return ExtendedGatewayConfig{}, nil, "", err
+	}
 
 	rulesByID := map[int64]model.Rule{}
 	for _, rule := range rules {
@@ -253,6 +257,12 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 		})
 		config.ProtectionRules = append(config.ProtectionRules, CCProtectionFromRateLimit(item))
 	}
+	for _, item := range uploadRules {
+		if !item.Enabled {
+			continue
+		}
+		config.ProtectionRules = append(config.ProtectionRules, UploadProtectionFromRule(item))
+	}
 
 	payload, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
@@ -304,6 +314,41 @@ func AccessControlFromAccessList(item model.AccessListEntry) model.ProtectionRul
 		Match:    match,
 		Action: model.ProtectionRuleAction{
 			Type: accessControlAction(item),
+		},
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
+	}
+}
+
+func UploadProtectionFromRule(item model.UploadProtectionRule) model.ProtectionRule {
+	path := item.Path
+	if path == "" {
+		path = "/"
+	}
+	pathMatch := item.PathMatch
+	if pathMatch == "" {
+		pathMatch = "prefix"
+	}
+	return model.ProtectionRule{
+		ID:       item.ID,
+		Name:     item.Name,
+		Module:   "upload-protection",
+		Category: "upload",
+		SiteID:   item.SiteID,
+		Enabled:  item.Enabled,
+		Priority: protectionPriority(item.Priority),
+		Match: model.ProtectionRuleMatch{
+			Path:      path,
+			PathMatch: pathMatch,
+			Methods:   cloneStrings(item.Methods),
+			Target:    "upload",
+		},
+		Upload: &model.ProtectionRuleUpload{
+			Extensions: cloneStrings(item.Extensions),
+			MaxBytes:   item.MaxBytes,
+		},
+		Action: model.ProtectionRuleAction{
+			Type: item.Action,
 		},
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
@@ -445,6 +490,10 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 	if err != nil {
 		return err
 	}
+	uploadRules, err := dataStore.ListUploadProtectionRules(ctx)
+	if err != nil {
+		return err
+	}
 
 	siteIDs := map[int64]bool{}
 	for _, site := range sites {
@@ -516,6 +565,13 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 			return fmt.Errorf("rate limit %d repeated violation settings are incomplete", item.ID)
 		}
 	}
+	for _, item := range uploadRules {
+		if item.Enabled {
+			if err := validateUploadProtectionRule(item); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -585,6 +641,41 @@ func validateAttackProtectionRule(rule model.Rule) error {
 	}
 	if rule.ID <= 0 {
 		return fmt.Errorf("rule %d attack protection rule reference is invalid", rule.ID)
+	}
+	return nil
+}
+
+func validateUploadProtectionRule(item model.UploadProtectionRule) error {
+	if item.Name == "" {
+		return fmt.Errorf("upload protection rule %d name is required", item.ID)
+	}
+	if item.Path == "" || !strings.HasPrefix(item.Path, "/") {
+		return fmt.Errorf("upload protection rule %d path must start with /", item.ID)
+	}
+	if item.PathMatch != "" && item.PathMatch != "exact" && item.PathMatch != "prefix" {
+		return fmt.Errorf("upload protection rule %d path_match is unsupported", item.ID)
+	}
+	for _, method := range item.Methods {
+		if method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" {
+			return fmt.Errorf("upload protection rule %d method is unsupported", item.ID)
+		}
+	}
+	if len(item.Extensions) == 0 && item.MaxBytes <= 0 {
+		return fmt.Errorf("upload protection rule %d requires extensions or max_bytes", item.ID)
+	}
+	for _, extension := range item.Extensions {
+		if extension == "" || strings.ContainsAny(extension, `/\`) || strings.Contains(extension, "..") {
+			return fmt.Errorf("upload protection rule %d extension is invalid", item.ID)
+		}
+	}
+	if item.MaxBytes < 0 {
+		return fmt.Errorf("upload protection rule %d max_bytes cannot be negative", item.ID)
+	}
+	if item.Action != "block" && item.Action != "log-only" {
+		return fmt.Errorf("upload protection rule %d action is unsupported", item.ID)
+	}
+	if item.Priority < 0 {
+		return fmt.Errorf("upload protection rule %d priority cannot be negative", item.ID)
 	}
 	return nil
 }

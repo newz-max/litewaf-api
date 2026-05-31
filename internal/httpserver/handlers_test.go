@@ -338,6 +338,134 @@ func TestAccessControlRulesEmptyList(t *testing.T) {
 	}
 }
 
+func TestUploadProtectionRulesEmptyList(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/upload-protection/rules", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode upload protection rules: %v", err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("expected empty list, got %+v", response.Items)
+	}
+}
+
+func TestUploadProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Script upload block","site_id":3,"priority":70,"match":{"path":"/upload","path_match":"prefix","methods":["post"]},"upload":{"extensions":[".php","JSP"],"max_bytes":2097152},"action":{"type":"block"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/upload-protection/rules", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create upload protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create upload protection: %v", err)
+	}
+	if createResponse.Item.Module != "upload-protection" || createResponse.Item.Category != "upload" {
+		t.Fatalf("unexpected upload protection identity: %+v", createResponse.Item)
+	}
+	if createResponse.Item.Match.Path != "/upload" || createResponse.Item.Match.PathMatch != "prefix" || len(createResponse.Item.Match.Methods) != 1 {
+		t.Fatalf("unexpected upload protection match: %+v", createResponse.Item.Match)
+	}
+	if createResponse.Item.Upload == nil || len(createResponse.Item.Upload.Extensions) != 2 || createResponse.Item.Upload.Extensions[0] != "php" || createResponse.Item.Upload.MaxBytes != 2097152 {
+		t.Fatalf("unexpected upload protection payload: %+v", createResponse.Item.Upload)
+	}
+	if createResponse.Item.Action.Type != "block" || createResponse.Item.Priority != 70 {
+		t.Fatalf("unexpected upload protection action: %+v", createResponse.Item)
+	}
+
+	updateBody := bytes.NewBufferString(`{"name":"Avatar observe","site_id":3,"enabled":false,"match":{"path":"/avatar","path_match":"exact","methods":["POST"]},"upload":{"max_bytes":524288},"action":{"type":"log-only"}}`)
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/upload-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), updateBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update upload protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updateResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&updateResponse); err != nil {
+		t.Fatalf("decode update upload protection: %v", err)
+	}
+	if updateResponse.Item.Enabled || updateResponse.Item.Match.Path != "/avatar" || updateResponse.Item.Action.Type != "log-only" {
+		t.Fatalf("unexpected updated upload protection: %+v", updateResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=upload_protection_rule", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode audit logs: %v", err)
+	}
+	if len(auditResponse.Items) < 2 {
+		t.Fatalf("expected create and update audit logs, got %+v", auditResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodDelete, "/api/v1/upload-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete upload protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUploadProtectionWriteValidationAndAuthorization(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	invalidBodies := []string{
+		`{"name":"bad","match":{"path":"upload","path_match":"prefix"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload","path_match":"regex"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload","path_match":"prefix","methods":["TRACE"]},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload","path_match":"prefix"},"upload":{"extensions":["../php"]},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload","path_match":"prefix"},"upload":{"max_bytes":-1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload","path_match":"prefix"},"upload":{},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload","path_match":"prefix"},"upload":{"extensions":["php"]},"action":{"type":"ban"}}`,
+		`{"name":"bad","priority":-1,"match":{"path":"/upload","path_match":"prefix"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
+	}
+	for _, body := range invalidBodies {
+		req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/upload-protection/rules", bytes.NewBufferString(body)), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	validBody := bytes.NewBufferString(`{"name":"Upload block","match":{"path":"/upload","path_match":"prefix"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/upload-protection/rules", validBody), readonlyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAccessControlRulesMapAccessLists(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
@@ -799,5 +927,50 @@ func TestAttackProtectionEventQueryAndSummary(t *testing.T) {
 	}
 	if len(summaryResponse.Item.AttackProtection) != 1 || summaryResponse.Item.AttackProtection[0].Key != "sqli|block|blocked" {
 		t.Fatalf("unexpected attack protection summary: %+v", summaryResponse.Item)
+	}
+}
+
+func TestUploadProtectionEventQueryAndSummary(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"req-upload","site_id":1,"event_type":"upload-protection","rule_id":9,"rule_type":"upload","target":"upload_extension","module":"upload-protection","category":"upload","rule_name":"Script upload block","action":"block","disposition":"blocked","client_ip":"192.0.2.40","method":"POST","uri":"/upload","summary":"extension php blocked","threshold":1048576,"upload_metadata":"filename=shell.php, extension=php, content_length=2048"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest upload protection waf status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?module=upload-protection&action=block", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query upload protection logs status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var attackResponse struct {
+		Items []model.WAFEvent `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&attackResponse); err != nil {
+		t.Fatalf("decode upload protection logs: %v", err)
+	}
+	if len(attackResponse.Items) != 1 || attackResponse.Items[0].Module != "upload-protection" || attackResponse.Items[0].UploadMetadata == "" {
+		t.Fatalf("unexpected upload protection logs: %+v", attackResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/observability/summary", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var summaryResponse struct {
+		Item model.ObservabilitySummary `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&summaryResponse); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summaryResponse.Item.UploadProtection) != 1 || summaryResponse.Item.UploadProtection[0].Key != "block|blocked" {
+		t.Fatalf("unexpected upload protection summary: %+v", summaryResponse.Item)
 	}
 }

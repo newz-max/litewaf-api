@@ -159,6 +159,22 @@ CREATE TABLE IF NOT EXISTS rate_limit_rules (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS upload_protection_rules (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	path TEXT NOT NULL DEFAULT '/',
+	path_match TEXT NOT NULL DEFAULT 'prefix',
+	methods TEXT NOT NULL DEFAULT '',
+	extensions TEXT NOT NULL DEFAULT '',
+	max_bytes INTEGER NOT NULL DEFAULT 0,
+	action TEXT NOT NULL DEFAULT 'block',
+	site_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	priority INTEGER NOT NULL DEFAULT 100,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 INSERT INTO rules (name, type, target, action, expression, score, enabled)
 SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf SQLi baseline');

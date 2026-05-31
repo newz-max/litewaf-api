@@ -63,6 +63,12 @@ type Store interface {
 	CreateRateLimitRule(context.Context, model.RateLimitRule) (model.RateLimitRule, error)
 	UpdateRateLimitRule(context.Context, int64, model.RateLimitRule) (model.RateLimitRule, error)
 	DeleteRateLimitRule(context.Context, int64) error
+
+	ListUploadProtectionRules(context.Context) ([]model.UploadProtectionRule, error)
+	GetUploadProtectionRule(context.Context, int64) (model.UploadProtectionRule, error)
+	CreateUploadProtectionRule(context.Context, model.UploadProtectionRule) (model.UploadProtectionRule, error)
+	UpdateUploadProtectionRule(context.Context, int64, model.UploadProtectionRule) (model.UploadProtectionRule, error)
+	DeleteUploadProtectionRule(context.Context, int64) error
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {

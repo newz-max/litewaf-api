@@ -336,9 +336,11 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	policies, _ := h.app.Store.ListPolicies(r.Context())
 	accessLists, _ := h.app.Store.ListAccessListEntries(r.Context())
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
+	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
 	ccSummary := ccProtectionSummary(rateLimits)
 	accessControlSummary := accessControlSummary(accessLists)
 	attackSummary := attackProtectionSummary(rules)
+	uploadSummary := uploadProtectionSummary(uploadRules)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -349,6 +351,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"rate_limits":         len(rateLimits),
 			"cc_protection":       ccSummary,
 			"attack_protection":   attackSummary,
+			"upload_protection":   uploadSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
@@ -434,6 +437,48 @@ func attackProtectionSummary(rules []model.Rule) envelope {
 		"observe":      observe,
 		"block":        block,
 		"attack_types": attackTypes,
+	}
+}
+
+func uploadProtectionSummary(rules []model.UploadProtectionRule) envelope {
+	enabled := 0
+	extensionRules := 0
+	sizeRules := 0
+	block := 0
+	logOnly := 0
+	warnings := []string{}
+	for _, item := range rules {
+		if !item.Enabled {
+			continue
+		}
+		enabled++
+		if len(item.Extensions) > 0 {
+			extensionRules++
+		}
+		if item.MaxBytes > 0 {
+			sizeRules++
+			if item.MaxBytes < 1024*1024 {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 使用较小上传大小限制", item.Name))
+			}
+		}
+		switch item.Action {
+		case "log-only":
+			logOnly++
+		case "block":
+			block++
+			if item.Path == "/" && item.PathMatch == "prefix" {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站上传使用阻断动作", item.Name))
+			}
+		}
+	}
+	return envelope{
+		"rules":           len(rules),
+		"enabled":         enabled,
+		"extension_rules": extensionRules,
+		"size_rules":      sizeRules,
+		"block":           block,
+		"log_only":        logOnly,
+		"warnings":        warnings,
 	}
 }
 

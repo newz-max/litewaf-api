@@ -90,7 +90,7 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
-发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并同步输出 CC 防护和访问控制子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
+发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并同步输出 CC 防护、访问控制和上传防护子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
 
 ```json
 {
@@ -127,12 +127,30 @@ Authorization: Bearer <token>
       "action": {
         "type": "block"
       }
+    },
+    {
+      "module": "upload-protection",
+      "category": "upload",
+      "priority": 100,
+      "match": {
+        "target": "upload",
+        "path": "/upload",
+        "path_match": "prefix",
+        "methods": ["POST"]
+      },
+      "upload": {
+        "extensions": ["php", "jsp"],
+        "max_bytes": 10485760
+      },
+      "action": {
+        "type": "block"
+      }
     }
   ]
 }
 ```
 
-发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。
+发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。
 
 ## 黑白名单
 
@@ -196,6 +214,59 @@ Authorization: Bearer <token>
 - `priority` 为正整数，用于发布配置和网关排序。
 
 管理员可以创建、更新和删除访问控制规则；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=access_control_rule` 的审计日志。
+
+## 上传防护
+
+上传防护接口使用独立的上传防护规则存储，对外以 `module=upload-protection`、`category=upload` 的防护规则模型呈现。当前阶段覆盖上传路径、HTTP 方法、危险扩展名和上传大小限制，支持 `log-only` 和 `block` 动作；策略级高级上传检测字段继续保留用于兼容。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/upload-protection/rules` | 读 | 查询上传防护规则 |
+| POST | `/api/v1/upload-protection/rules` | 写 | 创建上传防护规则 |
+| GET | `/api/v1/upload-protection/rules/{id}` | 读 | 查询上传防护规则 |
+| PUT | `/api/v1/upload-protection/rules/{id}` | 写 | 更新上传防护规则 |
+| DELETE | `/api/v1/upload-protection/rules/{id}` | 写 | 删除上传防护规则 |
+
+列表支持过滤：
+
+- `site_id`：站点 ID。
+- `enabled`：`true` 或 `false`。
+
+请求示例：
+
+```json
+{
+  "name": "危险脚本上传阻断",
+  "site_id": 1,
+  "enabled": true,
+  "priority": 100,
+  "match": {
+    "path": "/upload",
+    "path_match": "prefix",
+    "methods": ["POST"]
+  },
+  "upload": {
+    "extensions": ["php", "jsp", "asp"],
+    "max_bytes": 10485760
+  },
+  "action": {
+    "type": "block"
+  }
+}
+```
+
+支持字段：
+
+- `module` 固定为 `upload-protection`，`category` 固定为 `upload`；创建和更新时可省略，API 会填充默认值。
+- `match.path` 必须以 `/` 开头。
+- `match.path_match` 支持 `exact`、`prefix`；prefix 匹配按路径段边界处理，`/upload` 不匹配 `/upload2`。
+- `match.methods` 支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`、`OPTIONS`，空数组表示全部方法。
+- `upload.extensions` 会去掉开头的点并转为小写，不允许路径分隔符或 `..`。
+- `upload.max_bytes` 为 `0` 时表示不启用大小限制；规则必须至少配置扩展名或大小限制之一。
+- `action.type` 支持 `log-only`、`block`。
+- `priority` 为正整数，用于发布配置和网关排序。
+
+管理员可以创建、更新和删除上传防护规则；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=upload_protection_rule` 的审计日志。
 
 ## 限流
 
@@ -307,11 +378,14 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 ```text
 GET /api/v1/attack-logs?module=attack-protection&attack_type=sqli
 GET /api/v1/attack-logs?module=access-control&action=block
+GET /api/v1/attack-logs?module=upload-protection&action=block
 ```
 
 攻击防护事件字段包括 `module`、`category`、`attack_type`、`group_name`、`rule_name`、`rule_id`、`target`、`action`、`score`、`summary` 和 `disposition`。观测汇总中的 `attack_protection` 按 `attack_type|action|disposition` 维度统计。
 
 访问控制事件字段包括 `module=access-control`、`category=access-control`、`rule_name`、`rule_id`、`target`、`action` 和 `disposition`。观测汇总中的 `access_control` 按 `action|disposition` 维度统计，例如 `block|blocked`、`log-only|observed` 或 `allow|allowed`。
+
+上传防护事件字段包括 `module=upload-protection`、`category=upload`、`rule_name`、`rule_id`、`target`、`action`、`disposition`、`threshold` 和 `upload_metadata`。观测汇总中的 `upload_protection` 按 `action|disposition` 维度统计，例如 `block|blocked` 或 `log-only|observed`。
 
 ## 审计和系统
 

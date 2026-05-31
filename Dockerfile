@@ -1,4 +1,4 @@
-FROM golang:1.22-bookworm AS builder
+FROM golang:1.24.13-bookworm AS builder
 
 WORKDIR /src
 ENV GOPROXY=https://goproxy.cn,direct

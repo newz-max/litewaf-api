@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-litewaf}
+      POSTGRES_USER: ${POSTGRES_USER:-litewaf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-litewaf_dev_password}
+    volumes:
+      - litewaf-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - litewaf-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  waf-api:
+    image: ${LITEWAF_IMAGE_PREFIX:-litewaf}/litewaf-api:${LITEWAF_IMAGE_TAG:-latest}
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      HTTP_ADDR: :8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-litewaf}:${POSTGRES_PASSWORD:-litewaf_dev_password}@postgres:5432/${POSTGRES_DB:-litewaf}?sslmode=disable
+      REDIS_ADDR: redis:6379
+      GATEWAY_CONFIG_PATH: /var/lib/litewaf/gateway/active.json
+      PUBLISH_OPERATOR: ${PUBLISH_OPERATOR:-compose}
+      AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:?AUTH_TOKEN_SECRET is required}
+      GATEWAY_INGESTION_TOKEN: ${GATEWAY_INGESTION_TOKEN:?GATEWAY_INGESTION_TOKEN is required}
+      METRICS_ENABLED: ${METRICS_ENABLED:-false}
+      LITEWAF_ADMIN_USERNAME: ${LITEWAF_ADMIN_USERNAME:-admin}
+      LITEWAF_ADMIN_PASSWORD: ${LITEWAF_ADMIN_PASSWORD:?LITEWAF_ADMIN_PASSWORD is required}
+      LITEWAF_ADMIN_ROLE: ${LITEWAF_ADMIN_ROLE:-admin}
+    volumes:
+      - litewaf-gateway-config:/var/lib/litewaf/gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/litewaf-api", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    image: ${LITEWAF_IMAGE_PREFIX:-litewaf}/litewaf-dashboard:${LITEWAF_IMAGE_TAG:-latest}
+    ports:
+      - "${DASHBOARD_PORT:-8080}:80"
+    depends_on:
+      waf-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    image: ${LITEWAF_IMAGE_PREFIX:-litewaf}/litewaf-gateway:${LITEWAF_IMAGE_TAG:-latest}
+    environment:
+      LITEWAF_CONFIG_PATH: /etc/litewaf/active.json
+      LITEWAF_INGESTION_URL: http://waf-api:8080
+      LITEWAF_INGESTION_TOKEN: ${GATEWAY_INGESTION_TOKEN:?GATEWAY_INGESTION_TOKEN is required}
+      LITEWAF_METRICS_ENABLED: ${LITEWAF_METRICS_ENABLED:-false}
+      LITEWAF_SENSITIVE_HEADERS: ${LITEWAF_SENSITIVE_HEADERS:-authorization,cookie,set-cookie}
+      LITEWAF_LOG_VALUE_MAX_LEN: ${LITEWAF_LOG_VALUE_MAX_LEN:-160}
+    volumes:
+      - litewaf-gateway-config:/etc/litewaf
+    ports:
+      - "${GATEWAY_PORT:-8081}:8080"
+    depends_on:
+      waf-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/openresty/bin/openresty -t >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  litewaf-postgres:
+  litewaf-redis:
+  litewaf-gateway-config:

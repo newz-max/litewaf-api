@@ -1,0 +1,55 @@
+{
+  "version": "litewaf-default-rules-v1",
+  "compatibility": {
+    "api": "/api/v1",
+    "gateway_config": "generated",
+    "notes": "Rules use fields supported by the LiteWaf rule model and OpenResty gateway."
+  },
+  "limitations": [
+    "This is a small baseline for initial protection and validation, not comprehensive managed-rule coverage.",
+    "Tune actions, scores, and policy thresholds for your traffic before production blocking.",
+    "Optional engines such as libinjection and Hyperscan are not required by this rule set."
+  ],
+  "rules": [
+    {
+      "id": "litewaf-sqli-baseline",
+      "name": "LiteWaf SQLi baseline",
+      "type": "sqli",
+      "target": "args",
+      "action": "block",
+      "expression": "(?i)(union\\s+select|or\\s+1=1|sleep\\s*\\(|benchmark\\s*\\()",
+      "score": 80,
+      "enabled": true
+    },
+    {
+      "id": "litewaf-xss-baseline",
+      "name": "LiteWaf XSS baseline",
+      "type": "xss",
+      "target": "args",
+      "action": "block",
+      "expression": "(?i)(<script|javascript:|onerror\\s*=|onload\\s*=)",
+      "score": 80,
+      "enabled": true
+    },
+    {
+      "id": "litewaf-rce-baseline",
+      "name": "LiteWaf RCE baseline",
+      "type": "rce",
+      "target": "args",
+      "action": "block",
+      "expression": "(?i)(;\\s*(cat|curl|wget|bash|sh)\\b|\\|\\s*(bash|sh)\\b|\\$\\(|/bin/(bash|sh))",
+      "score": 90,
+      "enabled": true
+    },
+    {
+      "id": "litewaf-normalized-traversal-baseline",
+      "name": "LiteWaf normalized traversal baseline",
+      "type": "rce",
+      "target": "normalized_uri",
+      "action": "block",
+      "expression": "(?i)(\\.\\./|\\.\\.\\\\|/etc/passwd|/proc/self/environ)",
+      "score": 70,
+      "enabled": true
+    }
+  ]
+}

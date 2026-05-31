@@ -1,0 +1,17 @@
+services:
+  upstream:
+    image: nginx:1.27-alpine
+    profiles:
+      - validation
+    volumes:
+      - ./upstream/default.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nginx -t >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  gateway:
+    depends_on:
+      upstream:
+        condition: service_healthy

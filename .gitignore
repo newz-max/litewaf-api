@@ -2,6 +2,7 @@ bin/
 dist/
 .env
 AGENTS.md
+deploy/deploy.ps1
 .idea/
 .vscode/
 *.log

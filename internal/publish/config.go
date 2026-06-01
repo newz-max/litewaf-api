@@ -153,6 +153,10 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	if err != nil {
 		return ExtendedGatewayConfig{}, nil, "", err
 	}
+	dynamicRules, err := dataStore.ListDynamicProtectionRules(ctx)
+	if err != nil {
+		return ExtendedGatewayConfig{}, nil, "", err
+	}
 
 	rulesByID := map[int64]model.Rule{}
 	for _, rule := range rules {
@@ -272,6 +276,12 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			continue
 		}
 		config.ProtectionRules = append(config.ProtectionRules, BotProtectionFromRule(item))
+	}
+	for _, item := range dynamicRules {
+		if !item.Enabled {
+			continue
+		}
+		config.ProtectionRules = append(config.ProtectionRules, DynamicProtectionFromRule(item))
 	}
 
 	payload, err := json.MarshalIndent(config, "", "  ")
@@ -411,6 +421,97 @@ func BotProtectionFromRule(item model.BotProtectionRule) model.ProtectionRule {
 		CreatedAt: item.CreatedAt,
 		UpdatedAt: item.UpdatedAt,
 	}
+}
+
+func DynamicProtectionFromRule(item model.DynamicProtectionRule) model.ProtectionRule {
+	path := item.Path
+	if path == "" {
+		path = "/"
+	}
+	pathMatch := item.PathMatch
+	if pathMatch == "" {
+		pathMatch = "prefix"
+	}
+	category := item.Category
+	if category == "" {
+		category = "dynamic-token"
+	}
+	dynamic := dynamicProtectionConfig(item)
+	action := dynamic.FailureAction
+	if category == "waiting-room" {
+		action = dynamic.OverflowAction
+	}
+	if category == "page-mutation" {
+		action = "log-only"
+	}
+	return model.ProtectionRule{
+		ID:       item.ID,
+		Name:     item.Name,
+		Module:   "dynamic-protection",
+		Category: category,
+		SiteID:   item.SiteID,
+		Enabled:  item.Enabled,
+		Priority: protectionPriority(item.Priority),
+		Match: model.ProtectionRuleMatch{
+			Path:      path,
+			PathMatch: pathMatch,
+			Methods:   cloneStrings(item.Methods),
+			Target:    "path",
+		},
+		Dynamic: &dynamic,
+		Action: model.ProtectionRuleAction{
+			Type: action,
+		},
+		CreatedAt: item.CreatedAt,
+		UpdatedAt: item.UpdatedAt,
+	}
+}
+
+func dynamicProtectionConfig(item model.DynamicProtectionRule) model.ProtectionRuleDynamic {
+	category := item.Category
+	if category == "" {
+		category = "dynamic-token"
+	}
+	dynamic := model.ProtectionRuleDynamic{
+		Mode:             category,
+		TokenTTL:         item.TokenTTL,
+		TokenPlacement:   item.TokenPlacement,
+		FailureAction:    item.FailureAction,
+		MutationMarker:   item.MutationMarker,
+		MutationMaxBytes: item.MutationMaxBytes,
+		QueueCapacity:    item.QueueCapacity,
+		AdmissionTTL:     item.AdmissionTTL,
+		RetryInterval:    item.RetryInterval,
+		OverflowAction:   item.OverflowAction,
+	}
+	if dynamic.TokenTTL == 0 {
+		dynamic.TokenTTL = 300
+	}
+	if dynamic.TokenPlacement == "" {
+		dynamic.TokenPlacement = "cookie"
+	}
+	if dynamic.FailureAction == "" {
+		dynamic.FailureAction = "block"
+	}
+	if dynamic.MutationMarker == "" {
+		dynamic.MutationMarker = "body-end"
+	}
+	if dynamic.MutationMaxBytes == 0 {
+		dynamic.MutationMaxBytes = 262144
+	}
+	if dynamic.QueueCapacity == 0 {
+		dynamic.QueueCapacity = 100
+	}
+	if dynamic.AdmissionTTL == 0 {
+		dynamic.AdmissionTTL = 300
+	}
+	if dynamic.RetryInterval == 0 {
+		dynamic.RetryInterval = 5
+	}
+	if dynamic.OverflowAction == "" {
+		dynamic.OverflowAction = "waiting-room"
+	}
+	return dynamic
 }
 
 func accessControlMatch(item model.AccessListEntry) model.ProtectionRuleMatch {
@@ -556,6 +657,10 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 	if err != nil {
 		return err
 	}
+	dynamicRules, err := dataStore.ListDynamicProtectionRules(ctx)
+	if err != nil {
+		return err
+	}
 
 	siteIDs := map[int64]bool{}
 	for _, site := range sites {
@@ -637,6 +742,13 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 	for _, item := range botRules {
 		if item.Enabled {
 			if err := validateBotProtectionRule(item); err != nil {
+				return err
+			}
+		}
+	}
+	for _, item := range dynamicRules {
+		if item.Enabled {
+			if err := validateDynamicProtectionRule(item); err != nil {
 				return err
 			}
 		}
@@ -775,6 +887,62 @@ func validateBotProtectionRule(item model.BotProtectionRule) error {
 	}
 	if item.Priority < 0 {
 		return fmt.Errorf("bot protection rule %d priority cannot be negative", item.ID)
+	}
+	return nil
+}
+
+func validateDynamicProtectionRule(item model.DynamicProtectionRule) error {
+	if item.Name == "" {
+		return fmt.Errorf("dynamic protection rule %d name is required", item.ID)
+	}
+	if item.Category != "dynamic-token" && item.Category != "page-mutation" && item.Category != "waiting-room" {
+		return fmt.Errorf("dynamic protection rule %d category is unsupported", item.ID)
+	}
+	if item.Path == "" || !strings.HasPrefix(item.Path, "/") {
+		return fmt.Errorf("dynamic protection rule %d path must start with /", item.ID)
+	}
+	if item.PathMatch != "" && item.PathMatch != "exact" && item.PathMatch != "prefix" {
+		return fmt.Errorf("dynamic protection rule %d path_match is unsupported", item.ID)
+	}
+	for _, method := range item.Methods {
+		if method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" {
+			return fmt.Errorf("dynamic protection rule %d method is unsupported", item.ID)
+		}
+	}
+	if item.Priority < 0 {
+		return fmt.Errorf("dynamic protection rule %d priority cannot be negative", item.ID)
+	}
+	switch item.Category {
+	case "dynamic-token":
+		if item.TokenTTL <= 0 || item.TokenTTL > 86400 {
+			return fmt.Errorf("dynamic protection rule %d token_ttl_sec is invalid", item.ID)
+		}
+		if item.TokenPlacement != "cookie" && item.TokenPlacement != "header" && item.TokenPlacement != "query" {
+			return fmt.Errorf("dynamic protection rule %d token_placement is unsupported", item.ID)
+		}
+		if item.FailureAction != "block" && item.FailureAction != "log-only" {
+			return fmt.Errorf("dynamic protection rule %d failure_action is unsupported", item.ID)
+		}
+	case "page-mutation":
+		if item.MutationMarker != "head-end" && item.MutationMarker != "body-end" {
+			return fmt.Errorf("dynamic protection rule %d mutation_marker is unsupported", item.ID)
+		}
+		if item.MutationMaxBytes <= 0 || item.MutationMaxBytes > 1048576 {
+			return fmt.Errorf("dynamic protection rule %d mutation_max_bytes is invalid", item.ID)
+		}
+	case "waiting-room":
+		if item.QueueCapacity <= 0 || item.QueueCapacity > 100000 {
+			return fmt.Errorf("dynamic protection rule %d queue_capacity is invalid", item.ID)
+		}
+		if item.AdmissionTTL <= 0 || item.AdmissionTTL > 86400 {
+			return fmt.Errorf("dynamic protection rule %d admission_ttl_sec is invalid", item.ID)
+		}
+		if item.RetryInterval <= 0 || item.RetryInterval > 86400 {
+			return fmt.Errorf("dynamic protection rule %d retry_interval_sec is invalid", item.ID)
+		}
+		if item.OverflowAction != "waiting-room" && item.OverflowAction != "block" && item.OverflowAction != "log-only" {
+			return fmt.Errorf("dynamic protection rule %d overflow_action is unsupported", item.ID)
+		}
 	}
 	return nil
 }

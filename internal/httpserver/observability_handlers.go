@@ -119,6 +119,9 @@ func normalizeWAFEvent(item *model.WAFEvent) {
 	item.BanReason = strings.TrimSpace(item.BanReason)
 	item.ChallengeMode = strings.ToLower(strings.TrimSpace(item.ChallengeMode))
 	item.ChallengeResult = strings.ToLower(strings.TrimSpace(item.ChallengeResult))
+	if item.Module == "dynamic-protection" && item.AdvancedTarget == "" {
+		item.AdvancedTarget = strings.ToLower(strings.TrimSpace(item.ChallengeResult))
+	}
 }
 
 func validateWAFEvent(item model.WAFEvent) error {
@@ -175,6 +178,7 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 		AttackType:      strings.ToLower(strings.TrimSpace(query.Get("attack_type"))),
 		AdvancedTarget:  strings.ToLower(strings.TrimSpace(query.Get("advanced_target"))),
 		ChallengeResult: strings.ToLower(strings.TrimSpace(query.Get("challenge_result"))),
+		DynamicResult:   strings.ToLower(strings.TrimSpace(query.Get("dynamic_result"))),
 	}
 	var ok bool
 	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {

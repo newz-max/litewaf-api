@@ -75,6 +75,12 @@ type Store interface {
 	CreateBotProtectionRule(context.Context, model.BotProtectionRule) (model.BotProtectionRule, error)
 	UpdateBotProtectionRule(context.Context, int64, model.BotProtectionRule) (model.BotProtectionRule, error)
 	DeleteBotProtectionRule(context.Context, int64) error
+
+	ListDynamicProtectionRules(context.Context) ([]model.DynamicProtectionRule, error)
+	GetDynamicProtectionRule(context.Context, int64) (model.DynamicProtectionRule, error)
+	CreateDynamicProtectionRule(context.Context, model.DynamicProtectionRule) (model.DynamicProtectionRule, error)
+	UpdateDynamicProtectionRule(context.Context, int64, model.DynamicProtectionRule) (model.DynamicProtectionRule, error)
+	DeleteDynamicProtectionRule(context.Context, int64) error
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {

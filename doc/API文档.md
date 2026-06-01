@@ -90,7 +90,7 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
-发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并同步输出 CC 防护、访问控制、上传防护和 Bot / 人机验证子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
+发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并同步输出 CC 防护、访问控制、上传防护、Bot / 人机验证和动态防护子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
 
 ```json
 {
@@ -164,12 +164,32 @@ Authorization: Bearer <token>
       "action": {
         "type": "block"
       }
+    },
+    {
+      "module": "dynamic-protection",
+      "category": "dynamic-token",
+      "priority": 80,
+      "match": {
+        "target": "path",
+        "path": "/admin",
+        "path_match": "prefix",
+        "methods": []
+      },
+      "dynamic": {
+        "mode": "dynamic-token",
+        "token_ttl_sec": 300,
+        "token_placement": "cookie",
+        "failure_action": "block"
+      },
+      "action": {
+        "type": "block"
+      }
     }
   ]
 }
 ```
 
-发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。
+发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。`summary.dynamic_protection` 包含动态防护规则总数、启用数量、动态令牌数量、页面动态化数量、等候室数量、阻断数量、观察数量、等候室动作数量和宽泛路径提示。
 
 ## 黑白名单
 
@@ -341,6 +361,113 @@ Bot / 人机验证接口使用独立规则存储，对外以 `module=bot-protect
 
 管理员可以创建、更新和删除 Bot 验证规则；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=bot_protection_rule` 的审计日志。
 
+## 动态防护 / 等候室
+
+动态防护接口使用独立规则存储，对外以 `module=dynamic-protection` 的防护规则模型呈现。当前阶段支持 `dynamic-token`、`page-mutation` 和 `waiting-room` 三类规则，不包含 captcha、行为评分、设备指纹、完整 JavaScript 混淆或分布式全局队列。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/dynamic-protection/rules` | 读 | 查询动态防护规则 |
+| POST | `/api/v1/dynamic-protection/rules` | 写 | 创建动态防护规则 |
+| GET | `/api/v1/dynamic-protection/rules/{id}` | 读 | 查询动态防护规则 |
+| PUT | `/api/v1/dynamic-protection/rules/{id}` | 写 | 更新动态防护规则 |
+| DELETE | `/api/v1/dynamic-protection/rules/{id}` | 写 | 删除动态防护规则 |
+
+列表支持过滤：
+
+- `site_id`：站点 ID。
+- `enabled`：`true` 或 `false`。
+- `category`：`dynamic-token`、`page-mutation`、`waiting-room`。
+
+动态令牌请求示例：
+
+```json
+{
+  "name": "后台动态令牌",
+  "site_id": 1,
+  "enabled": true,
+  "priority": 80,
+  "category": "dynamic-token",
+  "match": {
+    "path": "/admin",
+    "path_match": "prefix",
+    "methods": []
+  },
+  "dynamic": {
+    "mode": "dynamic-token",
+    "token_ttl_sec": 300,
+    "token_placement": "cookie",
+    "failure_action": "block"
+  }
+}
+```
+
+页面动态化请求示例：
+
+```json
+{
+  "name": "HTML 页面标记注入",
+  "site_id": 1,
+  "enabled": true,
+  "priority": 90,
+  "category": "page-mutation",
+  "match": {
+    "path": "/",
+    "path_match": "prefix",
+    "methods": ["GET"]
+  },
+  "dynamic": {
+    "mode": "page-mutation",
+    "mutation_marker": "body-end",
+    "mutation_max_bytes": 262144
+  }
+}
+```
+
+等候室请求示例：
+
+```json
+{
+  "name": "抢购路径等候室",
+  "site_id": 1,
+  "enabled": true,
+  "priority": 70,
+  "category": "waiting-room",
+  "match": {
+    "path": "/checkout",
+    "path_match": "prefix",
+    "methods": []
+  },
+  "dynamic": {
+    "mode": "waiting-room",
+    "queue_capacity": 100,
+    "admission_ttl_sec": 300,
+    "retry_interval_sec": 5,
+    "overflow_action": "waiting-room"
+  }
+}
+```
+
+支持字段：
+
+- `module` 固定为 `dynamic-protection`；创建和更新时可省略，API 会填充默认值。
+- `category` 支持 `dynamic-token`、`page-mutation`、`waiting-room`。
+- `match.path` 必须以 `/` 开头。
+- `match.path_match` 支持 `exact`、`prefix`；prefix 匹配按路径段边界处理，`/admin` 不匹配 `/admin2`。
+- `match.methods` 支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`、`OPTIONS`，空数组表示全部方法。
+- `dynamic.token_ttl_sec` 必须大于 `0` 且不超过 `86400`。
+- `dynamic.token_placement` 支持 `cookie`、`header`、`query`；网关不会记录原始 token。
+- `dynamic.failure_action` 支持 `block`、`log-only`。
+- `dynamic.mutation_marker` 支持 `head-end`、`body-end`。
+- `dynamic.mutation_max_bytes` 必须大于 `0` 且不超过 `1048576`。
+- `dynamic.queue_capacity` 必须大于 `0` 且不超过 `100000`。
+- `dynamic.admission_ttl_sec` 和 `dynamic.retry_interval_sec` 必须大于 `0` 且不超过 `86400`。
+- `dynamic.overflow_action` 支持 `waiting-room`、`block`、`log-only`。
+- `action.type` 可省略；动态令牌规则必须与 `failure_action` 一致，等候室规则必须与 `overflow_action` 一致，页面动态化固定为 `log-only`。
+- `priority` 不能为负数，发布和网关按较小值优先执行。
+
+管理员可以创建、更新和删除动态防护规则；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=dynamic_protection_rule` 的审计日志。
+
 ## 限流
 
 | 方法 | 路径 | 权限 | 说明 |
@@ -453,6 +580,7 @@ GET /api/v1/attack-logs?module=attack-protection&attack_type=sqli
 GET /api/v1/attack-logs?module=access-control&action=block
 GET /api/v1/attack-logs?module=upload-protection&action=block
 GET /api/v1/attack-logs?module=bot-protection&challenge_result=failed
+GET /api/v1/attack-logs?module=dynamic-protection&dynamic_result=token-failed
 ```
 
 攻击防护事件字段包括 `module`、`category`、`attack_type`、`group_name`、`rule_name`、`rule_id`、`target`、`action`、`score`、`summary` 和 `disposition`。观测汇总中的 `attack_protection` 按 `attack_type|action|disposition` 维度统计。
@@ -462,6 +590,8 @@ GET /api/v1/attack-logs?module=bot-protection&challenge_result=failed
 上传防护事件字段包括 `module=upload-protection`、`category=upload`、`rule_name`、`rule_id`、`target`、`action`、`disposition`、`threshold` 和 `upload_metadata`。观测汇总中的 `upload_protection` 按 `action|disposition` 维度统计，例如 `block|blocked` 或 `log-only|observed`。
 
 Bot 验证事件字段包括 `module=bot-protection`、`category=challenge`、`rule_name`、`rule_id`、`target`、`action`、`disposition`、`challenge_mode` 和 `challenge_result`。`challenge_result` 支持 `issued`、`passed`、`failed`；观测汇总中的 `bot_protection` 按 `challenge_result|action|disposition` 维度统计，例如 `issued|block|blocked`、`passed|pass|proxied` 或 `failed|block|blocked`。
+
+动态防护事件字段包括 `module=dynamic-protection`、`category`、`rule_name`、`rule_id`、`target`、`action`、`disposition` 和 `advanced_target`。`advanced_target` 承载动态结果，可通过 `dynamic_result` 查询参数过滤，常见值包括 `token-issued`、`token-passed`、`token-failed`、`mutation-applied`、`mutation-skipped`、`queue-admitted`、`queue-queued`、`queue-blocked` 和 `queue-observed`。观测汇总中的 `dynamic_protection` 按 `category|result|action|disposition` 维度统计。
 
 ## 审计和系统
 

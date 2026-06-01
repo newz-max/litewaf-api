@@ -81,6 +81,12 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("PUT /api/v1/bot-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateBotProtectionRule))
 	mux.HandleFunc("DELETE /api/v1/bot-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteBotProtectionRule))
 
+	mux.HandleFunc("GET /api/v1/dynamic-protection/rules", handlers.require(permissionRead, handlers.listDynamicProtectionRules))
+	mux.HandleFunc("POST /api/v1/dynamic-protection/rules", handlers.require(permissionWrite, handlers.createDynamicProtectionRule))
+	mux.HandleFunc("GET /api/v1/dynamic-protection/rules/{id}", handlers.require(permissionRead, handlers.getDynamicProtectionRule))
+	mux.HandleFunc("PUT /api/v1/dynamic-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateDynamicProtectionRule))
+	mux.HandleFunc("DELETE /api/v1/dynamic-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteDynamicProtectionRule))
+
 	mux.HandleFunc("GET /api/v1/attack-protection/groups", handlers.require(permissionRead, handlers.listAttackProtectionGroups))
 	mux.HandleFunc("PUT /api/v1/attack-protection/groups/{attack_type}", handlers.require(permissionWrite, handlers.updateAttackProtectionGroup))
 }

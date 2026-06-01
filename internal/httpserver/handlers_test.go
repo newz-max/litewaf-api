@@ -380,6 +380,27 @@ func TestBotProtectionRulesEmptyList(t *testing.T) {
 	}
 }
 
+func TestDynamicProtectionRulesEmptyList(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-protection/rules", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode dynamic protection rules: %v", err)
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("expected empty list, got %+v", response.Items)
+	}
+}
+
 func TestBotProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
@@ -451,6 +472,74 @@ func TestBotProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	}
 }
 
+func TestDynamicProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Admin dynamic token","site_id":3,"priority":65,"category":"dynamic-token","match":{"path":"/admin","path_match":"prefix","methods":["get"]},"dynamic":{"mode":"dynamic-token","token_ttl_sec":600,"token_placement":"cookie","failure_action":"block"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-protection/rules", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create dynamic protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode create dynamic protection: %v", err)
+	}
+	if createResponse.Item.Module != "dynamic-protection" || createResponse.Item.Category != "dynamic-token" {
+		t.Fatalf("unexpected dynamic protection identity: %+v", createResponse.Item)
+	}
+	if createResponse.Item.Dynamic == nil || createResponse.Item.Dynamic.TokenTTL != 600 || createResponse.Item.Dynamic.TokenPlacement != "cookie" || createResponse.Item.Dynamic.FailureAction != "block" {
+		t.Fatalf("unexpected dynamic protection config: %+v", createResponse.Item.Dynamic)
+	}
+	if createResponse.Item.Action.Type != "block" || createResponse.Item.Priority != 65 {
+		t.Fatalf("unexpected dynamic protection action: %+v", createResponse.Item)
+	}
+
+	updateBody := bytes.NewBufferString(`{"name":"Waiting room","site_id":3,"enabled":false,"category":"waiting-room","match":{"path":"/","path_match":"prefix","methods":[]},"dynamic":{"mode":"waiting-room","queue_capacity":20,"admission_ttl_sec":120,"retry_interval_sec":5,"overflow_action":"waiting-room"}}`)
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/dynamic-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), updateBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update dynamic protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var updateResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&updateResponse); err != nil {
+		t.Fatalf("decode update dynamic protection: %v", err)
+	}
+	if updateResponse.Item.Enabled || updateResponse.Item.Category != "waiting-room" || updateResponse.Item.Dynamic.QueueCapacity != 20 || updateResponse.Item.Action.Type != "waiting-room" {
+		t.Fatalf("unexpected updated dynamic protection: %+v", updateResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=dynamic_protection_rule", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode audit logs: %v", err)
+	}
+	if len(auditResponse.Items) < 2 {
+		t.Fatalf("expected create and update audit logs, got %+v", auditResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodDelete, "/api/v1/dynamic-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete dynamic protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestBotProtectionWriteValidationAndAuthorization(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
@@ -479,6 +568,41 @@ func TestBotProtectionWriteValidationAndAuthorization(t *testing.T) {
 	}
 	validBody := bytes.NewBufferString(`{"name":"Admin challenge","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/bot-protection/rules", validBody), readonlyToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly create status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDynamicProtectionWriteValidationAndAuthorization(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	invalidBodies := []string{
+		`{"name":"bad","category":"dynamic-token","match":{"path":"admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
+		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"regex"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
+		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix","methods":["TRACE"]},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
+		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":0,"token_placement":"cookie","failure_action":"block"}}`,
+		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"body","failure_action":"block"}}`,
+		`{"name":"bad","category":"page-mutation","match":{"path":"/","path_match":"prefix"},"dynamic":{"mode":"page-mutation","mutation_marker":"middle","mutation_max_bytes":1000},"action":{"type":"log-only"}}`,
+		`{"name":"bad","category":"waiting-room","match":{"path":"/","path_match":"prefix"},"dynamic":{"mode":"waiting-room","queue_capacity":0,"admission_ttl_sec":300,"retry_interval_sec":5,"overflow_action":"waiting-room"}}`,
+	}
+	for _, body := range invalidBodies {
+		req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-protection/rules", bytes.NewBufferString(body)), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s status = %d body=%s", body, rec.Code, rec.Body.String())
+		}
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	validBody := bytes.NewBufferString(`{"name":"Admin dynamic token","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-protection/rules", validBody), readonlyToken)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -1144,5 +1268,50 @@ func TestBotProtectionEventQueryAndSummary(t *testing.T) {
 	}
 	if len(summaryResponse.Item.BotProtection) != 1 || summaryResponse.Item.BotProtection[0].Key != "failed|block|blocked" {
 		t.Fatalf("unexpected bot protection summary: %+v", summaryResponse.Item)
+	}
+}
+
+func TestDynamicProtectionEventQueryAndSummary(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"req-dynamic","site_id":1,"event_type":"dynamic-protection","rule_id":15,"rule_type":"dynamic-token","target":"path","module":"dynamic-protection","category":"dynamic-token","rule_name":"Admin token","advanced_target":"token-failed","action":"block","disposition":"blocked","client_ip":"192.0.2.60","method":"GET","uri":"/admin","summary":"dynamic token failed"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest dynamic protection waf status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?module=dynamic-protection&dynamic_result=token-failed", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("query dynamic protection logs status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var attackResponse struct {
+		Items []model.WAFEvent `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&attackResponse); err != nil {
+		t.Fatalf("decode dynamic protection logs: %v", err)
+	}
+	if len(attackResponse.Items) != 1 || attackResponse.Items[0].Module != "dynamic-protection" || attackResponse.Items[0].AdvancedTarget != "token-failed" {
+		t.Fatalf("unexpected dynamic protection logs: %+v", attackResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/observability/summary", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var summaryResponse struct {
+		Item model.ObservabilitySummary `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&summaryResponse); err != nil {
+		t.Fatalf("decode summary: %v", err)
+	}
+	if len(summaryResponse.Item.DynamicProtection) != 1 || summaryResponse.Item.DynamicProtection[0].Key != "dynamic-token|token-failed|block|blocked" {
+		t.Fatalf("unexpected dynamic protection summary: %+v", summaryResponse.Item)
 	}
 }

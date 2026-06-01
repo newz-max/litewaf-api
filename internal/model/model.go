@@ -193,6 +193,7 @@ type WAFEventFilter struct {
 	AttackType      string
 	AdvancedTarget  string
 	ChallengeResult string
+	DynamicResult   string
 	MinScore        int
 	Since           time.Time
 	Until           time.Time
@@ -200,22 +201,23 @@ type WAFEventFilter struct {
 }
 
 type ObservabilitySummary struct {
-	Requests         int64          `json:"requests"`
-	BlockedRequests  int64          `json:"blocked_requests"`
-	WAFMatches       int64          `json:"waf_matches"`
-	RateLimited      int64          `json:"rate_limited"`
-	ScoreBlocks      int64          `json:"score_blocks"`
-	BodyDetections   int64          `json:"body_detections"`
-	UploadDetections int64          `json:"upload_detections"`
-	DynamicBans      int64          `json:"dynamic_bans"`
-	AccessControl    []SummaryCount `json:"access_control"`
-	TopIPs           []SummaryCount `json:"top_ips"`
-	TopURIs          []SummaryCount `json:"top_uris"`
-	TopRules         []SummaryCount `json:"top_rules"`
-	AttackTypes      []SummaryCount `json:"attack_types"`
-	AttackProtection []SummaryCount `json:"attack_protection"`
-	UploadProtection []SummaryCount `json:"upload_protection"`
-	BotProtection    []SummaryCount `json:"bot_protection"`
+	Requests          int64          `json:"requests"`
+	BlockedRequests   int64          `json:"blocked_requests"`
+	WAFMatches        int64          `json:"waf_matches"`
+	RateLimited       int64          `json:"rate_limited"`
+	ScoreBlocks       int64          `json:"score_blocks"`
+	BodyDetections    int64          `json:"body_detections"`
+	UploadDetections  int64          `json:"upload_detections"`
+	DynamicBans       int64          `json:"dynamic_bans"`
+	AccessControl     []SummaryCount `json:"access_control"`
+	TopIPs            []SummaryCount `json:"top_ips"`
+	TopURIs           []SummaryCount `json:"top_uris"`
+	TopRules          []SummaryCount `json:"top_rules"`
+	AttackTypes       []SummaryCount `json:"attack_types"`
+	AttackProtection  []SummaryCount `json:"attack_protection"`
+	UploadProtection  []SummaryCount `json:"upload_protection"`
+	BotProtection     []SummaryCount `json:"bot_protection"`
+	DynamicProtection []SummaryCount `json:"dynamic_protection"`
 }
 
 type AttackProtectionGroup struct {
@@ -304,6 +306,7 @@ type ProtectionRule struct {
 	Limit     ProtectionRuleLimit      `json:"limit"`
 	Upload    *ProtectionRuleUpload    `json:"upload,omitempty"`
 	Challenge *ProtectionRuleChallenge `json:"challenge,omitempty"`
+	Dynamic   *ProtectionRuleDynamic   `json:"dynamic,omitempty"`
 	Action    ProtectionRuleAction     `json:"action"`
 	CreatedAt time.Time                `json:"created_at"`
 	UpdatedAt time.Time                `json:"updated_at"`
@@ -336,6 +339,19 @@ type ProtectionRuleChallenge struct {
 	Mode          string `json:"mode"`
 	VerifyTTL     int    `json:"verify_ttl_sec"`
 	FailureAction string `json:"failure_action"`
+}
+
+type ProtectionRuleDynamic struct {
+	Mode             string `json:"mode"`
+	TokenTTL         int    `json:"token_ttl_sec"`
+	TokenPlacement   string `json:"token_placement"`
+	FailureAction    string `json:"failure_action"`
+	MutationMarker   string `json:"mutation_marker"`
+	MutationMaxBytes int    `json:"mutation_max_bytes"`
+	QueueCapacity    int    `json:"queue_capacity"`
+	AdmissionTTL     int    `json:"admission_ttl_sec"`
+	RetryInterval    int    `json:"retry_interval_sec"`
+	OverflowAction   string `json:"overflow_action"`
 }
 
 type ProtectionRuleAction struct {
@@ -372,4 +388,27 @@ type BotProtectionRule struct {
 	Priority      int       `json:"priority"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type DynamicProtectionRule struct {
+	ID               int64     `json:"id"`
+	Name             string    `json:"name"`
+	Category         string    `json:"category"`
+	Path             string    `json:"path"`
+	PathMatch        string    `json:"path_match"`
+	Methods          []string  `json:"methods"`
+	TokenTTL         int       `json:"token_ttl_sec"`
+	TokenPlacement   string    `json:"token_placement"`
+	FailureAction    string    `json:"failure_action"`
+	MutationMarker   string    `json:"mutation_marker"`
+	MutationMaxBytes int       `json:"mutation_max_bytes"`
+	QueueCapacity    int       `json:"queue_capacity"`
+	AdmissionTTL     int       `json:"admission_ttl_sec"`
+	RetryInterval    int       `json:"retry_interval_sec"`
+	OverflowAction   string    `json:"overflow_action"`
+	SiteID           int64     `json:"site_id"`
+	Enabled          bool      `json:"enabled"`
+	Priority         int       `json:"priority"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }

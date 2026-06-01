@@ -756,6 +756,104 @@ func (s *PostgresStore) DeleteBotProtectionRule(ctx context.Context, id int64) e
 	return checkRowsAffected(result, err)
 }
 
+func (s *PostgresStore) ListDynamicProtectionRules(ctx context.Context) ([]model.DynamicProtectionRule, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, category, path, path_match, methods, token_ttl_sec, token_placement, failure_action,
+			mutation_marker, mutation_max_bytes, queue_capacity, admission_ttl_sec, retry_interval_sec,
+			overflow_action, site_id, enabled, priority, created_at, updated_at
+		FROM dynamic_protection_rules
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.DynamicProtectionRule
+	for rows.Next() {
+		var item model.DynamicProtectionRule
+		var methods string
+		if err := rows.Scan(
+			&item.ID, &item.Name, &item.Category, &item.Path, &item.PathMatch, &methods,
+			&item.TokenTTL, &item.TokenPlacement, &item.FailureAction,
+			&item.MutationMarker, &item.MutationMaxBytes, &item.QueueCapacity,
+			&item.AdmissionTTL, &item.RetryInterval, &item.OverflowAction,
+			&item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Methods = splitMethods(methods)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetDynamicProtectionRule(ctx context.Context, id int64) (model.DynamicProtectionRule, error) {
+	var item model.DynamicProtectionRule
+	var methods string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, category, path, path_match, methods, token_ttl_sec, token_placement, failure_action,
+			mutation_marker, mutation_max_bytes, queue_capacity, admission_ttl_sec, retry_interval_sec,
+			overflow_action, site_id, enabled, priority, created_at, updated_at
+		FROM dynamic_protection_rules
+		WHERE id = $1`, id).
+		Scan(
+			&item.ID, &item.Name, &item.Category, &item.Path, &item.PathMatch, &methods,
+			&item.TokenTTL, &item.TokenPlacement, &item.FailureAction,
+			&item.MutationMarker, &item.MutationMaxBytes, &item.QueueCapacity,
+			&item.AdmissionTTL, &item.RetryInterval, &item.OverflowAction,
+			&item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt,
+		)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.DynamicProtectionRule{}, ErrNotFound
+	}
+	item.Methods = splitMethods(methods)
+	return item, err
+}
+
+func (s *PostgresStore) CreateDynamicProtectionRule(ctx context.Context, item model.DynamicProtectionRule) (model.DynamicProtectionRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO dynamic_protection_rules (
+			name, category, path, path_match, methods, token_ttl_sec, token_placement, failure_action,
+			mutation_marker, mutation_max_bytes, queue_capacity, admission_ttl_sec, retry_interval_sec,
+			overflow_action, site_id, enabled, priority
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Category, item.Path, item.PathMatch, joinMethods(item.Methods),
+		item.TokenTTL, item.TokenPlacement, item.FailureAction,
+		item.MutationMarker, item.MutationMaxBytes, item.QueueCapacity,
+		item.AdmissionTTL, item.RetryInterval, item.OverflowAction,
+		item.SiteID, item.Enabled, item.Priority).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateDynamicProtectionRule(ctx context.Context, id int64, item model.DynamicProtectionRule) (model.DynamicProtectionRule, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE dynamic_protection_rules
+		SET name = $2, category = $3, path = $4, path_match = $5, methods = $6,
+			token_ttl_sec = $7, token_placement = $8, failure_action = $9,
+			mutation_marker = $10, mutation_max_bytes = $11, queue_capacity = $12,
+			admission_ttl_sec = $13, retry_interval_sec = $14, overflow_action = $15,
+			site_id = $16, enabled = $17, priority = $18, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Category, item.Path, item.PathMatch, joinMethods(item.Methods),
+		item.TokenTTL, item.TokenPlacement, item.FailureAction,
+		item.MutationMarker, item.MutationMaxBytes, item.QueueCapacity,
+		item.AdmissionTTL, item.RetryInterval, item.OverflowAction,
+		item.SiteID, item.Enabled, item.Priority).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.DynamicProtectionRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteDynamicProtectionRule(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM dynamic_protection_rules WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
 func (s *PostgresStore) policyBindings(ctx context.Context, policyID int64) ([]int64, []int64, error) {
 	siteIDs, err := queryIDs(ctx, s.db, `SELECT site_id FROM policy_sites WHERE policy_id = $1 ORDER BY site_id`, policyID)
 	if err != nil {

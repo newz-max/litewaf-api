@@ -111,12 +111,13 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			AND ($9 = '' OR advanced_target = $9 OR target = $9)
 			AND ($10 = '' OR challenge_result = $10)
 			AND ($11::integer = 0 OR score >= $11)
-			AND ($12::timestamptz IS NULL OR created_at >= $12)
-			AND ($13::timestamptz IS NULL OR created_at <= $13)
+			AND ($12 = '' OR advanced_target = $12)
+			AND ($13::timestamptz IS NULL OR created_at >= $13)
+			AND ($14::timestamptz IS NULL OR created_at <= $14)
 		ORDER BY id DESC
-		LIMIT $14 OFFSET $15`,
+		LIMIT $15 OFFSET $16`,
 		filter.SiteID, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
-		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
+		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, filter.DynamicResult, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +206,10 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 		return summary, err
 	}
 	summary.BotProtection, err = s.botProtectionSummaryCounts(ctx, filter, limit)
+	if err != nil {
+		return summary, err
+	}
+	summary.DynamicProtection, err = s.dynamicProtectionSummaryCounts(ctx, filter, limit)
 	return summary, err
 }
 
@@ -297,6 +302,34 @@ func (s *PostgresStore) botProtectionSummaryCounts(ctx context.Context, filter m
 		SELECT challenge_result || '|' || action || '|' || disposition AS key, count(*) AS count
 		FROM waf_events
 		WHERE module = 'bot-protection'
+			AND action <> ''
+			AND ($1::timestamptz IS NULL OR created_at >= $1)
+			AND ($2::timestamptz IS NULL OR created_at <= $2)
+		GROUP BY key
+		ORDER BY count DESC, key ASC
+		LIMIT $3`, nullableTime(filter.Since), nullableTime(filter.Until), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.SummaryCount
+	for rows.Next() {
+		var item model.SummaryCount
+		if err := rows.Scan(&item.Key, &item.Count); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(item.Key) != "" {
+			items = append(items, item)
+		}
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) dynamicProtectionSummaryCounts(ctx context.Context, filter model.ObservabilitySummaryFilter, limit int) ([]model.SummaryCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT category || '|' || advanced_target || '|' || action || '|' || disposition AS key, count(*) AS count
+		FROM waf_events
+		WHERE module = 'dynamic-protection'
 			AND action <> ''
 			AND ($1::timestamptz IS NULL OR created_at >= $1)
 			AND ($2::timestamptz IS NULL OR created_at <= $2)

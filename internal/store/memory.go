@@ -25,6 +25,7 @@ type MemoryStore struct {
 	nextRateID      int64
 	nextUploadID    int64
 	nextBotID       int64
+	nextDynamicID   int64
 	nextAccessLogID int64
 	nextWAFEventID  int64
 	sites           map[int64]model.Site
@@ -37,6 +38,7 @@ type MemoryStore struct {
 	rateLimits      map[int64]model.RateLimitRule
 	uploadRules     map[int64]model.UploadProtectionRule
 	botRules        map[int64]model.BotProtectionRule
+	dynamicRules    map[int64]model.DynamicProtectionRule
 	accessLogs      map[int64]model.AccessLog
 	wafEvents       map[int64]model.WAFEvent
 }
@@ -53,6 +55,7 @@ func NewMemoryStore() *MemoryStore {
 		nextRateID:      1,
 		nextUploadID:    1,
 		nextBotID:       1,
+		nextDynamicID:   1,
 		nextAccessLogID: 1,
 		nextWAFEventID:  1,
 		sites:           map[int64]model.Site{},
@@ -65,6 +68,7 @@ func NewMemoryStore() *MemoryStore {
 		rateLimits:      map[int64]model.RateLimitRule{},
 		uploadRules:     map[int64]model.UploadProtectionRule{},
 		botRules:        map[int64]model.BotProtectionRule{},
+		dynamicRules:    map[int64]model.DynamicProtectionRule{},
 		accessLogs:      map[int64]model.AccessLog{},
 		wafEvents:       map[int64]model.WAFEvent{},
 	}
@@ -431,6 +435,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	accessControlCounts := map[string]int64{}
 	uploadProtectionCounts := map[string]int64{}
 	botProtectionCounts := map[string]int64{}
+	dynamicProtectionCounts := map[string]int64{}
 	for _, item := range s.accessLogs {
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
@@ -490,6 +495,9 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		if item.Module == "bot-protection" {
 			increment(botProtectionCounts, strings.Join([]string{item.ChallengeResult, item.Action, item.Disposition}, "|"))
 		}
+		if item.Module == "dynamic-protection" {
+			increment(dynamicProtectionCounts, strings.Join([]string{item.Category, item.AdvancedTarget, item.Action, item.Disposition}, "|"))
+		}
 	}
 	summary.TopIPs = topCounts(ipCounts, limit)
 	summary.TopURIs = topCounts(uriCounts, limit)
@@ -499,6 +507,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	summary.AttackProtection = topCounts(attackProtectionCounts, limit)
 	summary.UploadProtection = topCounts(uploadProtectionCounts, limit)
 	summary.BotProtection = topCounts(botProtectionCounts, limit)
+	summary.DynamicProtection = topCounts(dynamicProtectionCounts, limit)
 	return summary, nil
 }
 
@@ -742,6 +751,67 @@ func (s *MemoryStore) DeleteBotProtectionRule(_ context.Context, id int64) error
 	return nil
 }
 
+func (s *MemoryStore) ListDynamicProtectionRules(context.Context) ([]model.DynamicProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.DynamicProtectionRule, 0, len(s.dynamicRules))
+	for _, item := range s.dynamicRules {
+		item.Methods = cloneStrings(item.Methods)
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetDynamicProtectionRule(_ context.Context, id int64) (model.DynamicProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.dynamicRules[id]
+	if !ok {
+		return model.DynamicProtectionRule{}, ErrNotFound
+	}
+	item.Methods = cloneStrings(item.Methods)
+	return item, nil
+}
+
+func (s *MemoryStore) CreateDynamicProtectionRule(_ context.Context, item model.DynamicProtectionRule) (model.DynamicProtectionRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextDynamicID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item.Methods = cloneStrings(item.Methods)
+	s.dynamicRules[item.ID] = item
+	s.nextDynamicID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateDynamicProtectionRule(_ context.Context, id int64, item model.DynamicProtectionRule) (model.DynamicProtectionRule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.dynamicRules[id]
+	if !ok {
+		return model.DynamicProtectionRule{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	item.Methods = cloneStrings(item.Methods)
+	s.dynamicRules[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteDynamicProtectionRule(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.dynamicRules[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.dynamicRules, id)
+	return nil
+}
+
 func auditMatches(item model.AuditLog, filter model.AuditLogFilter) bool {
 	if filter.Actor != "" && item.Actor != filter.Actor {
 		return false
@@ -818,6 +888,9 @@ func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 		return false
 	}
 	if filter.ChallengeResult != "" && item.ChallengeResult != filter.ChallengeResult {
+		return false
+	}
+	if filter.DynamicResult != "" && item.AdvancedTarget != filter.DynamicResult {
 		return false
 	}
 	if filter.MinScore > 0 && item.Score < filter.MinScore {

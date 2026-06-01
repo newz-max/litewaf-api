@@ -289,6 +289,41 @@ func TestGenerateExtendedGatewayConfigIncludesBotProtectionRules(t *testing.T) {
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesDynamicProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateDynamicProtectionRule(ctx, model.DynamicProtectionRule{
+		Name: "Admin token", Category: "dynamic-token", Path: "/admin", PathMatch: "prefix", Methods: []string{"GET"},
+		TokenTTL: 600, TokenPlacement: "cookie", FailureAction: "block", SiteID: 3, Enabled: true, Priority: 55,
+	})
+	if err != nil {
+		t.Fatalf("create dynamic protection rule: %v", err)
+	}
+	_, err = dataStore.CreateDynamicProtectionRule(ctx, model.DynamicProtectionRule{
+		Name: "Disabled", Category: "waiting-room", Path: "/", PathMatch: "prefix", QueueCapacity: 20, AdmissionTTL: 120, RetryInterval: 5, OverflowAction: "waiting-room", Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("create disabled dynamic protection rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-dynamic-protection")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected dynamic protection output, got %+v", config.ProtectionRules)
+	}
+	rule := config.ProtectionRules[0]
+	if rule.Module != "dynamic-protection" || rule.Category != "dynamic-token" || rule.Action.Type != "block" {
+		t.Fatalf("unexpected dynamic protection identity/action: %+v", rule)
+	}
+	if rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || len(rule.Match.Methods) != 1 || rule.Priority != 55 {
+		t.Fatalf("unexpected dynamic protection match/priority: %+v", rule)
+	}
+	if rule.Dynamic == nil || rule.Dynamic.TokenTTL != 600 || rule.Dynamic.TokenPlacement != "cookie" || rule.Dynamic.FailureAction != "block" {
+		t.Fatalf("unexpected dynamic protection config: %+v", rule.Dynamic)
+	}
+}
+
 func TestValidateRejectsInvalidAccessControlRule(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
@@ -328,6 +363,20 @@ func TestValidateRejectsInvalidBotProtectionRule(t *testing.T) {
 	}
 	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-bot-protection"); err == nil {
 		t.Fatal("expected invalid bot protection rule to block publish")
+	}
+}
+
+func TestValidateRejectsInvalidDynamicProtectionRule(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateDynamicProtectionRule(ctx, model.DynamicProtectionRule{
+		Name: "Bad token", Category: "dynamic-token", Path: "admin", PathMatch: "prefix", TokenTTL: 300, TokenPlacement: "cookie", FailureAction: "block", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create invalid dynamic rule: %v", err)
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-dynamic-protection"); err == nil {
+		t.Fatal("expected invalid dynamic protection rule to block publish")
 	}
 }
 

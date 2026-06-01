@@ -338,11 +338,13 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
 	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
 	botRules, _ := h.app.Store.ListBotProtectionRules(r.Context())
+	dynamicRules, _ := h.app.Store.ListDynamicProtectionRules(r.Context())
 	ccSummary := ccProtectionSummary(rateLimits)
 	accessControlSummary := accessControlSummary(accessLists)
 	attackSummary := attackProtectionSummary(rules)
 	uploadSummary := uploadProtectionSummary(uploadRules)
 	botSummary := botProtectionSummary(botRules)
+	dynamicSummary := dynamicProtectionSummary(dynamicRules)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -355,6 +357,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"attack_protection":   attackSummary,
 			"upload_protection":   uploadSummary,
 			"bot_protection":      botSummary,
+			"dynamic_protection":  dynamicSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
@@ -519,6 +522,69 @@ func botProtectionSummary(rules []model.BotProtectionRule) envelope {
 		"block":      block,
 		"log_only":   logOnly,
 		"warnings":   warnings,
+	}
+}
+
+func dynamicProtectionSummary(rules []model.DynamicProtectionRule) envelope {
+	enabled := 0
+	dynamicTokens := 0
+	pageMutations := 0
+	waitingRooms := 0
+	block := 0
+	logOnly := 0
+	waitingRoomAction := 0
+	warnings := []string{}
+	for _, item := range rules {
+		if !item.Enabled {
+			continue
+		}
+		enabled++
+		switch item.Category {
+		case "dynamic-token":
+			dynamicTokens++
+			switch item.FailureAction {
+			case "block":
+				block++
+				if item.Path == "/" && item.PathMatch == "prefix" {
+					warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用动态令牌阻断", item.Name))
+				}
+				if len(item.Methods) == 0 {
+					warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用动态令牌阻断", item.Name))
+				}
+			case "log-only":
+				logOnly++
+			}
+		case "page-mutation":
+			pageMutations++
+			logOnly++
+			if item.Path == "/" && item.PathMatch == "prefix" {
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站 HTML 响应启用页面动态化", item.Name))
+			}
+		case "waiting-room":
+			waitingRooms++
+			switch item.OverflowAction {
+			case "waiting-room":
+				waitingRoomAction++
+				if item.Path == "/" && item.PathMatch == "prefix" && item.QueueCapacity < 50 {
+					warnings = append(warnings, fmt.Sprintf("规则 %s 对全站使用较低等候室容量", item.Name))
+				}
+			case "block":
+				block++
+			case "log-only":
+				logOnly++
+			}
+		}
+	}
+	return envelope{
+		"rules":               len(rules),
+		"enabled":             enabled,
+		"dynamic_tokens":      dynamicTokens,
+		"page_mutations":      pageMutations,
+		"waiting_rooms":       waitingRooms,
+		"block":               block,
+		"log_only":            logOnly,
+		"waiting_room_action": waitingRoomAction,
+		"warnings":            warnings,
 	}
 }
 

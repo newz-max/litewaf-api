@@ -14,21 +14,28 @@ type Site struct {
 }
 
 type Rule struct {
-	ID         int64     `json:"id"`
-	Name       string    `json:"name"`
-	Type       string    `json:"type"`
-	Target     string    `json:"target"`
-	Action     string    `json:"action"`
-	Expression string    `json:"expression"`
-	Score      int       `json:"score"`
-	Enabled    bool      `json:"enabled"`
-	Module     string    `json:"module"`
-	Category   string    `json:"category"`
-	AttackType string    `json:"attack_type"`
-	Group      string    `json:"group"`
-	Priority   int       `json:"priority"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID              int64     `json:"id"`
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	Target          string    `json:"target"`
+	Action          string    `json:"action"`
+	Expression      string    `json:"expression"`
+	Score           int       `json:"score"`
+	Enabled         bool      `json:"enabled"`
+	Module          string    `json:"module"`
+	Category        string    `json:"category"`
+	AttackType      string    `json:"attack_type"`
+	Group           string    `json:"group"`
+	Priority        int       `json:"priority"`
+	PackageID       string    `json:"package_id"`
+	PackageVersion  string    `json:"package_version"`
+	PackageRuleID   string    `json:"package_rule_id"`
+	SourceChecksum  string    `json:"source_checksum"`
+	SignatureStatus string    `json:"signature_status"`
+	ReviewStatus    string    `json:"review_status"`
+	LastTestStatus  string    `json:"last_test_status"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type Policy struct {
@@ -178,6 +185,9 @@ type WAFEvent struct {
 	BanRemainingSec int       `json:"ban_remaining_sec"`
 	ChallengeMode   string    `json:"challenge_mode"`
 	ChallengeResult string    `json:"challenge_result"`
+	PackageID       string    `json:"package_id"`
+	PackageVersion  string    `json:"package_version"`
+	PackageRuleID   string    `json:"package_rule_id"`
 	CreatedAt       time.Time `json:"created_at"`
 	Time            string    `json:"time"`
 }
@@ -411,4 +421,88 @@ type DynamicProtectionRule struct {
 	Priority         int       `json:"priority"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type RulePackageSignature struct {
+	KeyID     string `json:"key_id"`
+	Checksum  string `json:"checksum"`
+	Signature string `json:"signature"`
+}
+
+type RulePackageMetadata struct {
+	ID              string               `json:"id"`
+	Name            string               `json:"name"`
+	Version         string               `json:"version"`
+	Author          string               `json:"author"`
+	License         string               `json:"license"`
+	Compatibility   string               `json:"compatibility"`
+	Checksum        string               `json:"checksum"`
+	Signature       RulePackageSignature `json:"signature"`
+	SignatureStatus string               `json:"signature_status"`
+	RuleCount       int                  `json:"rule_count"`
+	Warnings        []string             `json:"warnings"`
+	CreatedAt       time.Time            `json:"created_at,omitempty"`
+	UpdatedAt       time.Time            `json:"updated_at,omitempty"`
+}
+
+type RulePackage struct {
+	Metadata RulePackageMetadata `json:"metadata"`
+	Defaults RulePackageDefaults `json:"defaults"`
+	Rules    []Rule              `json:"rules"`
+}
+
+type RulePackageDefaults struct {
+	Enabled      bool   `json:"enabled"`
+	ReviewStatus string `json:"review_status"`
+}
+
+type RulePackagePreview struct {
+	Package      RulePackageMetadata `json:"package"`
+	Added        []Rule              `json:"added"`
+	Changed      []Rule              `json:"changed"`
+	Skipped      []Rule              `json:"skipped"`
+	Invalid      []RulePackageError  `json:"invalid"`
+	DefaultState bool                `json:"default_enabled"`
+	Warnings     []string            `json:"warnings"`
+}
+
+type RulePackageError struct {
+	RuleID  string `json:"rule_id"`
+	Message string `json:"message"`
+}
+
+type RulePackageImportResult struct {
+	Package  RulePackageMetadata `json:"package"`
+	Imported []Rule              `json:"imported"`
+	Changed  []Rule              `json:"changed"`
+	Skipped  []Rule              `json:"skipped"`
+	Invalid  []RulePackageError  `json:"invalid"`
+}
+
+type RuleTestSample struct {
+	Method         string            `json:"method"`
+	Path           string            `json:"path"`
+	Query          map[string]string `json:"query"`
+	Headers        map[string]string `json:"headers"`
+	Body           string            `json:"body"`
+	UploadFilename string            `json:"upload_filename"`
+	UploadMIME     string            `json:"upload_mime"`
+	UploadSize     int               `json:"upload_size"`
+}
+
+type RuleTestRequest struct {
+	RuleID int64          `json:"rule_id"`
+	Rule   Rule           `json:"rule"`
+	Sample RuleTestSample `json:"sample"`
+}
+
+type RuleTestResult struct {
+	RuleID          int64             `json:"rule_id"`
+	Matched         bool              `json:"matched"`
+	Target          string            `json:"target"`
+	EvaluatedValues []string          `json:"evaluated_values"`
+	Action          string            `json:"action"`
+	Score           int               `json:"score"`
+	Status          string            `json:"status"`
+	Diagnostics     map[string]string `json:"diagnostics"`
 }

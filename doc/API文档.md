@@ -563,6 +563,75 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 
 管理员可以写入攻击防护组；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=attack_protection_group` 的审计日志。
 
+## 高级规则生态
+
+高级规则生态接口用于本地规则包预览、导入、来源追踪和规则测试。第一版只支持操作员主动提交本地 JSON 规则包，不实现远程市场、付费规则源或自动更新。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/rule-packages` | 读 | 查询已导入规则来源包 |
+| GET | `/api/v1/rule-packages/{id}` | 读 | 查询规则包元数据 |
+| POST | `/api/v1/rule-packages/preview` | 写 | 预览规则包，不激活规则 |
+| POST | `/api/v1/rule-packages/import` | 写 | 导入规则包，按 `package_id + package_rule_id` 确定性新增或更新规则 |
+| DELETE | `/api/v1/rule-packages/{id}` | 写 | 删除该来源包导入的规则 |
+| POST | `/api/v1/rules/test` | 写 | 使用受限样例测试规则表达式 |
+
+规则包预览请求：
+
+```json
+{
+  "package": {
+    "id": "community-baseline",
+    "name": "Community baseline",
+    "version": "v1",
+    "author": "LiteWaf Community",
+    "license": "MIT",
+    "compatibility": "litewaf-rule-package-v1",
+    "defaults": {
+      "enabled": false,
+      "review_status": "pending-review"
+    },
+    "rules": [
+      {
+        "id": "xss-query",
+        "name": "Community XSS",
+        "type": "xss",
+        "target": "args",
+        "action": "block",
+        "expression": "(?i)<script",
+        "score": 80
+      }
+    ]
+  }
+}
+```
+
+`package` 为空对象时，API 使用内置默认规则包进行预览或导入。签名状态包括 `verified`、`unsigned`、`invalid`、`untrusted-key`；第一版将签名作为来源状态和发布预览警告，不强制拒绝未签名本地包。
+
+规则测试请求：
+
+```json
+{
+  "rule_id": 1,
+  "sample": {
+    "method": "GET",
+    "path": "/search",
+    "query": {
+      "q": "<script>alert(1)</script>"
+    },
+    "headers": {
+      "x-demo": "value"
+    },
+    "body": "",
+    "upload_filename": "",
+    "upload_mime": "",
+    "upload_size": 0
+  }
+}
+```
+
+规则测试不会保存完整请求体、Authorization、Cookie 或上传文件内容；样例字段有大小和敏感头限制。成功测试会更新规则的 `last_test_status`，发布预览会提示未测试的启用阻断型导入规则。
+
 ## 日志和观测
 
 | 方法 | 路径 | 权限 | 说明 |

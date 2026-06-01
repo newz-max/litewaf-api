@@ -26,6 +26,13 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("GET /api/v1/rules/{id}", handlers.require(permissionRead, handlers.getRule))
 	mux.HandleFunc("PUT /api/v1/rules/{id}", handlers.require(permissionWrite, handlers.updateRule))
 	mux.HandleFunc("DELETE /api/v1/rules/{id}", handlers.require(permissionWrite, handlers.deleteRule))
+	mux.HandleFunc("POST /api/v1/rules/test", handlers.require(permissionWrite, handlers.testRule))
+
+	mux.HandleFunc("GET /api/v1/rule-packages", handlers.require(permissionRead, handlers.listRulePackages))
+	mux.HandleFunc("POST /api/v1/rule-packages/preview", handlers.require(permissionWrite, handlers.previewRulePackage))
+	mux.HandleFunc("POST /api/v1/rule-packages/import", handlers.require(permissionWrite, handlers.importRulePackage))
+	mux.HandleFunc("GET /api/v1/rule-packages/{id}", handlers.require(permissionRead, handlers.getRulePackage))
+	mux.HandleFunc("DELETE /api/v1/rule-packages/{id}", handlers.require(permissionWrite, handlers.deleteRulePackage))
 
 	mux.HandleFunc("GET /api/v1/policies", handlers.require(permissionRead, handlers.listPolicies))
 	mux.HandleFunc("POST /api/v1/policies", handlers.require(permissionWrite, handlers.createPolicy))

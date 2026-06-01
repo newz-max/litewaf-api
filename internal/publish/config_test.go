@@ -446,3 +446,35 @@ func TestGenerateGatewayConfigEmptyState(t *testing.T) {
 		t.Fatalf("expected no sites, got %d", len(config.Sites))
 	}
 }
+
+func TestGenerateKeepsPackageOriginMetadataGatewayCompatible(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	site, err := dataStore.CreateSite(ctx, model.Site{Name: "app", Host: "example.com", Upstream: "http://127.0.0.1:9000", Mode: "protect", Enabled: true})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	rule, err := dataStore.CreateRule(ctx, model.Rule{
+		Name: "Community XSS", Type: "xss", Target: "args", Action: "block", Expression: "(?i)<script", Score: 80, Enabled: true,
+		Module: "attack-protection", Category: "managed", AttackType: "xss", Group: "XSS 防护", Priority: 100,
+		PackageID: "community-baseline", PackageVersion: "v1", PackageRuleID: "xss-query", SourceChecksum: "checksum",
+		SignatureStatus: "unsigned", ReviewStatus: "approved", LastTestStatus: "passed",
+	})
+	if err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if _, err := dataStore.CreatePolicy(ctx, model.Policy{Name: "default", SiteIDs: []int64{site.ID}, RuleIDs: []int64{rule.ID}, Enabled: true}); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-package")
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(config.Sites) != 1 || len(config.Sites[0].Rules) != 1 {
+		t.Fatalf("expected published package rule, got %+v", config.Sites)
+	}
+	published := config.Sites[0].Rules[0]
+	if published.PackageID != "community-baseline" || published.PackageRuleID != "xss-query" {
+		t.Fatalf("missing package metadata: %+v", published)
+	}
+}

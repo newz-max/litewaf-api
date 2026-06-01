@@ -36,18 +36,21 @@ type GatewaySite struct {
 }
 
 type GatewayRule struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Target     string `json:"target"`
-	Action     string `json:"action"`
-	Expression string `json:"expression"`
-	Score      int    `json:"score"`
-	Module     string `json:"module,omitempty"`
-	Category   string `json:"category,omitempty"`
-	AttackType string `json:"attack_type,omitempty"`
-	Group      string `json:"group,omitempty"`
-	Priority   int    `json:"priority,omitempty"`
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`
+	Target         string `json:"target"`
+	Action         string `json:"action"`
+	Expression     string `json:"expression"`
+	Score          int    `json:"score"`
+	Module         string `json:"module,omitempty"`
+	Category       string `json:"category,omitempty"`
+	AttackType     string `json:"attack_type,omitempty"`
+	Group          string `json:"group,omitempty"`
+	Priority       int    `json:"priority,omitempty"`
+	PackageID      string `json:"package_id,omitempty"`
+	PackageVersion string `json:"package_version,omitempty"`
+	PackageRuleID  string `json:"package_rule_id,omitempty"`
 }
 
 type GatewayAccessListEntry struct {
@@ -209,18 +212,21 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 		}
 		for _, rule := range siteRules[site.ID] {
 			gatewaySite.Rules = append(gatewaySite.Rules, GatewayRule{
-				ID:         rule.ID,
-				Name:       rule.Name,
-				Type:       rule.Type,
-				Target:     rule.Target,
-				Action:     rule.Action,
-				Expression: rule.Expression,
-				Score:      rule.Score,
-				Module:     rule.Module,
-				Category:   rule.Category,
-				AttackType: rule.AttackType,
-				Group:      rule.Group,
-				Priority:   rule.Priority,
+				ID:             rule.ID,
+				Name:           rule.Name,
+				Type:           rule.Type,
+				Target:         rule.Target,
+				Action:         rule.Action,
+				Expression:     rule.Expression,
+				Score:          rule.Score,
+				Module:         rule.Module,
+				Category:       rule.Category,
+				AttackType:     rule.AttackType,
+				Group:          rule.Group,
+				Priority:       rule.Priority,
+				PackageID:      rule.PackageID,
+				PackageVersion: rule.PackageVersion,
+				PackageRuleID:  rule.PackageRuleID,
 			})
 		}
 		config.Sites = append(config.Sites, gatewaySite)

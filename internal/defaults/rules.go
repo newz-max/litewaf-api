@@ -2,12 +2,14 @@ package defaults
 
 import (
 	"context"
+	"encoding/json"
 
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
 )
 
 const RuleSetVersion = "litewaf-default-rules-v1"
+const RulePackageID = "litewaf-default-rules"
 
 var DefaultRules = []model.Rule{
 	{
@@ -93,6 +95,7 @@ func SeedRules(ctx context.Context, store RuleStore) error {
 
 	for _, rule := range DefaultRules {
 		rule = attackmeta.NormalizeRule(rule)
+		attachDefaultPackageOrigin(&rule)
 		if current, ok := byName[rule.Name]; ok {
 			if _, err := store.UpdateRule(ctx, current.ID, rule); err != nil {
 				return err
@@ -131,4 +134,49 @@ func SeedRules(ctx context.Context, store RuleStore) error {
 	}
 
 	return nil
+}
+
+func DefaultRulePackage() model.RulePackage {
+	rules := make([]model.Rule, 0, len(DefaultRules))
+	for _, rule := range DefaultRules {
+		rule = attackmeta.NormalizeRule(rule)
+		attachDefaultPackageOrigin(&rule)
+		rules = append(rules, rule)
+	}
+	return model.RulePackage{
+		Metadata: model.RulePackageMetadata{
+			ID:              RulePackageID,
+			Name:            "LiteWaf default managed rules",
+			Version:         RuleSetVersion,
+			Author:          "LiteWaf",
+			License:         "MIT",
+			Compatibility:   "litewaf-rule-package-v1",
+			SignatureStatus: "unsigned",
+			RuleCount:       len(rules),
+			Warnings:        []string{"built-in default package is unsigned"},
+		},
+		Defaults: model.RulePackageDefaults{
+			Enabled:      true,
+			ReviewStatus: "approved",
+		},
+		Rules: rules,
+	}
+}
+
+func DefaultRulePackageJSON() []byte {
+	payload, _ := json.MarshalIndent(DefaultRulePackage(), "", "  ")
+	return payload
+}
+
+func attachDefaultPackageOrigin(rule *model.Rule) {
+	rule.PackageID = RulePackageID
+	rule.PackageVersion = RuleSetVersion
+	if rule.PackageRuleID == "" {
+		rule.PackageRuleID = rule.Type + "-" + rule.Target
+	}
+	rule.SignatureStatus = "unsigned"
+	rule.ReviewStatus = "approved"
+	if rule.SourceChecksum == "" {
+		rule.SourceChecksum = RuleSetVersion + ":" + rule.PackageRuleID
+	}
 }

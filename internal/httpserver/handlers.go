@@ -16,8 +16,10 @@ import (
 	"litewaf-api/internal/app"
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/auth"
+	"litewaf-api/internal/defaults"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/publish"
+	"litewaf-api/internal/rulepkg"
 	"litewaf-api/internal/store"
 )
 
@@ -151,6 +153,130 @@ func (h handlers) deleteSite(w http.ResponseWriter, r *http.Request) {
 func (h handlers) listRules(w http.ResponseWriter, r *http.Request) {
 	items, err := h.app.Store.ListRules(r.Context())
 	h.writeList(w, items, err)
+}
+
+func (h handlers) listRulePackages(w http.ResponseWriter, r *http.Request) {
+	rules, err := h.app.Store.ListRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	items := rulepkg.PackagesFromRules(rules)
+	if len(items) == 0 {
+		items = append(items, defaults.DefaultRulePackage().Metadata)
+	}
+	writeJSON(w, http.StatusOK, envelope{"items": items})
+}
+
+func (h handlers) getRulePackage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	rules, err := h.app.Store.ListRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	for _, item := range rulepkg.PackagesFromRules(rules) {
+		if item.ID == id {
+			writeJSON(w, http.StatusOK, envelope{"item": item})
+			return
+		}
+	}
+	if id == defaults.RulePackageID {
+		writeJSON(w, http.StatusOK, envelope{"item": defaults.DefaultRulePackage().Metadata})
+		return
+	}
+	writeError(w, http.StatusNotFound, "resource not found")
+}
+
+func (h handlers) previewRulePackage(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Package json.RawMessage `json:"package"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	data := []byte(input.Package)
+	if len(data) == 0 {
+		data = defaults.DefaultRulePackageJSON()
+	}
+	preview, err := rulepkg.Preview(r.Context(), h.app.Store, data)
+	h.audit(r, "preview", "rule_package", 0, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": preview})
+}
+
+func (h handlers) importRulePackage(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Package json.RawMessage `json:"package"`
+	}
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	data := []byte(input.Package)
+	if len(data) == 0 {
+		data = defaults.DefaultRulePackageJSON()
+	}
+	result, err := rulepkg.Import(r.Context(), h.app.Store, data)
+	h.audit(r, "import", "rule_package", 0, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, envelope{"item": result})
+}
+
+func (h handlers) deleteRulePackage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	rules, err := h.app.Store.ListRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	for _, rule := range rules {
+		if rule.PackageID == id {
+			if err := h.app.Store.DeleteRule(r.Context(), rule.ID); err != nil {
+				h.audit(r, "delete", "rule_package", 0, "failure", err)
+				h.writeKnownError(w, err)
+				return
+			}
+		}
+	}
+	h.audit(r, "delete", "rule_package", 0, "success", nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h handlers) testRule(w http.ResponseWriter, r *http.Request) {
+	var input model.RuleTestRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	rule := input.Rule
+	if input.RuleID > 0 {
+		item, err := h.app.Store.GetRule(r.Context(), input.RuleID)
+		if err != nil {
+			h.writeKnownError(w, err)
+			return
+		}
+		rule = item
+	}
+	result, err := rulepkg.TestRule(rule, input.Sample)
+	if err != nil {
+		h.audit(r, "test", "rule", rule.ID, "failure", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if rule.ID > 0 {
+		_, err = h.app.Store.UpdateRule(r.Context(), rule.ID, rulepkg.MarkTested(rule, result))
+	}
+	h.audit(r, "test", "rule", rule.ID, resultFromErr(err), err)
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": result})
 }
 
 func (h handlers) getRule(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +471,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	uploadSummary := uploadProtectionSummary(uploadRules)
 	botSummary := botProtectionSummary(botRules)
 	dynamicSummary := dynamicProtectionSummary(dynamicRules)
+	ecosystemSummary := ruleEcosystemSummary(rules)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -358,9 +485,52 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"upload_protection":   uploadSummary,
 			"bot_protection":      botSummary,
 			"dynamic_protection":  dynamicSummary,
+			"rule_ecosystem":      ecosystemSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
 		},
 	})
+}
+
+func ruleEcosystemSummary(rules []model.Rule) envelope {
+	packages := rulepkg.PackagesFromRules(rules)
+	signatures := map[string]int{}
+	disabledImported := 0
+	untestedBlocking := 0
+	warnings := []string{}
+	for _, rule := range rules {
+		if rule.PackageID == "" {
+			continue
+		}
+		status := rule.SignatureStatus
+		if status == "" {
+			status = rulepkg.SignatureUnsigned
+		}
+		signatures[status]++
+		if !rule.Enabled {
+			disabledImported++
+		}
+		if rule.Enabled && rule.Action == "block" && rule.LastTestStatus != rulepkg.TestPassed {
+			untestedBlocking++
+			warnings = append(warnings, fmt.Sprintf("导入规则 %s 使用阻断动作但尚未通过规则测试", rule.Name))
+		}
+		if status != rulepkg.SignatureVerified {
+			warnings = append(warnings, fmt.Sprintf("规则 %s 来源包签名状态为 %s", rule.Name, status))
+		}
+	}
+	packageIDs := make([]string, 0, len(packages))
+	for _, item := range packages {
+		packageIDs = append(packageIDs, item.ID+"@"+item.Version)
+	}
+	return envelope{
+		"packages":            len(packages),
+		"package_ids":         packageIDs,
+		"signature_status":    signatures,
+		"disabled_imported":   disabledImported,
+		"untested_blocking":   untestedBlocking,
+		"warnings":            warnings,
+		"gateway_hot_path":    "published-rules-only",
+		"remote_sync_enabled": false,
+	}
 }
 
 func accessControlSummary(accessLists []model.AccessListEntry) envelope {
@@ -1080,6 +1250,9 @@ func validateRule(rule model.Rule) error {
 	}
 	if rule.Priority < 0 {
 		return errors.New("rule priority cannot be negative")
+	}
+	if err := rulepkg.ValidateRule(rule); err != nil {
+		return err
 	}
 	return nil
 }

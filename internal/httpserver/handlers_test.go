@@ -281,6 +281,35 @@ func TestObservabilityEmptyQueryAndSummary(t *testing.T) {
 	if summaryResponse.Item.Requests != 0 || len(summaryResponse.Item.TopIPs) != 0 {
 		t.Fatalf("unexpected summary: %+v", summaryResponse.Item)
 	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/protection/overview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var overviewResponse struct {
+		Item model.ProtectionOverview `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&overviewResponse); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	if len(overviewResponse.Item.Modules) != 7 {
+		t.Fatalf("expected implemented module rows, got %+v", overviewResponse.Item.Modules)
+	}
+	if len(overviewResponse.Item.Risks) != 0 {
+		t.Fatalf("empty overview fabricated risks: %+v", overviewResponse.Item.Risks)
+	}
+	for _, module := range overviewResponse.Item.Modules {
+		if len(module.Warnings) != 0 {
+			t.Fatalf("empty overview fabricated warnings: %+v", module)
+		}
+		if module.Key == "cc-protection" || module.Key == "access-control" || module.Key == "upload-protection" || module.Key == "bot-protection" || module.Key == "dynamic-protection" {
+			if module.Rules != 0 || module.Enabled != 0 {
+				t.Fatalf("empty overview fabricated module data: %+v", module)
+			}
+		}
+	}
 }
 
 func TestMetricsEndpoint(t *testing.T) {
@@ -995,6 +1024,76 @@ func TestCCProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete cc protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	rateLimitBody := bytes.NewBufferString(`{"name":"全站低阈值","scope":"site","match_value":"/","path_match":"prefix","threshold":10,"window_sec":60,"action":"block","ban_duration_sec":300,"site_id":1,"enabled":true}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rate-limits", rateLimitBody), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rate limit status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	accessBody := bytes.NewBufferString(`{"name":"全站放行","kind":"whitelist","target":"uri","value":"/","match_operator":"prefix","action":"allow","site_id":1,"enabled":true,"priority":10}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-lists", accessBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create access list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/protection/overview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var overviewResponse struct {
+		Item model.ProtectionOverview `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&overviewResponse); err != nil {
+		t.Fatalf("decode overview: %v", err)
+	}
+	var ccModule, accessModule model.ProtectionModuleOverview
+	for _, module := range overviewResponse.Item.Modules {
+		switch module.Key {
+		case "cc-protection":
+			ccModule = module
+		case "access-control":
+			accessModule = module
+		}
+	}
+	if ccModule.CompatibilitySource != "rate_limits" || ccModule.Enabled != 1 || len(ccModule.Warnings) == 0 {
+		t.Fatalf("unexpected cc overview: %+v", ccModule)
+	}
+	if accessModule.CompatibilitySource != "access_lists" || accessModule.Allow != 1 || len(accessModule.Warnings) == 0 {
+		t.Fatalf("unexpected access overview: %+v", accessModule)
+	}
+	if len(overviewResponse.Item.Risks) < 2 {
+		t.Fatalf("expected module risks, got %+v", overviewResponse.Item.Risks)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/releases/preview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var preview map[string]map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&preview); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	summary := preview["summary"]
+	if summary["module_matrix"] == nil || summary["risk_warnings"] == nil {
+		t.Fatalf("preview missing module matrix or risks: %+v", summary)
+	}
+	if int(summary["rate_limits"].(float64)) != 1 || int(summary["access_lists"].(float64)) != 1 {
+		t.Fatalf("preview lost compatibility counts: %+v", summary)
 	}
 }
 

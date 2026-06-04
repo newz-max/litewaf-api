@@ -65,6 +65,15 @@ func (h handlers) observabilitySummary(w http.ResponseWriter, r *http.Request) {
 	h.writeItem(w, item, err)
 }
 
+func (h handlers) protectionOverview(w http.ResponseWriter, r *http.Request) {
+	filter, ok := parseSummaryFilter(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.buildProtectionOverview(r.Context(), filter)
+	h.writeItem(w, item, err)
+}
+
 func normalizeAccessLog(item *model.AccessLog) {
 	item.RequestID = strings.TrimSpace(item.RequestID)
 	item.Host = strings.ToLower(strings.TrimSpace(item.Host))

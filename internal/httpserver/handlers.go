@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -480,6 +481,16 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	botSummary := botProtectionSummary(botRules)
 	dynamicSummary := dynamicProtectionSummary(dynamicRules)
 	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys)
+	modules := protectionModuleMatrix(
+		ccSummary,
+		attackSummary,
+		accessControlSummary,
+		uploadSummary,
+		botSummary,
+		dynamicSummary,
+		ecosystemSummary,
+		model.ObservabilitySummary{},
+	)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -495,8 +506,159 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"dynamic_protection":  dynamicSummary,
 			"rule_ecosystem":      ecosystemSummary,
 			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
+			"module_matrix":       modules,
+			"risk_warnings":       protectionRisks(modules),
 		},
 	})
+}
+
+func (h handlers) buildProtectionOverview(ctx context.Context, filter model.ObservabilitySummaryFilter) (model.ProtectionOverview, error) {
+	rules, err := h.app.Store.ListRules(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	accessLists, err := h.app.Store.ListAccessListEntries(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	rateLimits, err := h.app.Store.ListRateLimitRules(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	uploadRules, err := h.app.Store.ListUploadProtectionRules(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	botRules, err := h.app.Store.ListBotProtectionRules(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	dynamicRules, err := h.app.Store.ListDynamicProtectionRules(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	catalogs, err := h.app.Store.ListRuleCatalogSources(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	catalogPackages, err := h.app.Store.ListRuleCatalogPackages(ctx, 0)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	trustKeys, err := h.app.Store.ListRuleTrustKeys(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	summary, err := h.app.Store.GetObservabilitySummary(ctx, filter)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	modules := protectionModuleMatrix(
+		ccProtectionSummary(rateLimits),
+		attackProtectionSummary(rules),
+		accessControlSummary(accessLists),
+		uploadProtectionSummary(uploadRules),
+		botProtectionSummary(botRules),
+		dynamicProtectionSummary(dynamicRules),
+		ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys),
+		summary,
+	)
+	return model.ProtectionOverview{
+		Modules: modules,
+		Risks:   protectionRisks(modules),
+	}, nil
+}
+
+func protectionModuleMatrix(cc, attack, access, upload, bot, dynamic, ecosystem envelope, summary model.ObservabilitySummary) []model.ProtectionModuleOverview {
+	return []model.ProtectionModuleOverview{
+		moduleOverview("cc-protection", "CC 防护", "rate-limit", "/cc-protection", "cc-protection", cc, summaryCountTotal(summary.TopRules, "cc-protection")),
+		moduleOverview("attack-protection", "攻击防护", "managed", "/attack-protection", "attack-protection", attack, summary.AttackProtection),
+		moduleOverview("access-control", "访问控制", "access-control", "/access-control", "access-control", access, summary.AccessControl),
+		moduleOverview("upload-protection", "上传防护", "upload", "/upload-protection", "upload-protection", upload, summary.UploadProtection),
+		moduleOverview("bot-protection", "Bot / 人机验证", "challenge", "/bot-protection", "bot-protection", bot, summary.BotProtection),
+		moduleOverview("dynamic-protection", "动态防护 / 等候室", "dynamic", "/dynamic-protection", "dynamic-protection", dynamic, summary.DynamicProtection),
+		moduleOverview("advanced-rule-ecosystem", "高级规则生态", "advanced", "/rule-ecosystem", "attack-protection", ecosystem, []model.SummaryCount{}),
+	}
+}
+
+func moduleOverview(key, label, category, route, logModule string, data envelope, evidence []model.SummaryCount) model.ProtectionModuleOverview {
+	return model.ProtectionModuleOverview{
+		Key:                 key,
+		Label:               label,
+		Category:            category,
+		Route:               route,
+		LogModule:           logModule,
+		Rules:               envelopeInt(data, "rules", "groups", "packages"),
+		Enabled:             envelopeInt(data, "enabled"),
+		Observe:             envelopeInt(data, "observe", "log_only"),
+		Block:               envelopeInt(data, "block", "untested_blocking"),
+		Allow:               envelopeInt(data, "allow"),
+		CompatibilitySource: compatibilitySource(key),
+		Warnings:            envelopeStrings(data, "warnings"),
+		Evidence:            evidence,
+	}
+}
+
+func summaryCountTotal(items []model.SummaryCount, prefix string) []model.SummaryCount {
+	if prefix == "" {
+		return items
+	}
+	out := []model.SummaryCount{}
+	for _, item := range items {
+		if strings.Contains(item.Key, prefix) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func protectionRisks(modules []model.ProtectionModuleOverview) []model.ProtectionModuleRisk {
+	risks := []model.ProtectionModuleRisk{}
+	for _, module := range modules {
+		for _, warning := range module.Warnings {
+			risks = append(risks, model.ProtectionModuleRisk{
+				Module:  module.Key,
+				Label:   module.Label,
+				Message: warning,
+			})
+		}
+	}
+	return risks
+}
+
+func compatibilitySource(key string) string {
+	switch key {
+	case "cc-protection":
+		return "rate_limits"
+	case "access-control":
+		return "access_lists"
+	default:
+		return ""
+	}
+}
+
+func envelopeInt(data envelope, keys ...string) int {
+	for _, key := range keys {
+		switch value := data[key].(type) {
+		case int:
+			return value
+		case int64:
+			return int(value)
+		case float64:
+			return int(value)
+		}
+	}
+	return 0
+}
+
+func envelopeStrings(data envelope, key string) []string {
+	values, ok := data[key].([]string)
+	if !ok || values == nil {
+		return []string{}
+	}
+	out := make([]string, len(values))
+	copy(out, values)
+	return out
 }
 
 func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource, catalogPackages []model.RuleCatalogPackage, trustKeys []model.RuleTrustKey) envelope {

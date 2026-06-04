@@ -191,6 +191,8 @@ Authorization: Bearer <token>
 
 发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。`summary.dynamic_protection` 包含动态防护规则总数、启用数量、动态令牌数量、页面动态化数量、等候室数量、阻断数量、观察数量、等候室动作数量和宽泛路径提示。
 
+发布预览还会返回 `summary.module_matrix` 和 `summary.risk_warnings`。`module_matrix` 按防护模块汇总规则总数、启用数、观察数、阻断数、兼容来源和高风险提示，前端应优先展示模块语义，再展示 `rate_limits`、`access_lists` 等兼容上下文。`risk_warnings` 是跨模块风险摘要，不参与网关执行；实际发布配置仍只依赖原有可执行规则字段和 `protection_rules`。
+
 ## 黑白名单
 
 黑白名单接口作为旧入口继续保留，用于兼容既有客户端和发布字段。后台新建 IP/CIDR、路径、Header 和 Host 访问规则时，推荐使用“访问控制”模块；访问控制会以 `module=access-control`、`category=access-control` 呈现同类规则。
@@ -690,6 +692,7 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 | GET | `/api/v1/access-logs` | 读 | 查询访问日志 |
 | GET | `/api/v1/attack-logs` | 读 | 查询 WAF 事件 |
 | GET | `/api/v1/observability/summary` | 读 | 查询汇总指标 |
+| GET | `/api/v1/protection/overview` | 读 | 查询跨模块防护概览 |
 | POST | `/api/v1/ingest/access-logs` | 网关令牌 | 接收访问日志 |
 | POST | `/api/v1/ingest/waf-events` | 网关令牌 | 接收 WAF 事件 |
 
@@ -702,6 +705,8 @@ GET /api/v1/attack-logs?module=upload-protection&action=block
 GET /api/v1/attack-logs?module=bot-protection&challenge_result=failed
 GET /api/v1/attack-logs?module=dynamic-protection&dynamic_result=token-failed
 ```
+
+`/api/v1/protection/overview` 返回模块化防护概览，包含 `modules` 和 `risks`。`modules` 固定覆盖已实现模块：CC 防护、攻击防护、访问控制、上传防护、Bot / 人机验证、动态防护和高级规则生态；每个模块包含 `key`、`label`、`category`、`route`、`log_module`、`rules`、`enabled`、`observe`、`block`、`allow`、`compatibility_source`、`warnings` 和 `evidence`。计数来自真实规则、日志和发布预览数据；没有数据时返回零值或空数组，不返回 mock 行。`risks` 从各模块真实高风险提示派生，用于后台跨模块风险摘要。
 
 攻击防护事件字段包括 `module`、`category`、`attack_type`、`group_name`、`rule_name`、`rule_id`、`target`、`action`、`score`、`summary` 和 `disposition`。观测汇总中的 `attack_protection` 按 `attack_type|action|disposition` 维度统计。
 

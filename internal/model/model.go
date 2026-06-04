@@ -236,6 +236,33 @@ type ObservabilitySummary struct {
 	DynamicProtection []SummaryCount `json:"dynamic_protection"`
 }
 
+type ProtectionOverview struct {
+	Modules []ProtectionModuleOverview `json:"modules"`
+	Risks   []ProtectionModuleRisk     `json:"risks"`
+}
+
+type ProtectionModuleOverview struct {
+	Key                 string         `json:"key"`
+	Label               string         `json:"label"`
+	Category            string         `json:"category"`
+	Route               string         `json:"route"`
+	LogModule           string         `json:"log_module,omitempty"`
+	Rules               int            `json:"rules"`
+	Enabled             int            `json:"enabled"`
+	Observe             int            `json:"observe"`
+	Block               int            `json:"block"`
+	Allow               int            `json:"allow,omitempty"`
+	CompatibilitySource string         `json:"compatibility_source,omitempty"`
+	Warnings            []string       `json:"warnings"`
+	Evidence            []SummaryCount `json:"evidence"`
+}
+
+type ProtectionModuleRisk struct {
+	Module  string `json:"module"`
+	Label   string `json:"label"`
+	Message string `json:"message"`
+}
+
 type AttackProtectionGroup struct {
 	ID               string                    `json:"id"`
 	Name             string                    `json:"name"`

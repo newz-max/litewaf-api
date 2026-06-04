@@ -483,6 +483,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	botSummary := botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules))
 	dynamicSummary := dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules))
 	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys)
+	compatibilityDiagnostics := buildPublishCompatibilityDiagnostics(protectionRules, accessLists, rateLimits, uploadRules, botRules, dynamicRules)
 	modules := protectionModuleMatrix(
 		ccSummary,
 		attackSummary,
@@ -495,21 +496,22 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
-			"sites":               len(sites),
-			"rules":               len(rules),
-			"policies":            len(policies),
-			"access_lists":        len(accessLists),
-			"access_control":      accessControlSummary,
-			"rate_limits":         len(rateLimits),
-			"cc_protection":       ccSummary,
-			"attack_protection":   attackSummary,
-			"upload_protection":   uploadSummary,
-			"bot_protection":      botSummary,
-			"dynamic_protection":  dynamicSummary,
-			"rule_ecosystem":      ecosystemSummary,
-			"advanced_protection": countAdvancedProtection(policies, rules, rateLimits),
-			"module_matrix":       modules,
-			"risk_warnings":       protectionRisks(modules),
+			"sites":                     len(sites),
+			"rules":                     len(rules),
+			"policies":                  len(policies),
+			"access_lists":              len(accessLists),
+			"access_control":            accessControlSummary,
+			"rate_limits":               len(rateLimits),
+			"cc_protection":             ccSummary,
+			"attack_protection":         attackSummary,
+			"upload_protection":         uploadSummary,
+			"bot_protection":            botSummary,
+			"dynamic_protection":        dynamicSummary,
+			"rule_ecosystem":            ecosystemSummary,
+			"advanced_protection":       countAdvancedProtection(policies, rules, rateLimits),
+			"module_matrix":             modules,
+			"risk_warnings":             protectionRisks(modules),
+			"compatibility_diagnostics": compatibilityDiagnostics,
 		},
 	})
 }

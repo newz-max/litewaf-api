@@ -79,6 +79,7 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("GET /api/v1/attack-logs", handlers.require(permissionRead, handlers.listAttackLogs))
 	mux.HandleFunc("GET /api/v1/observability/summary", handlers.require(permissionRead, handlers.observabilitySummary))
 	mux.HandleFunc("GET /api/v1/protection/overview", handlers.require(permissionRead, handlers.protectionOverview))
+	mux.HandleFunc("GET /api/v1/protection/migration-health", handlers.require(permissionRead, handlers.protectionRuleMigrationHealth))
 	mux.HandleFunc("GET /api/v1/releases", handlers.require(permissionRead, handlers.listReleases))
 	mux.HandleFunc("POST /api/v1/releases", handlers.require(permissionPublish, handlers.createRelease))
 	mux.HandleFunc("GET /api/v1/releases/preview", handlers.require(permissionPublish, handlers.previewRelease))

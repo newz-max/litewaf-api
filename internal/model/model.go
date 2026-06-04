@@ -263,6 +263,82 @@ type ProtectionModuleRisk struct {
 	Message string `json:"message"`
 }
 
+type ProtectionRuleMigrationHealth struct {
+	GeneratedAt      time.Time                    `json:"generated_at"`
+	ProtectionRules  ProtectionRuleHealthSummary  `json:"protection_rules"`
+	LegacyStores     []LegacyProtectionStoreState `json:"legacy_stores"`
+	Issues           []ProtectionRuleHealthIssue  `json:"issues"`
+	Backfill         BackfillHealthState          `json:"backfill"`
+	RemediationHints []string                     `json:"remediation_hints"`
+}
+
+type ProtectionRuleHealthSummary struct {
+	Total             int            `json:"total"`
+	Enabled           int            `json:"enabled"`
+	Disabled          int            `json:"disabled"`
+	ByModule          map[string]int `json:"by_module"`
+	ByCategory        map[string]int `json:"by_category"`
+	BySource          map[string]int `json:"by_source"`
+	ByMigrationStatus map[string]int `json:"by_migration_status"`
+	BySite            map[string]int `json:"by_site"`
+}
+
+type LegacyProtectionStoreState struct {
+	Store          string   `json:"store"`
+	Module         string   `json:"module"`
+	Category       string   `json:"category"`
+	Total          int      `json:"total"`
+	Enabled        int      `json:"enabled"`
+	Migrated       int      `json:"migrated"`
+	Missing        int      `json:"missing"`
+	Orphaned       int      `json:"orphaned"`
+	Duplicates     int      `json:"duplicates"`
+	Conflicts      int      `json:"conflicts"`
+	MissingSamples []string `json:"missing_samples"`
+	OrphanSamples  []string `json:"orphan_samples"`
+}
+
+type ProtectionRuleHealthIssue struct {
+	Type           string   `json:"type"`
+	Severity       string   `json:"severity"`
+	Store          string   `json:"store,omitempty"`
+	Module         string   `json:"module,omitempty"`
+	Count          int      `json:"count"`
+	Samples        []string `json:"samples"`
+	Message        string   `json:"message"`
+	Recommendation string   `json:"recommendation"`
+}
+
+type BackfillHealthState struct {
+	Status         string `json:"status"`
+	LastRunAt      string `json:"last_run_at,omitempty"`
+	Created        int    `json:"created"`
+	Updated        int    `json:"updated"`
+	Skipped        int    `json:"skipped"`
+	Failed         int    `json:"failed"`
+	Command        string `json:"command"`
+	Recommendation string `json:"recommendation"`
+}
+
+type PublishCompatibilityDiagnostics struct {
+	ProtectionRules int                            `json:"protection_rules"`
+	RateLimits      int                            `json:"rate_limits"`
+	AccessLists     int                            `json:"access_lists"`
+	LegacyModules   map[string]int                 `json:"legacy_modules"`
+	ByModule        map[string]CompatibilityCounts `json:"by_module"`
+	Deduplicated    int                            `json:"deduplicated"`
+	Warnings        []string                       `json:"warnings"`
+}
+
+type CompatibilityCounts struct {
+	ProtectionRules int `json:"protection_rules"`
+	Native          int `json:"native"`
+	Migrated        int `json:"migrated"`
+	LegacyFallback  int `json:"legacy_fallback"`
+	LegacyStore     int `json:"legacy_store"`
+	Deduplicated    int `json:"deduplicated"`
+}
+
 type AttackProtectionGroup struct {
 	ID               string                    `json:"id"`
 	Name             string                    `json:"name"`

@@ -14,6 +14,7 @@ import (
 	"litewaf-api/internal/auth"
 	"litewaf-api/internal/config"
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/publish"
 	"litewaf-api/internal/store"
 )
 
@@ -1113,6 +1114,101 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	}
 	if int(summary["rate_limits"].(float64)) != 1 || int(summary["access_lists"].(float64)) != 1 {
 		t.Fatalf("preview lost compatibility counts: %+v", summary)
+	}
+	if summary["compatibility_diagnostics"] == nil {
+		t.Fatalf("preview missing compatibility diagnostics: %+v", summary)
+	}
+}
+
+func TestProtectionMigrationHealthEndpointEmptyAndAuth(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/protection/migration-health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/protection/migration-health", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.ProtectionRuleMigrationHealth `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if response.Item.ProtectionRules.Total != 0 || len(response.Item.Issues) != 0 {
+		t.Fatalf("empty health fabricated data: %+v", response.Item)
+	}
+	if response.Item.Backfill.Status != "healthy" {
+		t.Fatalf("empty health should be healthy, got %+v", response.Item.Backfill)
+	}
+}
+
+func TestProtectionMigrationHealthDetectsLegacyCoverage(t *testing.T) {
+	legacy := model.RateLimitRule{
+		ID:         10,
+		Name:       "Login limit",
+		Scope:      "uri",
+		MatchValue: "/api/login",
+		PathMatch:  "exact",
+		Threshold:  10,
+		WindowSec:  60,
+		Action:     "block",
+		SiteID:     1,
+		Enabled:    true,
+	}
+	candidate := legacyProtectionCandidate{
+		Store:    "rate_limits",
+		Module:   "cc-protection",
+		Category: "rate-limit",
+		Ref:      "rate_limits:10",
+		Rule:     publish.CCProtectionFromRateLimit(legacy),
+	}
+
+	health := buildProtectionRuleMigrationHealth(nil, []legacyProtectionCandidate{candidate})
+	if len(health.Issues) != 1 || health.Issues[0].Type != "missing_migration" {
+		t.Fatalf("expected missing migration issue, got %+v", health.Issues)
+	}
+	if len(health.LegacyStores) != 1 || health.LegacyStores[0].Missing != 1 || health.Backfill.Status != "attention_required" {
+		t.Fatalf("unexpected missing health state: %+v", health)
+	}
+
+	migrated := candidate.Rule
+	migrated.ID = 100
+	migrated.Source = "legacy"
+	migrated.MigrationStatus = "migrated"
+	health = buildProtectionRuleMigrationHealth([]model.ProtectionRule{migrated}, []legacyProtectionCandidate{candidate})
+	if len(health.Issues) != 0 || health.LegacyStores[0].Migrated != 1 {
+		t.Fatalf("expected migrated health without issues, got %+v", health)
+	}
+
+	duplicate := migrated
+	duplicate.ID = 101
+	health = buildProtectionRuleMigrationHealth([]model.ProtectionRule{migrated, duplicate}, []legacyProtectionCandidate{candidate})
+	if len(health.Issues) == 0 || health.LegacyStores[0].Duplicates == 0 {
+		t.Fatalf("expected duplicate legacy_ref issue, got %+v", health)
+	}
+
+	conflict := migrated
+	conflict.ID = 102
+	conflict.Limit.Threshold = 20
+	health = buildProtectionRuleMigrationHealth([]model.ProtectionRule{conflict}, []legacyProtectionCandidate{candidate})
+	if len(health.Issues) == 0 || health.LegacyStores[0].Conflicts != 1 {
+		t.Fatalf("expected migration conflict issue, got %+v", health)
+	}
+
+	orphan := migrated
+	orphan.LegacyRef = "rate_limits:404"
+	health = buildProtectionRuleMigrationHealth([]model.ProtectionRule{orphan}, []legacyProtectionCandidate{candidate})
+	if len(health.Issues) < 2 || health.LegacyStores[0].Orphaned != 1 {
+		t.Fatalf("expected missing plus orphan issues, got %+v", health)
 	}
 }
 

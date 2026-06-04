@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 )
 
 func TestMemoryStoreSiteCreateAndList(t *testing.T) {
@@ -56,5 +57,76 @@ func TestMemoryStorePolicyRejectsMissingBindings(t *testing.T) {
 	})
 	if err != ErrNotFound {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestMemoryStoreProtectionRuleValidationAndBackfill(t *testing.T) {
+	ctx := context.Background()
+	dataStore := NewMemoryStore()
+
+	_, err := dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name:     "bad",
+		Module:   "cc-protection",
+		Category: "upload",
+		Enabled:  true,
+		Match: model.ProtectionRuleMatch{
+			Path:      "/api",
+			PathMatch: "prefix",
+		},
+		Limit: model.ProtectionRuleLimit{
+			Counter:   "client_ip",
+			Threshold: 10,
+			WindowSec: 60,
+		},
+		Action: model.ProtectionRuleAction{Type: "block"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid module/category mapping to fail")
+	}
+
+	legacy, err := dataStore.CreateRateLimitRule(ctx, model.RateLimitRule{
+		Name:       "Login limit",
+		Scope:      "ip",
+		PathMatch:  "exact",
+		MatchValue: "/login",
+		Threshold:  10,
+		WindowSec:  60,
+		Action:     "block",
+		CCAction:   "ban",
+		Enabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("create legacy rate limit: %v", err)
+	}
+	created, err := dataStore.BackfillProtectionRules(ctx)
+	if err != nil {
+		t.Fatalf("backfill protection rules: %v", err)
+	}
+	if created < 1 {
+		t.Fatalf("expected backfilled rules, got %d", created)
+	}
+	created, err = dataStore.BackfillProtectionRules(ctx)
+	if err != nil {
+		t.Fatalf("rerun backfill: %v", err)
+	}
+	if created != 0 {
+		t.Fatalf("expected idempotent backfill, got %d new rows", created)
+	}
+	rules, err := dataStore.ListProtectionRules(ctx)
+	if err != nil {
+		t.Fatalf("list protection rules: %v", err)
+	}
+	var rule model.ProtectionRule
+	for _, item := range rules {
+		if item.LegacyRef == protectionrules.LegacyRef("rate_limits", legacy.ID) {
+			rule = item
+			break
+		}
+	}
+	if rule.LegacyRef != protectionrules.LegacyRef("rate_limits", legacy.ID) || rule.MigrationStatus != protectionrules.StatusMigrated {
+		t.Fatalf("unexpected migration metadata: %+v", rule)
+	}
+	if rule.Module != protectionrules.ModuleCC || rule.Limit.Counter != "client_ip" || rule.Action.Type != "ban" {
+		t.Fatalf("unexpected backfilled rule: %+v", rule)
 	}
 }

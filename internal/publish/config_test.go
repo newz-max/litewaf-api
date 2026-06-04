@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/store"
 )
 
@@ -217,6 +218,52 @@ func TestGenerateExtendedGatewayConfigIncludesAccessControlProtectionRules(t *te
 	}
 	if rule.Match.Target != "path" || rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || rule.Priority != 80 {
 		t.Fatalf("unexpected access control match/priority: %+v", rule)
+	}
+}
+
+func TestGenerateExtendedGatewayConfigPrefersMigratedProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	legacy, err := dataStore.CreateRateLimitRule(ctx, model.RateLimitRule{
+		Name: "Legacy login limit", Scope: "ip", MatchValue: "/login", PathMatch: "exact",
+		Methods: []string{"POST"}, Threshold: 10, WindowSec: 60, Action: "block", CCAction: "ban",
+		BanDuration: 300, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create legacy rate limit: %v", err)
+	}
+	_, err = dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name:            "Migrated login limit",
+		Module:          "cc-protection",
+		Category:        "rate-limit",
+		Enabled:         true,
+		Priority:        70,
+		Source:          protectionrules.SourceLegacy,
+		MigrationStatus: protectionrules.StatusMigrated,
+		LegacyRef:       protectionrules.LegacyRef("rate_limits", legacy.ID),
+		Match: model.ProtectionRuleMatch{
+			Path: "/login", PathMatch: "exact", Methods: []string{"POST"},
+		},
+		Limit: model.ProtectionRuleLimit{
+			Counter: "client_ip", Threshold: 10, WindowSec: 60, BanDurationSec: 300,
+		},
+		Action: model.ProtectionRuleAction{Type: "ban"},
+	})
+	if err != nil {
+		t.Fatalf("create migrated protection rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-migrated")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.RateLimits) != 1 {
+		t.Fatalf("expected legacy rate_limits compatibility output, got %+v", config.RateLimits)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected deduplicated protection_rules output, got %+v", config.ProtectionRules)
+	}
+	if config.ProtectionRules[0].Name != "Migrated login limit" || config.ProtectionRules[0].LegacyRef == "" {
+		t.Fatalf("expected migrated rule to be preferred, got %+v", config.ProtectionRules[0])
 	}
 }
 

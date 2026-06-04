@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
+	"litewaf-api/internal/store"
 )
 
 const (
@@ -32,13 +34,31 @@ func (h handlers) listDynamicProtectionRules(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	protectionRules, err := h.app.Store.ListProtectionRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	items := make([]model.ProtectionRule, 0, len(protectionRules))
+	seenLegacy := map[string]bool{}
+	for _, rule := range protectionRules {
+		if rule.Module != dynamicProtectionModule {
+			continue
+		}
+		seenLegacy[rule.LegacyRef] = true
+		if dynamicProtectionMatches(rule, filter) {
+			items = append(items, rule)
+		}
+	}
 	rules, err := h.app.Store.ListDynamicProtectionRules(r.Context())
 	if err != nil {
 		h.writeServerError(w, err)
 		return
 	}
-	items := make([]model.ProtectionRule, 0, len(rules))
 	for _, item := range rules {
+		if seenLegacy[protectionrules.LegacyRef("dynamic_protection_rules", item.ID)] {
+			continue
+		}
 		rule := dynamicProtectionFromRule(item)
 		if dynamicProtectionMatches(rule, filter) {
 			items = append(items, rule)
@@ -52,12 +72,21 @@ func (h handlers) getDynamicProtectionRule(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	item, err := h.app.Store.GetDynamicProtectionRule(r.Context(), id)
+	item, err := h.app.Store.GetProtectionRule(r.Context(), id)
 	if err != nil {
-		h.writeKnownError(w, err)
+		legacy, legacyErr := h.app.Store.GetDynamicProtectionRule(r.Context(), id)
+		if legacyErr != nil {
+			h.writeKnownError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, envelope{"item": dynamicProtectionFromRule(legacy)})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{"item": dynamicProtectionFromRule(item)})
+	if item.Module != dynamicProtectionModule {
+		h.writeKnownError(w, store.ErrNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item})
 }
 
 func (h handlers) createDynamicProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -65,14 +94,14 @@ func (h handlers) createDynamicProtectionRule(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toModel()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	created, err := h.app.Store.CreateDynamicProtectionRule(r.Context(), item)
+	created, err := h.app.Store.CreateProtectionRule(r.Context(), item)
 	h.audit(r, "create", "dynamic_protection_rule", created.ID, resultFromErr(err), err)
-	h.writeCreated(w, dynamicProtectionFromRule(created), err)
+	h.writeCreated(w, created, err)
 }
 
 func (h handlers) updateDynamicProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -84,14 +113,21 @@ func (h handlers) updateDynamicProtectionRule(w http.ResponseWriter, r *http.Req
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toModel()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	updated, err := h.app.Store.UpdateDynamicProtectionRule(r.Context(), id, item)
+	updated, err := h.app.Store.UpdateProtectionRule(r.Context(), id, item)
+	if errors.Is(err, store.ErrNotFound) {
+		legacy, legacyErr := h.app.Store.UpdateDynamicProtectionRule(r.Context(), id, protectionrules.ToDynamic(item))
+		if legacyErr == nil {
+			updated = dynamicProtectionFromRule(legacy)
+		}
+		err = legacyErr
+	}
 	h.audit(r, "update", "dynamic_protection_rule", id, resultFromErr(err), err)
-	h.writeItem(w, dynamicProtectionFromRule(updated), err)
+	h.writeItem(w, updated, err)
 }
 
 func (h handlers) deleteDynamicProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -99,7 +135,10 @@ func (h handlers) deleteDynamicProtectionRule(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	err := h.app.Store.DeleteDynamicProtectionRule(r.Context(), id)
+	err := h.app.Store.DeleteProtectionRule(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		err = h.app.Store.DeleteDynamicProtectionRule(r.Context(), id)
+	}
 	h.audit(r, "delete", "dynamic_protection_rule", id, resultFromErr(err), err)
 	h.writeNoContent(w, err)
 }
@@ -117,28 +156,29 @@ type dynamicProtectionRequest struct {
 }
 
 func (r dynamicProtectionRequest) toModel() (model.DynamicProtectionRule, error) {
-	r.normalize()
-	if err := r.validate(); err != nil {
+	rule, err := r.toProtectionRule()
+	if err != nil {
 		return model.DynamicProtectionRule{}, err
 	}
-	return model.DynamicProtectionRule{
-		Name:             r.Name,
-		Category:         r.Category,
-		Path:             r.Match.Path,
-		PathMatch:        r.Match.PathMatch,
-		Methods:          cloneStrings(r.Match.Methods),
-		TokenTTL:         r.Dynamic.TokenTTL,
-		TokenPlacement:   r.Dynamic.TokenPlacement,
-		FailureAction:    r.Dynamic.FailureAction,
-		MutationMarker:   r.Dynamic.MutationMarker,
-		MutationMaxBytes: r.Dynamic.MutationMaxBytes,
-		QueueCapacity:    r.Dynamic.QueueCapacity,
-		AdmissionTTL:     r.Dynamic.AdmissionTTL,
-		RetryInterval:    r.Dynamic.RetryInterval,
-		OverflowAction:   r.Dynamic.OverflowAction,
-		SiteID:           r.SiteID,
-		Enabled:          boolValue(r.Enabled, true),
-		Priority:         protectionRequestPriority(r.Priority),
+	return protectionrules.ToDynamic(rule), nil
+}
+
+func (r dynamicProtectionRequest) toProtectionRule() (model.ProtectionRule, error) {
+	r.normalize()
+	if err := r.validate(); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	return model.ProtectionRule{
+		Name:     r.Name,
+		Module:   r.Module,
+		Category: r.Category,
+		SiteID:   r.SiteID,
+		Enabled:  boolValue(r.Enabled, true),
+		Priority: protectionRequestPriority(r.Priority),
+		Match:    r.Match,
+		Dynamic:  r.Dynamic,
+		Action:   r.Action,
+		Source:   protectionrules.SourceNative,
 	}, nil
 }
 

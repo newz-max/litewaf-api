@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
+	"litewaf-api/internal/store"
 )
 
 const (
@@ -26,13 +28,31 @@ func (h handlers) listCCProtectionRules(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
+	protectionRules, err := h.app.Store.ListProtectionRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	items := make([]model.ProtectionRule, 0, len(protectionRules))
+	seenLegacy := map[string]bool{}
+	for _, rule := range protectionRules {
+		if rule.Module != ccProtectionModule {
+			continue
+		}
+		seenLegacy[rule.LegacyRef] = true
+		if ccProtectionMatches(rule, filter) {
+			items = append(items, rule)
+		}
+	}
 	rateLimits, err := h.app.Store.ListRateLimitRules(r.Context())
 	if err != nil {
 		h.writeServerError(w, err)
 		return
 	}
-	items := make([]model.ProtectionRule, 0, len(rateLimits))
 	for _, item := range rateLimits {
+		if seenLegacy[protectionrules.LegacyRef("rate_limits", item.ID)] {
+			continue
+		}
 		rule := ccProtectionFromRateLimit(item)
 		if ccProtectionMatches(rule, filter) {
 			items = append(items, rule)
@@ -46,12 +66,21 @@ func (h handlers) getCCProtectionRule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	item, err := h.app.Store.GetRateLimitRule(r.Context(), id)
+	item, err := h.app.Store.GetProtectionRule(r.Context(), id)
 	if err != nil {
-		h.writeKnownError(w, err)
+		legacy, legacyErr := h.app.Store.GetRateLimitRule(r.Context(), id)
+		if legacyErr != nil {
+			h.writeKnownError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, envelope{"item": ccProtectionFromRateLimit(legacy)})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{"item": ccProtectionFromRateLimit(item)})
+	if item.Module != ccProtectionModule {
+		h.writeKnownError(w, store.ErrNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item})
 }
 
 func (h handlers) createCCProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -59,14 +88,14 @@ func (h handlers) createCCProtectionRule(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toRateLimit()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	created, err := h.app.Store.CreateRateLimitRule(r.Context(), item)
+	created, err := h.app.Store.CreateProtectionRule(r.Context(), item)
 	h.audit(r, "create", "cc_protection_rule", created.ID, resultFromErr(err), err)
-	h.writeCreated(w, ccProtectionFromRateLimit(created), err)
+	h.writeCreated(w, created, err)
 }
 
 func (h handlers) updateCCProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -78,14 +107,21 @@ func (h handlers) updateCCProtectionRule(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toRateLimit()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	updated, err := h.app.Store.UpdateRateLimitRule(r.Context(), id, item)
+	updated, err := h.app.Store.UpdateProtectionRule(r.Context(), id, item)
+	if errors.Is(err, store.ErrNotFound) {
+		legacy, legacyErr := h.app.Store.UpdateRateLimitRule(r.Context(), id, protectionrules.ToRateLimit(item))
+		if legacyErr == nil {
+			updated = ccProtectionFromRateLimit(legacy)
+		}
+		err = legacyErr
+	}
 	h.audit(r, "update", "cc_protection_rule", id, resultFromErr(err), err)
-	h.writeItem(w, ccProtectionFromRateLimit(updated), err)
+	h.writeItem(w, updated, err)
 }
 
 func (h handlers) deleteCCProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +129,10 @@ func (h handlers) deleteCCProtectionRule(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	err := h.app.Store.DeleteRateLimitRule(r.Context(), id)
+	err := h.app.Store.DeleteProtectionRule(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		err = h.app.Store.DeleteRateLimitRule(r.Context(), id)
+	}
 	h.audit(r, "delete", "cc_protection_rule", id, resultFromErr(err), err)
 	h.writeNoContent(w, err)
 }
@@ -111,23 +150,29 @@ type ccProtectionRequest struct {
 }
 
 func (r ccProtectionRequest) toRateLimit() (model.RateLimitRule, error) {
-	r.normalize()
-	if err := r.validate(); err != nil {
+	rule, err := r.toProtectionRule()
+	if err != nil {
 		return model.RateLimitRule{}, err
 	}
-	return model.RateLimitRule{
-		Name:        r.Name,
-		Scope:       ccRateLimitScope(r.Limit.Counter),
-		MatchValue:  ccRateLimitMatchValue(r.Match),
-		PathMatch:   r.Match.PathMatch,
-		Methods:     cloneStrings(r.Match.Methods),
-		Threshold:   r.Limit.Threshold,
-		WindowSec:   r.Limit.WindowSec,
-		Action:      ccRateLimitAction(r.Action.Type),
-		CCAction:    r.Action.Type,
-		BanDuration: r.Limit.BanDurationSec,
-		SiteID:      r.SiteID,
-		Enabled:     boolValue(r.Enabled, true),
+	return protectionrules.ToRateLimit(rule), nil
+}
+
+func (r ccProtectionRequest) toProtectionRule() (model.ProtectionRule, error) {
+	r.normalize()
+	if err := r.validate(); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	return model.ProtectionRule{
+		Name:     r.Name,
+		Module:   r.Module,
+		Category: r.Category,
+		SiteID:   r.SiteID,
+		Enabled:  boolValue(r.Enabled, true),
+		Priority: protectionRequestPriority(r.Priority),
+		Match:    r.Match,
+		Limit:    r.Limit,
+		Action:   r.Action,
+		Source:   protectionrules.SourceNative,
 	}, nil
 }
 

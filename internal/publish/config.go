@@ -16,6 +16,7 @@ import (
 
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/store"
 )
 
@@ -160,6 +161,10 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	if err != nil {
 		return ExtendedGatewayConfig{}, nil, "", err
 	}
+	protectionRules, err := dataStore.ListProtectionRules(ctx)
+	if err != nil {
+		return ExtendedGatewayConfig{}, nil, "", err
+	}
 
 	rulesByID := map[int64]model.Rule{}
 	for _, rule := range rules {
@@ -231,6 +236,15 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 		}
 		config.Sites = append(config.Sites, gatewaySite)
 	}
+	seenLegacyProtectionRules := map[string]bool{}
+	for _, item := range protectionRules {
+		if item.Enabled {
+			config.ProtectionRules = append(config.ProtectionRules, item)
+		}
+		if item.LegacyRef != "" {
+			seenLegacyProtectionRules[item.LegacyRef] = true
+		}
+	}
 	for _, item := range accessLists {
 		if !item.Enabled {
 			continue
@@ -247,7 +261,9 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			SiteID:        item.SiteID,
 			Priority:      protectionPriority(item.Priority),
 		})
-		config.ProtectionRules = append(config.ProtectionRules, AccessControlFromAccessList(item))
+		if !seenLegacyProtectionRules[protectionrules.LegacyRef("access_lists", item.ID)] {
+			config.ProtectionRules = append(config.ProtectionRules, AccessControlFromAccessList(item))
+		}
 	}
 	for _, item := range rateLimits {
 		if !item.Enabled {
@@ -269,25 +285,33 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			ViolationWindowSec: item.ViolationWindowSec,
 			SiteID:             item.SiteID,
 		})
-		config.ProtectionRules = append(config.ProtectionRules, CCProtectionFromRateLimit(item))
+		if !seenLegacyProtectionRules[protectionrules.LegacyRef("rate_limits", item.ID)] {
+			config.ProtectionRules = append(config.ProtectionRules, CCProtectionFromRateLimit(item))
+		}
 	}
 	for _, item := range uploadRules {
 		if !item.Enabled {
 			continue
 		}
-		config.ProtectionRules = append(config.ProtectionRules, UploadProtectionFromRule(item))
+		if !seenLegacyProtectionRules[protectionrules.LegacyRef("upload_protection_rules", item.ID)] {
+			config.ProtectionRules = append(config.ProtectionRules, UploadProtectionFromRule(item))
+		}
 	}
 	for _, item := range botRules {
 		if !item.Enabled {
 			continue
 		}
-		config.ProtectionRules = append(config.ProtectionRules, BotProtectionFromRule(item))
+		if !seenLegacyProtectionRules[protectionrules.LegacyRef("bot_protection_rules", item.ID)] {
+			config.ProtectionRules = append(config.ProtectionRules, BotProtectionFromRule(item))
+		}
 	}
 	for _, item := range dynamicRules {
 		if !item.Enabled {
 			continue
 		}
-		config.ProtectionRules = append(config.ProtectionRules, DynamicProtectionFromRule(item))
+		if !seenLegacyProtectionRules[protectionrules.LegacyRef("dynamic_protection_rules", item.ID)] {
+			config.ProtectionRules = append(config.ProtectionRules, DynamicProtectionFromRule(item))
+		}
 	}
 
 	payload, err := json.MarshalIndent(config, "", "  ")
@@ -299,283 +323,27 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 }
 
 func CCProtectionFromRateLimit(item model.RateLimitRule) model.ProtectionRule {
-	path, pathMatch := ccProtectionPath(item)
-	return model.ProtectionRule{
-		ID:       item.ID,
-		Name:     item.Name,
-		Module:   "cc-protection",
-		Category: "rate-limit",
-		SiteID:   item.SiteID,
-		Enabled:  item.Enabled,
-		Priority: 100,
-		Match: model.ProtectionRuleMatch{
-			Path:      path,
-			PathMatch: pathMatch,
-			Methods:   cloneStrings(item.Methods),
-		},
-		Limit: model.ProtectionRuleLimit{
-			Counter:        ccProtectionCounter(item.Scope),
-			Threshold:      item.Threshold,
-			WindowSec:      item.WindowSec,
-			BanDurationSec: item.BanDuration,
-		},
-		Action: model.ProtectionRuleAction{
-			Type: ccProtectionAction(item),
-		},
-		CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt,
-	}
+	return protectionrules.FromRateLimit(item)
 }
 
 func AccessControlFromAccessList(item model.AccessListEntry) model.ProtectionRule {
-	match := accessControlMatch(item)
-	return model.ProtectionRule{
-		ID:       item.ID,
-		Name:     item.Name,
-		Module:   "access-control",
-		Category: "access-control",
-		SiteID:   item.SiteID,
-		Enabled:  item.Enabled,
-		Priority: protectionPriority(item.Priority),
-		Match:    match,
-		Action: model.ProtectionRuleAction{
-			Type: accessControlAction(item),
-		},
-		CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt,
-	}
+	return protectionrules.FromAccessList(item)
 }
 
 func UploadProtectionFromRule(item model.UploadProtectionRule) model.ProtectionRule {
-	path := item.Path
-	if path == "" {
-		path = "/"
-	}
-	pathMatch := item.PathMatch
-	if pathMatch == "" {
-		pathMatch = "prefix"
-	}
-	return model.ProtectionRule{
-		ID:       item.ID,
-		Name:     item.Name,
-		Module:   "upload-protection",
-		Category: "upload",
-		SiteID:   item.SiteID,
-		Enabled:  item.Enabled,
-		Priority: protectionPriority(item.Priority),
-		Match: model.ProtectionRuleMatch{
-			Path:      path,
-			PathMatch: pathMatch,
-			Methods:   cloneStrings(item.Methods),
-			Target:    "upload",
-		},
-		Upload: &model.ProtectionRuleUpload{
-			Extensions: cloneStrings(item.Extensions),
-			MaxBytes:   item.MaxBytes,
-		},
-		Action: model.ProtectionRuleAction{
-			Type: item.Action,
-		},
-		CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt,
-	}
+	return protectionrules.FromUpload(item)
 }
 
 func BotProtectionFromRule(item model.BotProtectionRule) model.ProtectionRule {
-	path := item.Path
-	if path == "" {
-		path = "/"
-	}
-	pathMatch := item.PathMatch
-	if pathMatch == "" {
-		pathMatch = "prefix"
-	}
-	mode := item.ChallengeMode
-	if mode == "" {
-		mode = "js-challenge"
-	}
-	verifyTTL := item.VerifyTTL
-	if verifyTTL == 0 {
-		verifyTTL = 300
-	}
-	failureAction := item.FailureAction
-	if failureAction == "" {
-		failureAction = "block"
-	}
-	return model.ProtectionRule{
-		ID:       item.ID,
-		Name:     item.Name,
-		Module:   "bot-protection",
-		Category: "challenge",
-		SiteID:   item.SiteID,
-		Enabled:  item.Enabled,
-		Priority: protectionPriority(item.Priority),
-		Match: model.ProtectionRuleMatch{
-			Path:      path,
-			PathMatch: pathMatch,
-			Methods:   cloneStrings(item.Methods),
-			Target:    "path",
-		},
-		Challenge: &model.ProtectionRuleChallenge{
-			Mode:          mode,
-			VerifyTTL:     verifyTTL,
-			FailureAction: failureAction,
-		},
-		Action: model.ProtectionRuleAction{
-			Type: failureAction,
-		},
-		CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt,
-	}
+	return protectionrules.FromBot(item)
 }
 
 func DynamicProtectionFromRule(item model.DynamicProtectionRule) model.ProtectionRule {
-	path := item.Path
-	if path == "" {
-		path = "/"
-	}
-	pathMatch := item.PathMatch
-	if pathMatch == "" {
-		pathMatch = "prefix"
-	}
-	category := item.Category
-	if category == "" {
-		category = "dynamic-token"
-	}
-	dynamic := dynamicProtectionConfig(item)
-	action := dynamic.FailureAction
-	if category == "waiting-room" {
-		action = dynamic.OverflowAction
-	}
-	if category == "page-mutation" {
-		action = "log-only"
-	}
-	return model.ProtectionRule{
-		ID:       item.ID,
-		Name:     item.Name,
-		Module:   "dynamic-protection",
-		Category: category,
-		SiteID:   item.SiteID,
-		Enabled:  item.Enabled,
-		Priority: protectionPriority(item.Priority),
-		Match: model.ProtectionRuleMatch{
-			Path:      path,
-			PathMatch: pathMatch,
-			Methods:   cloneStrings(item.Methods),
-			Target:    "path",
-		},
-		Dynamic: &dynamic,
-		Action: model.ProtectionRuleAction{
-			Type: action,
-		},
-		CreatedAt: item.CreatedAt,
-		UpdatedAt: item.UpdatedAt,
-	}
+	return protectionrules.FromDynamic(item)
 }
 
 func dynamicProtectionConfig(item model.DynamicProtectionRule) model.ProtectionRuleDynamic {
-	category := item.Category
-	if category == "" {
-		category = "dynamic-token"
-	}
-	dynamic := model.ProtectionRuleDynamic{
-		Mode:             category,
-		TokenTTL:         item.TokenTTL,
-		TokenPlacement:   item.TokenPlacement,
-		FailureAction:    item.FailureAction,
-		MutationMarker:   item.MutationMarker,
-		MutationMaxBytes: item.MutationMaxBytes,
-		QueueCapacity:    item.QueueCapacity,
-		AdmissionTTL:     item.AdmissionTTL,
-		RetryInterval:    item.RetryInterval,
-		OverflowAction:   item.OverflowAction,
-	}
-	if dynamic.TokenTTL == 0 {
-		dynamic.TokenTTL = 300
-	}
-	if dynamic.TokenPlacement == "" {
-		dynamic.TokenPlacement = "cookie"
-	}
-	if dynamic.FailureAction == "" {
-		dynamic.FailureAction = "block"
-	}
-	if dynamic.MutationMarker == "" {
-		dynamic.MutationMarker = "body-end"
-	}
-	if dynamic.MutationMaxBytes == 0 {
-		dynamic.MutationMaxBytes = 262144
-	}
-	if dynamic.QueueCapacity == 0 {
-		dynamic.QueueCapacity = 100
-	}
-	if dynamic.AdmissionTTL == 0 {
-		dynamic.AdmissionTTL = 300
-	}
-	if dynamic.RetryInterval == 0 {
-		dynamic.RetryInterval = 5
-	}
-	if dynamic.OverflowAction == "" {
-		dynamic.OverflowAction = "waiting-room"
-	}
-	return dynamic
-}
-
-func accessControlMatch(item model.AccessListEntry) model.ProtectionRuleMatch {
-	operator := item.MatchOperator
-	if operator == "" {
-		operator = defaultAccessControlOperator(item.Target)
-	}
-	match := model.ProtectionRuleMatch{
-		Target:     accessControlTarget(item.Target),
-		Value:      item.Value,
-		Operator:   operator,
-		HeaderName: item.HeaderName,
-		Methods:    []string{},
-	}
-	switch item.Target {
-	case "uri":
-		match.Target = "path"
-		match.Path = item.Value
-		match.PathMatch = operator
-	case "header":
-		match.Target = "header"
-	case "host":
-		match.Target = "host"
-		match.Host = item.Value
-	}
-	return match
-}
-
-func accessControlTarget(target string) string {
-	switch target {
-	case "uri":
-		return "path"
-	default:
-		return target
-	}
-}
-
-func defaultAccessControlOperator(target string) string {
-	switch target {
-	case "uri":
-		return "exact"
-	case "header":
-		return "exact"
-	case "host":
-		return "exact"
-	default:
-		return ""
-	}
-}
-
-func accessControlAction(item model.AccessListEntry) string {
-	if item.Action == "allow" || item.Kind == "whitelist" {
-		return "allow"
-	}
-	if item.Action == "log-only" {
-		return "log-only"
-	}
-	return "block"
+	return protectionrules.DynamicConfig(item)
 }
 
 func protectionPriority(priority int) int {
@@ -583,46 +351,6 @@ func protectionPriority(priority int) int {
 		return 100
 	}
 	return priority
-}
-
-func ccProtectionPath(item model.RateLimitRule) (string, string) {
-	pathMatch := item.PathMatch
-	if pathMatch == "" {
-		pathMatch = "exact"
-	}
-	if item.MatchValue != "" {
-		return item.MatchValue, pathMatch
-	}
-	if item.Scope == "site" || item.Scope == "ip" {
-		if item.PathMatch == "" {
-			pathMatch = "prefix"
-		}
-		return "/", pathMatch
-	}
-	return "/", "prefix"
-}
-
-func ccProtectionCounter(scope string) string {
-	switch scope {
-	case "ip":
-		return "client_ip"
-	case "uri":
-		return "client_ip_path"
-	case "site":
-		return "global"
-	default:
-		return "client_ip"
-	}
-}
-
-func ccProtectionAction(item model.RateLimitRule) string {
-	if item.CCAction != "" {
-		return item.CCAction
-	}
-	if item.Action == "" {
-		return "rate-limit"
-	}
-	return item.Action
 }
 
 func cloneStrings(values []string) []string {
@@ -664,6 +392,10 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 		return err
 	}
 	dynamicRules, err := dataStore.ListDynamicProtectionRules(ctx)
+	if err != nil {
+		return err
+	}
+	protectionRules, err := dataStore.ListProtectionRules(ctx)
 	if err != nil {
 		return err
 	}
@@ -756,6 +488,13 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 		if item.Enabled {
 			if err := validateDynamicProtectionRule(item); err != nil {
 				return err
+			}
+		}
+	}
+	for _, item := range protectionRules {
+		if item.Enabled {
+			if err := protectionrules.Validate(item); err != nil {
+				return fmt.Errorf("protection rule %d is invalid: %w", item.ID, err)
 			}
 		}
 	}

@@ -19,6 +19,7 @@ import (
 	"litewaf-api/internal/auth"
 	"litewaf-api/internal/defaults"
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
 	"litewaf-api/internal/rulepkg"
 	"litewaf-api/internal/store"
@@ -471,15 +472,16 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
 	botRules, _ := h.app.Store.ListBotProtectionRules(r.Context())
 	dynamicRules, _ := h.app.Store.ListDynamicProtectionRules(r.Context())
+	protectionRules, _ := h.app.Store.ListProtectionRules(r.Context())
 	catalogs, _ := h.app.Store.ListRuleCatalogSources(r.Context())
 	catalogPackages, _ := h.app.Store.ListRuleCatalogPackages(r.Context(), 0)
 	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
-	ccSummary := ccProtectionSummary(rateLimits)
-	accessControlSummary := accessControlSummary(accessLists)
+	ccSummary := ccProtectionSummary(mergedCCProtectionRules(protectionRules, rateLimits))
+	accessControlSummary := accessControlSummary(mergedAccessControlRules(protectionRules, accessLists))
 	attackSummary := attackProtectionSummary(rules)
-	uploadSummary := uploadProtectionSummary(uploadRules)
-	botSummary := botProtectionSummary(botRules)
-	dynamicSummary := dynamicProtectionSummary(dynamicRules)
+	uploadSummary := uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules))
+	botSummary := botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules))
+	dynamicSummary := dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules))
 	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys)
 	modules := protectionModuleMatrix(
 		ccSummary,
@@ -537,6 +539,10 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 	if err != nil {
 		return model.ProtectionOverview{}, err
 	}
+	protectionRules, err := h.app.Store.ListProtectionRules(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
 	catalogs, err := h.app.Store.ListRuleCatalogSources(ctx)
 	if err != nil {
 		return model.ProtectionOverview{}, err
@@ -554,12 +560,12 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 		return model.ProtectionOverview{}, err
 	}
 	modules := protectionModuleMatrix(
-		ccProtectionSummary(rateLimits),
+		ccProtectionSummary(mergedCCProtectionRules(protectionRules, rateLimits)),
 		attackProtectionSummary(rules),
-		accessControlSummary(accessLists),
-		uploadProtectionSummary(uploadRules),
-		botProtectionSummary(botRules),
-		dynamicProtectionSummary(dynamicRules),
+		accessControlSummary(mergedAccessControlRules(protectionRules, accessLists)),
+		uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules)),
+		botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules)),
+		dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules)),
 		ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys),
 		summary,
 	)
@@ -597,6 +603,109 @@ func moduleOverview(key, label, category, route, logModule string, data envelope
 		Warnings:            envelopeStrings(data, "warnings"),
 		Evidence:            evidence,
 	}
+}
+
+type protectionMigrationSummary struct {
+	Migrated       int
+	LegacyFallback int
+	Disabled       int
+}
+
+func migrationSummary(rules []model.ProtectionRule) protectionMigrationSummary {
+	summary := protectionMigrationSummary{}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			summary.Disabled++
+		}
+		switch rule.MigrationStatus {
+		case "migrated", "native":
+			summary.Migrated++
+		case "legacy-only":
+			summary.LegacyFallback++
+		default:
+			if rule.Source == "legacy" {
+				summary.LegacyFallback++
+			} else {
+				summary.Migrated++
+			}
+		}
+	}
+	return summary
+}
+
+func mergedCCProtectionRules(protectionRules []model.ProtectionRule, rateLimits []model.RateLimitRule) []model.ProtectionRule {
+	items, seen := filterProtectionRules(protectionRules, "cc-protection")
+	for _, item := range rateLimits {
+		ref := protectionrules.LegacyRef("rate_limits", item.ID)
+		if seen[ref] {
+			continue
+		}
+		items = append(items, publish.CCProtectionFromRateLimit(item))
+	}
+	return items
+}
+
+func mergedAccessControlRules(protectionRules []model.ProtectionRule, accessLists []model.AccessListEntry) []model.ProtectionRule {
+	items, seen := filterProtectionRules(protectionRules, "access-control")
+	for _, item := range accessLists {
+		ref := protectionrules.LegacyRef("access_lists", item.ID)
+		if seen[ref] {
+			continue
+		}
+		items = append(items, publish.AccessControlFromAccessList(item))
+	}
+	return items
+}
+
+func mergedUploadProtectionRules(protectionRules []model.ProtectionRule, uploadRules []model.UploadProtectionRule) []model.ProtectionRule {
+	items, seen := filterProtectionRules(protectionRules, "upload-protection")
+	for _, item := range uploadRules {
+		ref := protectionrules.LegacyRef("upload_protection_rules", item.ID)
+		if seen[ref] {
+			continue
+		}
+		items = append(items, publish.UploadProtectionFromRule(item))
+	}
+	return items
+}
+
+func mergedBotProtectionRules(protectionRules []model.ProtectionRule, botRules []model.BotProtectionRule) []model.ProtectionRule {
+	items, seen := filterProtectionRules(protectionRules, "bot-protection")
+	for _, item := range botRules {
+		ref := protectionrules.LegacyRef("bot_protection_rules", item.ID)
+		if seen[ref] {
+			continue
+		}
+		items = append(items, publish.BotProtectionFromRule(item))
+	}
+	return items
+}
+
+func mergedDynamicProtectionRules(protectionRules []model.ProtectionRule, dynamicRules []model.DynamicProtectionRule) []model.ProtectionRule {
+	items, seen := filterProtectionRules(protectionRules, "dynamic-protection")
+	for _, item := range dynamicRules {
+		ref := protectionrules.LegacyRef("dynamic_protection_rules", item.ID)
+		if seen[ref] {
+			continue
+		}
+		items = append(items, publish.DynamicProtectionFromRule(item))
+	}
+	return items
+}
+
+func filterProtectionRules(rules []model.ProtectionRule, module string) ([]model.ProtectionRule, map[string]bool) {
+	items := []model.ProtectionRule{}
+	seen := map[string]bool{}
+	for _, rule := range rules {
+		if rule.Module != module {
+			continue
+		}
+		if rule.LegacyRef != "" {
+			seen[rule.LegacyRef] = true
+		}
+		items = append(items, rule)
+	}
+	return items, seen
 }
 
 func summaryCountTotal(items []model.SummaryCount, prefix string) []model.SummaryCount {
@@ -734,18 +843,18 @@ func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource
 	}
 }
 
-func accessControlSummary(accessLists []model.AccessListEntry) envelope {
+func accessControlSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
 	allow := 0
 	block := 0
 	logOnly := 0
 	warnings := []string{}
-	for _, item := range accessLists {
-		if !item.Enabled {
+	migration := migrationSummary(rules)
+	for _, rule := range rules {
+		if !rule.Enabled {
 			continue
 		}
 		enabled++
-		rule := publish.AccessControlFromAccessList(item)
 		switch rule.Action.Type {
 		case "allow":
 			allow++
@@ -762,31 +871,37 @@ func accessControlSummary(accessLists []model.AccessListEntry) envelope {
 		}
 	}
 	return envelope{
-		"rules":    len(accessLists),
-		"enabled":  enabled,
-		"allow":    allow,
-		"block":    block,
-		"log_only": logOnly,
-		"warnings": warnings,
+		"rules":           len(rules),
+		"enabled":         enabled,
+		"allow":           allow,
+		"block":           block,
+		"log_only":        logOnly,
+		"warnings":        warnings,
+		"migrated":        migration.Migrated,
+		"legacy_fallback": migration.LegacyFallback,
+		"disabled":        migration.Disabled,
 	}
 }
 
-func ccProtectionSummary(rateLimits []model.RateLimitRule) envelope {
+func ccProtectionSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
 	warnings := []string{}
-	for _, item := range rateLimits {
-		if item.Enabled {
+	migration := migrationSummary(rules)
+	for _, rule := range rules {
+		if rule.Enabled {
 			enabled++
-			rule := publish.CCProtectionFromRateLimit(item)
 			if rule.Match.Path == "/" && rule.Match.PathMatch == "prefix" && rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec <= 60 {
 				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name))
 			}
 		}
 	}
 	return envelope{
-		"rules":    len(rateLimits),
-		"enabled":  enabled,
-		"warnings": warnings,
+		"rules":           len(rules),
+		"enabled":         enabled,
+		"warnings":        warnings,
+		"migrated":        migration.Migrated,
+		"legacy_fallback": migration.LegacyFallback,
+		"disabled":        migration.Disabled,
 	}
 }
 
@@ -817,33 +932,34 @@ func attackProtectionSummary(rules []model.Rule) envelope {
 	}
 }
 
-func uploadProtectionSummary(rules []model.UploadProtectionRule) envelope {
+func uploadProtectionSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
 	extensionRules := 0
 	sizeRules := 0
 	block := 0
 	logOnly := 0
 	warnings := []string{}
+	migration := migrationSummary(rules)
 	for _, item := range rules {
 		if !item.Enabled {
 			continue
 		}
 		enabled++
-		if len(item.Extensions) > 0 {
+		if item.Upload != nil && len(item.Upload.Extensions) > 0 {
 			extensionRules++
 		}
-		if item.MaxBytes > 0 {
+		if item.Upload != nil && item.Upload.MaxBytes > 0 {
 			sizeRules++
-			if item.MaxBytes < 1024*1024 {
+			if item.Upload.MaxBytes < 1024*1024 {
 				warnings = append(warnings, fmt.Sprintf("规则 %s 使用较小上传大小限制", item.Name))
 			}
 		}
-		switch item.Action {
+		switch item.Action.Type {
 		case "log-only":
 			logOnly++
 		case "block":
 			block++
-			if item.Path == "/" && item.PathMatch == "prefix" {
+			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
 				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站上传使用阻断动作", item.Name))
 			}
 		}
@@ -856,47 +972,58 @@ func uploadProtectionSummary(rules []model.UploadProtectionRule) envelope {
 		"block":           block,
 		"log_only":        logOnly,
 		"warnings":        warnings,
+		"migrated":        migration.Migrated,
+		"legacy_fallback": migration.LegacyFallback,
+		"disabled":        migration.Disabled,
 	}
 }
 
-func botProtectionSummary(rules []model.BotProtectionRule) envelope {
+func botProtectionSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
 	challenges := 0
 	block := 0
 	logOnly := 0
 	warnings := []string{}
+	migration := migrationSummary(rules)
 	for _, item := range rules {
 		if !item.Enabled {
 			continue
 		}
 		enabled++
-		if item.ChallengeMode == "js-challenge" {
+		if item.Challenge != nil && item.Challenge.Mode == "js-challenge" {
 			challenges++
 		}
-		switch item.FailureAction {
+		failureAction := ""
+		if item.Challenge != nil {
+			failureAction = item.Challenge.FailureAction
+		}
+		switch failureAction {
 		case "log-only":
 			logOnly++
 		case "block":
 			block++
-			if item.Path == "/" && item.PathMatch == "prefix" {
+			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
 				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用 JS Challenge 阻断", item.Name))
 			}
-			if len(item.Methods) == 0 {
+			if len(item.Match.Methods) == 0 {
 				warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用 JS Challenge 阻断", item.Name))
 			}
 		}
 	}
 	return envelope{
-		"rules":      len(rules),
-		"enabled":    enabled,
-		"challenges": challenges,
-		"block":      block,
-		"log_only":   logOnly,
-		"warnings":   warnings,
+		"rules":           len(rules),
+		"enabled":         enabled,
+		"challenges":      challenges,
+		"block":           block,
+		"log_only":        logOnly,
+		"warnings":        warnings,
+		"migrated":        migration.Migrated,
+		"legacy_fallback": migration.LegacyFallback,
+		"disabled":        migration.Disabled,
 	}
 }
 
-func dynamicProtectionSummary(rules []model.DynamicProtectionRule) envelope {
+func dynamicProtectionSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
 	dynamicTokens := 0
 	pageMutations := 0
@@ -905,6 +1032,7 @@ func dynamicProtectionSummary(rules []model.DynamicProtectionRule) envelope {
 	logOnly := 0
 	waitingRoomAction := 0
 	warnings := []string{}
+	migration := migrationSummary(rules)
 	for _, item := range rules {
 		if !item.Enabled {
 			continue
@@ -913,13 +1041,17 @@ func dynamicProtectionSummary(rules []model.DynamicProtectionRule) envelope {
 		switch item.Category {
 		case "dynamic-token":
 			dynamicTokens++
-			switch item.FailureAction {
+			failureAction := ""
+			if item.Dynamic != nil {
+				failureAction = item.Dynamic.FailureAction
+			}
+			switch failureAction {
 			case "block":
 				block++
-				if item.Path == "/" && item.PathMatch == "prefix" {
+				if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
 					warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用动态令牌阻断", item.Name))
 				}
-				if len(item.Methods) == 0 {
+				if len(item.Match.Methods) == 0 {
 					warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用动态令牌阻断", item.Name))
 				}
 			case "log-only":
@@ -928,15 +1060,21 @@ func dynamicProtectionSummary(rules []model.DynamicProtectionRule) envelope {
 		case "page-mutation":
 			pageMutations++
 			logOnly++
-			if item.Path == "/" && item.PathMatch == "prefix" {
+			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
 				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站 HTML 响应启用页面动态化", item.Name))
 			}
 		case "waiting-room":
 			waitingRooms++
-			switch item.OverflowAction {
+			overflowAction := ""
+			queueCapacity := 0
+			if item.Dynamic != nil {
+				overflowAction = item.Dynamic.OverflowAction
+				queueCapacity = item.Dynamic.QueueCapacity
+			}
+			switch overflowAction {
 			case "waiting-room":
 				waitingRoomAction++
-				if item.Path == "/" && item.PathMatch == "prefix" && item.QueueCapacity < 50 {
+				if item.Match.Path == "/" && item.Match.PathMatch == "prefix" && queueCapacity < 50 {
 					warnings = append(warnings, fmt.Sprintf("规则 %s 对全站使用较低等候室容量", item.Name))
 				}
 			case "block":
@@ -956,6 +1094,9 @@ func dynamicProtectionSummary(rules []model.DynamicProtectionRule) envelope {
 		"log_only":            logOnly,
 		"waiting_room_action": waitingRoomAction,
 		"warnings":            warnings,
+		"migrated":            migration.Migrated,
+		"legacy_fallback":     migration.LegacyFallback,
+		"disabled":            migration.Disabled,
 	}
 }
 

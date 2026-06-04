@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
+	"litewaf-api/internal/store"
 )
 
 const (
@@ -27,13 +29,31 @@ func (h handlers) listAccessControlRules(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	protectionRules, err := h.app.Store.ListProtectionRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	items := make([]model.ProtectionRule, 0, len(protectionRules))
+	seenLegacy := map[string]bool{}
+	for _, rule := range protectionRules {
+		if rule.Module != accessControlModule {
+			continue
+		}
+		seenLegacy[rule.LegacyRef] = true
+		if accessControlMatches(rule, filter) {
+			items = append(items, rule)
+		}
+	}
 	entries, err := h.app.Store.ListAccessListEntries(r.Context())
 	if err != nil {
 		h.writeServerError(w, err)
 		return
 	}
-	items := make([]model.ProtectionRule, 0, len(entries))
 	for _, entry := range entries {
+		if seenLegacy[protectionrules.LegacyRef("access_lists", entry.ID)] {
+			continue
+		}
 		rule := accessControlFromAccessList(entry)
 		if accessControlMatches(rule, filter) {
 			items = append(items, rule)
@@ -47,12 +67,21 @@ func (h handlers) getAccessControlRule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	entry, err := h.app.Store.GetAccessListEntry(r.Context(), id)
+	item, err := h.app.Store.GetProtectionRule(r.Context(), id)
 	if err != nil {
-		h.writeKnownError(w, err)
+		entry, legacyErr := h.app.Store.GetAccessListEntry(r.Context(), id)
+		if legacyErr != nil {
+			h.writeKnownError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, envelope{"item": accessControlFromAccessList(entry)})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{"item": accessControlFromAccessList(entry)})
+	if item.Module != accessControlModule {
+		h.writeKnownError(w, store.ErrNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item})
 }
 
 func (h handlers) createAccessControlRule(w http.ResponseWriter, r *http.Request) {
@@ -60,14 +89,14 @@ func (h handlers) createAccessControlRule(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	entry, err := req.toAccessList()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	created, err := h.app.Store.CreateAccessListEntry(r.Context(), entry)
+	created, err := h.app.Store.CreateProtectionRule(r.Context(), item)
 	h.audit(r, "create", "access_control_rule", created.ID, resultFromErr(err), err)
-	h.writeCreated(w, accessControlFromAccessList(created), err)
+	h.writeCreated(w, created, err)
 }
 
 func (h handlers) updateAccessControlRule(w http.ResponseWriter, r *http.Request) {
@@ -79,14 +108,21 @@ func (h handlers) updateAccessControlRule(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	entry, err := req.toAccessList()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	updated, err := h.app.Store.UpdateAccessListEntry(r.Context(), id, entry)
+	updated, err := h.app.Store.UpdateProtectionRule(r.Context(), id, item)
+	if errors.Is(err, store.ErrNotFound) {
+		legacy, legacyErr := h.app.Store.UpdateAccessListEntry(r.Context(), id, protectionrules.ToAccessList(item))
+		if legacyErr == nil {
+			updated = accessControlFromAccessList(legacy)
+		}
+		err = legacyErr
+	}
 	h.audit(r, "update", "access_control_rule", id, resultFromErr(err), err)
-	h.writeItem(w, accessControlFromAccessList(updated), err)
+	h.writeItem(w, updated, err)
 }
 
 func (h handlers) deleteAccessControlRule(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +130,10 @@ func (h handlers) deleteAccessControlRule(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	err := h.app.Store.DeleteAccessListEntry(r.Context(), id)
+	err := h.app.Store.DeleteProtectionRule(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		err = h.app.Store.DeleteAccessListEntry(r.Context(), id)
+	}
 	h.audit(r, "delete", "access_control_rule", id, resultFromErr(err), err)
 	h.writeNoContent(w, err)
 }
@@ -111,40 +150,28 @@ type accessControlRequest struct {
 }
 
 func (r accessControlRequest) toAccessList() (model.AccessListEntry, error) {
-	r.normalize()
-	if err := r.validate(); err != nil {
+	rule, err := r.toProtectionRule()
+	if err != nil {
 		return model.AccessListEntry{}, err
 	}
-	target := r.Match.Target
-	value := r.Match.Value
-	headerName := r.Match.HeaderName
-	operator := r.Match.Operator
-	switch target {
-	case "path":
-		target = "uri"
-		value = r.Match.Path
-		operator = r.Match.PathMatch
-	case "header":
-		target = "header"
-	case "host":
-		target = "host"
-		value = r.Match.Host
+	return protectionrules.ToAccessList(rule), nil
+}
+
+func (r accessControlRequest) toProtectionRule() (model.ProtectionRule, error) {
+	r.normalize()
+	if err := r.validate(); err != nil {
+		return model.ProtectionRule{}, err
 	}
-	kind := "blacklist"
-	if r.Action.Type == "allow" {
-		kind = "whitelist"
-	}
-	return model.AccessListEntry{
-		Name:          r.Name,
-		Kind:          kind,
-		Target:        target,
-		Value:         value,
-		MatchOperator: operator,
-		HeaderName:    headerName,
-		Action:        accessControlLegacyAction(r.Action.Type),
-		SiteID:        r.SiteID,
-		Enabled:       boolValue(r.Enabled, true),
-		Priority:      accessControlPriority(r.Priority),
+	return model.ProtectionRule{
+		Name:     r.Name,
+		Module:   r.Module,
+		Category: r.Category,
+		SiteID:   r.SiteID,
+		Enabled:  boolValue(r.Enabled, true),
+		Priority: accessControlPriority(r.Priority),
+		Match:    r.Match,
+		Action:   r.Action,
+		Source:   protectionrules.SourceNative,
 	}, nil
 }
 

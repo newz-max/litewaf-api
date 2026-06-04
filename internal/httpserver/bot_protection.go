@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
+	"litewaf-api/internal/store"
 )
 
 const (
@@ -28,13 +30,31 @@ func (h handlers) listBotProtectionRules(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	protectionRules, err := h.app.Store.ListProtectionRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	items := make([]model.ProtectionRule, 0, len(protectionRules))
+	seenLegacy := map[string]bool{}
+	for _, rule := range protectionRules {
+		if rule.Module != botProtectionModule {
+			continue
+		}
+		seenLegacy[rule.LegacyRef] = true
+		if botProtectionMatches(rule, filter) {
+			items = append(items, rule)
+		}
+	}
 	rules, err := h.app.Store.ListBotProtectionRules(r.Context())
 	if err != nil {
 		h.writeServerError(w, err)
 		return
 	}
-	items := make([]model.ProtectionRule, 0, len(rules))
 	for _, item := range rules {
+		if seenLegacy[protectionrules.LegacyRef("bot_protection_rules", item.ID)] {
+			continue
+		}
 		rule := botProtectionFromRule(item)
 		if botProtectionMatches(rule, filter) {
 			items = append(items, rule)
@@ -48,12 +68,21 @@ func (h handlers) getBotProtectionRule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	item, err := h.app.Store.GetBotProtectionRule(r.Context(), id)
+	item, err := h.app.Store.GetProtectionRule(r.Context(), id)
 	if err != nil {
-		h.writeKnownError(w, err)
+		legacy, legacyErr := h.app.Store.GetBotProtectionRule(r.Context(), id)
+		if legacyErr != nil {
+			h.writeKnownError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, envelope{"item": botProtectionFromRule(legacy)})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{"item": botProtectionFromRule(item)})
+	if item.Module != botProtectionModule {
+		h.writeKnownError(w, store.ErrNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item})
 }
 
 func (h handlers) createBotProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -61,14 +90,14 @@ func (h handlers) createBotProtectionRule(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toModel()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	created, err := h.app.Store.CreateBotProtectionRule(r.Context(), item)
+	created, err := h.app.Store.CreateProtectionRule(r.Context(), item)
 	h.audit(r, "create", "bot_protection_rule", created.ID, resultFromErr(err), err)
-	h.writeCreated(w, botProtectionFromRule(created), err)
+	h.writeCreated(w, created, err)
 }
 
 func (h handlers) updateBotProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -80,14 +109,21 @@ func (h handlers) updateBotProtectionRule(w http.ResponseWriter, r *http.Request
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toModel()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	updated, err := h.app.Store.UpdateBotProtectionRule(r.Context(), id, item)
+	updated, err := h.app.Store.UpdateProtectionRule(r.Context(), id, item)
+	if errors.Is(err, store.ErrNotFound) {
+		legacy, legacyErr := h.app.Store.UpdateBotProtectionRule(r.Context(), id, protectionrules.ToBot(item))
+		if legacyErr == nil {
+			updated = botProtectionFromRule(legacy)
+		}
+		err = legacyErr
+	}
 	h.audit(r, "update", "bot_protection_rule", id, resultFromErr(err), err)
-	h.writeItem(w, botProtectionFromRule(updated), err)
+	h.writeItem(w, updated, err)
 }
 
 func (h handlers) deleteBotProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +131,10 @@ func (h handlers) deleteBotProtectionRule(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	err := h.app.Store.DeleteBotProtectionRule(r.Context(), id)
+	err := h.app.Store.DeleteProtectionRule(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		err = h.app.Store.DeleteBotProtectionRule(r.Context(), id)
+	}
 	h.audit(r, "delete", "bot_protection_rule", id, resultFromErr(err), err)
 	h.writeNoContent(w, err)
 }
@@ -113,21 +152,29 @@ type botProtectionRequest struct {
 }
 
 func (r botProtectionRequest) toModel() (model.BotProtectionRule, error) {
-	r.normalize()
-	if err := r.validate(); err != nil {
+	rule, err := r.toProtectionRule()
+	if err != nil {
 		return model.BotProtectionRule{}, err
 	}
-	return model.BotProtectionRule{
-		Name:          r.Name,
-		Path:          r.Match.Path,
-		PathMatch:     r.Match.PathMatch,
-		Methods:       cloneStrings(r.Match.Methods),
-		ChallengeMode: r.Challenge.Mode,
-		VerifyTTL:     r.Challenge.VerifyTTL,
-		FailureAction: r.Challenge.FailureAction,
-		SiteID:        r.SiteID,
-		Enabled:       boolValue(r.Enabled, true),
-		Priority:      protectionRequestPriority(r.Priority),
+	return protectionrules.ToBot(rule), nil
+}
+
+func (r botProtectionRequest) toProtectionRule() (model.ProtectionRule, error) {
+	r.normalize()
+	if err := r.validate(); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	return model.ProtectionRule{
+		Name:      r.Name,
+		Module:    r.Module,
+		Category:  r.Category,
+		SiteID:    r.SiteID,
+		Enabled:   boolValue(r.Enabled, true),
+		Priority:  protectionRequestPriority(r.Priority),
+		Match:     r.Match,
+		Challenge: r.Challenge,
+		Action:    r.Action,
+		Source:    protectionrules.SourceNative,
 	}, nil
 }
 

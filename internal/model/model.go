@@ -272,6 +272,9 @@ type AttackProtectionGroup struct {
 	Action           string                    `json:"action"`
 	Enabled          bool                      `json:"enabled"`
 	Priority         int                       `json:"priority"`
+	Source           string                    `json:"source,omitempty"`
+	MigrationStatus  string                    `json:"migration_status,omitempty"`
+	LegacyRef        string                    `json:"legacy_ref,omitempty"`
 	RuleCount        int                       `json:"rule_count"`
 	EnabledRuleCount int                       `json:"enabled_rule_count"`
 	Rules            []AttackProtectionRuleRef `json:"rules"`
@@ -338,21 +341,24 @@ type RateLimitRule struct {
 }
 
 type ProtectionRule struct {
-	ID        int64                    `json:"id"`
-	Name      string                   `json:"name"`
-	Module    string                   `json:"module"`
-	Category  string                   `json:"category"`
-	SiteID    int64                    `json:"site_id"`
-	Enabled   bool                     `json:"enabled"`
-	Priority  int                      `json:"priority"`
-	Match     ProtectionRuleMatch      `json:"match"`
-	Limit     ProtectionRuleLimit      `json:"limit"`
-	Upload    *ProtectionRuleUpload    `json:"upload,omitempty"`
-	Challenge *ProtectionRuleChallenge `json:"challenge,omitempty"`
-	Dynamic   *ProtectionRuleDynamic   `json:"dynamic,omitempty"`
-	Action    ProtectionRuleAction     `json:"action"`
-	CreatedAt time.Time                `json:"created_at"`
-	UpdatedAt time.Time                `json:"updated_at"`
+	ID              int64                    `json:"id"`
+	Name            string                   `json:"name"`
+	Module          string                   `json:"module"`
+	Category        string                   `json:"category"`
+	SiteID          int64                    `json:"site_id"`
+	Enabled         bool                     `json:"enabled"`
+	Priority        int                      `json:"priority"`
+	Match           ProtectionRuleMatch      `json:"match"`
+	Limit           ProtectionRuleLimit      `json:"limit"`
+	Upload          *ProtectionRuleUpload    `json:"upload,omitempty"`
+	Challenge       *ProtectionRuleChallenge `json:"challenge,omitempty"`
+	Dynamic         *ProtectionRuleDynamic   `json:"dynamic,omitempty"`
+	Action          ProtectionRuleAction     `json:"action"`
+	Source          string                   `json:"source,omitempty"`
+	MigrationStatus string                   `json:"migration_status,omitempty"`
+	LegacyRef       string                   `json:"legacy_ref,omitempty"`
+	CreatedAt       time.Time                `json:"created_at"`
+	UpdatedAt       time.Time                `json:"updated_at"`
 }
 
 type ProtectionRuleMatch struct {

@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
+	"litewaf-api/internal/store"
 )
 
 const (
@@ -26,13 +28,31 @@ func (h handlers) listUploadProtectionRules(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	protectionRules, err := h.app.Store.ListProtectionRules(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	items := make([]model.ProtectionRule, 0, len(protectionRules))
+	seenLegacy := map[string]bool{}
+	for _, rule := range protectionRules {
+		if rule.Module != uploadProtectionModule {
+			continue
+		}
+		seenLegacy[rule.LegacyRef] = true
+		if uploadProtectionMatches(rule, filter) {
+			items = append(items, rule)
+		}
+	}
 	rules, err := h.app.Store.ListUploadProtectionRules(r.Context())
 	if err != nil {
 		h.writeServerError(w, err)
 		return
 	}
-	items := make([]model.ProtectionRule, 0, len(rules))
 	for _, item := range rules {
+		if seenLegacy[protectionrules.LegacyRef("upload_protection_rules", item.ID)] {
+			continue
+		}
 		rule := uploadProtectionFromRule(item)
 		if uploadProtectionMatches(rule, filter) {
 			items = append(items, rule)
@@ -46,12 +66,21 @@ func (h handlers) getUploadProtectionRule(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	item, err := h.app.Store.GetUploadProtectionRule(r.Context(), id)
+	item, err := h.app.Store.GetProtectionRule(r.Context(), id)
 	if err != nil {
-		h.writeKnownError(w, err)
+		legacy, legacyErr := h.app.Store.GetUploadProtectionRule(r.Context(), id)
+		if legacyErr != nil {
+			h.writeKnownError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, envelope{"item": uploadProtectionFromRule(legacy)})
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{"item": uploadProtectionFromRule(item)})
+	if item.Module != uploadProtectionModule {
+		h.writeKnownError(w, store.ErrNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item})
 }
 
 func (h handlers) createUploadProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -59,14 +88,14 @@ func (h handlers) createUploadProtectionRule(w http.ResponseWriter, r *http.Requ
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toModel()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	created, err := h.app.Store.CreateUploadProtectionRule(r.Context(), item)
+	created, err := h.app.Store.CreateProtectionRule(r.Context(), item)
 	h.audit(r, "create", "upload_protection_rule", created.ID, resultFromErr(err), err)
-	h.writeCreated(w, uploadProtectionFromRule(created), err)
+	h.writeCreated(w, created, err)
 }
 
 func (h handlers) updateUploadProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -78,14 +107,21 @@ func (h handlers) updateUploadProtectionRule(w http.ResponseWriter, r *http.Requ
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	item, err := req.toModel()
+	item, err := req.toProtectionRule()
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	updated, err := h.app.Store.UpdateUploadProtectionRule(r.Context(), id, item)
+	updated, err := h.app.Store.UpdateProtectionRule(r.Context(), id, item)
+	if errors.Is(err, store.ErrNotFound) {
+		legacy, legacyErr := h.app.Store.UpdateUploadProtectionRule(r.Context(), id, protectionrules.ToUpload(item))
+		if legacyErr == nil {
+			updated = uploadProtectionFromRule(legacy)
+		}
+		err = legacyErr
+	}
 	h.audit(r, "update", "upload_protection_rule", id, resultFromErr(err), err)
-	h.writeItem(w, uploadProtectionFromRule(updated), err)
+	h.writeItem(w, updated, err)
 }
 
 func (h handlers) deleteUploadProtectionRule(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +129,10 @@ func (h handlers) deleteUploadProtectionRule(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
-	err := h.app.Store.DeleteUploadProtectionRule(r.Context(), id)
+	err := h.app.Store.DeleteProtectionRule(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		err = h.app.Store.DeleteUploadProtectionRule(r.Context(), id)
+	}
 	h.audit(r, "delete", "upload_protection_rule", id, resultFromErr(err), err)
 	h.writeNoContent(w, err)
 }
@@ -111,21 +150,29 @@ type uploadProtectionRequest struct {
 }
 
 func (r uploadProtectionRequest) toModel() (model.UploadProtectionRule, error) {
-	r.normalize()
-	if err := r.validate(); err != nil {
+	rule, err := r.toProtectionRule()
+	if err != nil {
 		return model.UploadProtectionRule{}, err
 	}
-	return model.UploadProtectionRule{
-		Name:       r.Name,
-		Path:       r.Match.Path,
-		PathMatch:  r.Match.PathMatch,
-		Methods:    cloneStrings(r.Match.Methods),
-		Extensions: cloneStrings(r.Upload.Extensions),
-		MaxBytes:   r.Upload.MaxBytes,
-		Action:     r.Action.Type,
-		SiteID:     r.SiteID,
-		Enabled:    boolValue(r.Enabled, true),
-		Priority:   protectionRequestPriority(r.Priority),
+	return protectionrules.ToUpload(rule), nil
+}
+
+func (r uploadProtectionRequest) toProtectionRule() (model.ProtectionRule, error) {
+	r.normalize()
+	if err := r.validate(); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	return model.ProtectionRule{
+		Name:     r.Name,
+		Module:   r.Module,
+		Category: r.Category,
+		SiteID:   r.SiteID,
+		Enabled:  boolValue(r.Enabled, true),
+		Priority: protectionRequestPriority(r.Priority),
+		Match:    r.Match,
+		Upload:   r.Upload,
+		Action:   r.Action,
+		Source:   protectionrules.SourceNative,
 	}, nil
 }
 

@@ -372,6 +372,40 @@ ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS retry_interval_sec
 ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS overflow_action TEXT NOT NULL DEFAULT 'waiting-room';
 ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
 
+CREATE TABLE IF NOT EXISTS protection_rules (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	module TEXT NOT NULL,
+	category TEXT NOT NULL,
+	site_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	priority INTEGER NOT NULL DEFAULT 100,
+	match_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	limit_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	upload_json JSONB,
+	challenge_json JSONB,
+	dynamic_json JSONB,
+	action_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+	source TEXT NOT NULL DEFAULT 'protection_rules',
+	migration_status TEXT NOT NULL DEFAULT 'native',
+	legacy_ref TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS match_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS limit_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS upload_json JSONB;
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS challenge_json JSONB;
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS dynamic_json JSONB;
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS action_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'protection_rules';
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS migration_status TEXT NOT NULL DEFAULT 'native';
+ALTER TABLE protection_rules ADD COLUMN IF NOT EXISTS legacy_ref TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protection_rules_legacy_ref ON protection_rules (legacy_ref) WHERE legacy_ref <> '';
+CREATE INDEX IF NOT EXISTS idx_protection_rules_module ON protection_rules (module, category);
+CREATE INDEX IF NOT EXISTS idx_protection_rules_site_id ON protection_rules (site_id);
+
 CREATE TABLE IF NOT EXISTS rule_catalog_sources (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,

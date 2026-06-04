@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
 
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 )
 
 type PostgresStore struct {
@@ -894,6 +896,179 @@ func (s *PostgresStore) DeleteDynamicProtectionRule(ctx context.Context, id int6
 	return checkRowsAffected(result, err)
 }
 
+func (s *PostgresStore) ListProtectionRules(ctx context.Context) ([]model.ProtectionRule, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, module, category, site_id, enabled, priority,
+			match_json, limit_json, upload_json, challenge_json, dynamic_json, action_json,
+			source, migration_status, legacy_ref, created_at, updated_at
+		FROM protection_rules
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.ProtectionRule
+	for rows.Next() {
+		item, err := scanProtectionRule(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetProtectionRule(ctx context.Context, id int64) (model.ProtectionRule, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, module, category, site_id, enabled, priority,
+			match_json, limit_json, upload_json, challenge_json, dynamic_json, action_json,
+			source, migration_status, legacy_ref, created_at, updated_at
+		FROM protection_rules
+		WHERE id = $1`, id)
+	item, err := scanProtectionRule(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.ProtectionRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateProtectionRule(ctx context.Context, item model.ProtectionRule) (model.ProtectionRule, error) {
+	item = protectionrules.Normalize(item)
+	if err := protectionrules.Validate(item); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	encoded, err := encodeProtectionRule(item)
+	if err != nil {
+		return model.ProtectionRule{}, err
+	}
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO protection_rules (
+			name, module, category, site_id, enabled, priority,
+			match_json, limit_json, upload_json, challenge_json, dynamic_json, action_json,
+			source, migration_status, legacy_ref
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Module, item.Category, item.SiteID, item.Enabled, item.Priority,
+		encoded.Match, encoded.Limit, encoded.Upload, encoded.Challenge, encoded.Dynamic, encoded.Action,
+		item.Source, item.MigrationStatus, item.LegacyRef).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateProtectionRule(ctx context.Context, id int64, item model.ProtectionRule) (model.ProtectionRule, error) {
+	item = protectionrules.Normalize(item)
+	if err := protectionrules.Validate(item); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	encoded, err := encodeProtectionRule(item)
+	if err != nil {
+		return model.ProtectionRule{}, err
+	}
+	err = s.db.QueryRowContext(ctx, `
+		UPDATE protection_rules
+		SET name = $2, module = $3, category = $4, site_id = $5, enabled = $6, priority = $7,
+			match_json = $8, limit_json = $9, upload_json = $10, challenge_json = $11,
+			dynamic_json = $12, action_json = $13, source = $14, migration_status = $15,
+			legacy_ref = $16, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Module, item.Category, item.SiteID, item.Enabled, item.Priority,
+		encoded.Match, encoded.Limit, encoded.Upload, encoded.Challenge, encoded.Dynamic, encoded.Action,
+		item.Source, item.MigrationStatus, item.LegacyRef).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.ProtectionRule{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteProtectionRule(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM protection_rules WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) BackfillProtectionRules(ctx context.Context) (int, error) {
+	var candidates []model.ProtectionRule
+	rateLimits, err := s.ListRateLimitRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range rateLimits {
+		candidates = append(candidates, protectionrules.FromRateLimit(item))
+	}
+	accessLists, err := s.ListAccessListEntries(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range accessLists {
+		candidates = append(candidates, protectionrules.FromAccessList(item))
+	}
+	uploadRules, err := s.ListUploadProtectionRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range uploadRules {
+		candidates = append(candidates, protectionrules.FromUpload(item))
+	}
+	botRules, err := s.ListBotProtectionRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range botRules {
+		candidates = append(candidates, protectionrules.FromBot(item))
+	}
+	dynamicRules, err := s.ListDynamicProtectionRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, item := range dynamicRules {
+		candidates = append(candidates, protectionrules.FromDynamic(item))
+	}
+	rules, err := s.ListRules(ctx)
+	if err != nil {
+		return 0, err
+	}
+	for _, raw := range rules {
+		rule := attackmeta.NormalizeRule(raw)
+		if rule.Module == attackmeta.Module && rule.Category == attackmeta.Category {
+			candidates = append(candidates, protectionrules.FromAttackRule(rule))
+		}
+	}
+	created := 0
+	for _, item := range candidates {
+		item = protectionrules.Normalize(item)
+		item.ID = 0
+		item.Source = protectionrules.SourceLegacy
+		item.MigrationStatus = protectionrules.StatusMigrated
+		if err := protectionrules.Validate(item); err != nil {
+			return created, err
+		}
+		encoded, err := encodeProtectionRule(item)
+		if err != nil {
+			return created, err
+		}
+		result, err := s.db.ExecContext(ctx, `
+			INSERT INTO protection_rules (
+				name, module, category, site_id, enabled, priority,
+				match_json, limit_json, upload_json, challenge_json, dynamic_json, action_json,
+				source, migration_status, legacy_ref
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			ON CONFLICT (legacy_ref) WHERE legacy_ref <> '' DO NOTHING`,
+			item.Name, item.Module, item.Category, item.SiteID, item.Enabled, item.Priority,
+			encoded.Match, encoded.Limit, encoded.Upload, encoded.Challenge, encoded.Dynamic, encoded.Action,
+			item.Source, item.MigrationStatus, item.LegacyRef)
+		if err != nil {
+			return created, err
+		}
+		if rows, err := result.RowsAffected(); err == nil && rows > 0 {
+			created++
+		}
+	}
+	return created, nil
+}
+
 func (s *PostgresStore) ListRuleCatalogSources(ctx context.Context) ([]model.RuleCatalogSource, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT s.id, s.name, s.source, s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
@@ -1185,6 +1360,101 @@ func nullableTime(value time.Time) any {
 		return nil
 	}
 	return value
+}
+
+type protectionRuleScanner interface {
+	Scan(dest ...any) error
+}
+
+type encodedProtectionRule struct {
+	Match     []byte
+	Limit     []byte
+	Upload    []byte
+	Challenge []byte
+	Dynamic   []byte
+	Action    []byte
+}
+
+func encodeProtectionRule(item model.ProtectionRule) (encodedProtectionRule, error) {
+	var out encodedProtectionRule
+	var err error
+	if out.Match, err = json.Marshal(item.Match); err != nil {
+		return out, err
+	}
+	if out.Limit, err = json.Marshal(item.Limit); err != nil {
+		return out, err
+	}
+	if out.Upload, err = marshalNullable(item.Upload); err != nil {
+		return out, err
+	}
+	if out.Challenge, err = marshalNullable(item.Challenge); err != nil {
+		return out, err
+	}
+	if out.Dynamic, err = marshalNullable(item.Dynamic); err != nil {
+		return out, err
+	}
+	if out.Action, err = json.Marshal(item.Action); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func marshalNullable(value any) ([]byte, error) {
+	if value == nil {
+		return nil, nil
+	}
+	return json.Marshal(value)
+}
+
+func scanProtectionRule(scanner protectionRuleScanner) (model.ProtectionRule, error) {
+	var item model.ProtectionRule
+	var matchJSON, limitJSON, actionJSON []byte
+	var uploadJSON, challengeJSON, dynamicJSON []byte
+	err := scanner.Scan(
+		&item.ID, &item.Name, &item.Module, &item.Category, &item.SiteID, &item.Enabled, &item.Priority,
+		&matchJSON, &limitJSON, &uploadJSON, &challengeJSON, &dynamicJSON, &actionJSON,
+		&item.Source, &item.MigrationStatus, &item.LegacyRef, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if err != nil {
+		return model.ProtectionRule{}, err
+	}
+	if len(matchJSON) > 0 {
+		if err := json.Unmarshal(matchJSON, &item.Match); err != nil {
+			return model.ProtectionRule{}, err
+		}
+	}
+	if len(limitJSON) > 0 {
+		if err := json.Unmarshal(limitJSON, &item.Limit); err != nil {
+			return model.ProtectionRule{}, err
+		}
+	}
+	if len(uploadJSON) > 0 {
+		var upload model.ProtectionRuleUpload
+		if err := json.Unmarshal(uploadJSON, &upload); err != nil {
+			return model.ProtectionRule{}, err
+		}
+		item.Upload = &upload
+	}
+	if len(challengeJSON) > 0 {
+		var challenge model.ProtectionRuleChallenge
+		if err := json.Unmarshal(challengeJSON, &challenge); err != nil {
+			return model.ProtectionRule{}, err
+		}
+		item.Challenge = &challenge
+	}
+	if len(dynamicJSON) > 0 {
+		var dynamic model.ProtectionRuleDynamic
+		if err := json.Unmarshal(dynamicJSON, &dynamic); err != nil {
+			return model.ProtectionRule{}, err
+		}
+		item.Dynamic = &dynamic
+	}
+	if len(actionJSON) > 0 {
+		if err := json.Unmarshal(actionJSON, &item.Action); err != nil {
+			return model.ProtectionRule{}, err
+		}
+	}
+	return protectionrules.Normalize(item), nil
 }
 
 func replacePolicyBindings(ctx context.Context, tx *sql.Tx, policyID int64, siteIDs []int64, ruleIDs []int64) error {

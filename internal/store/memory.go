@@ -11,6 +11,7 @@ import (
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/defaults"
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/protectionrules"
 )
 
 type MemoryStore struct {
@@ -26,6 +27,7 @@ type MemoryStore struct {
 	nextUploadID         int64
 	nextBotID            int64
 	nextDynamicID        int64
+	nextProtectionRuleID int64
 	nextCatalogID        int64
 	nextCatalogPackageID int64
 	nextTrustKeyID       int64
@@ -42,6 +44,7 @@ type MemoryStore struct {
 	uploadRules          map[int64]model.UploadProtectionRule
 	botRules             map[int64]model.BotProtectionRule
 	dynamicRules         map[int64]model.DynamicProtectionRule
+	protectionRules      map[int64]model.ProtectionRule
 	catalogSources       map[int64]model.RuleCatalogSource
 	catalogPackages      map[int64]model.RuleCatalogPackage
 	trustKeys            map[int64]model.RuleTrustKey
@@ -62,6 +65,7 @@ func NewMemoryStore() *MemoryStore {
 		nextUploadID:         1,
 		nextBotID:            1,
 		nextDynamicID:        1,
+		nextProtectionRuleID: 1,
 		nextCatalogID:        1,
 		nextCatalogPackageID: 1,
 		nextTrustKeyID:       1,
@@ -78,6 +82,7 @@ func NewMemoryStore() *MemoryStore {
 		uploadRules:          map[int64]model.UploadProtectionRule{},
 		botRules:             map[int64]model.BotProtectionRule{},
 		dynamicRules:         map[int64]model.DynamicProtectionRule{},
+		protectionRules:      map[int64]model.ProtectionRule{},
 		catalogSources:       map[int64]model.RuleCatalogSource{},
 		catalogPackages:      map[int64]model.RuleCatalogPackage{},
 		trustKeys:            map[int64]model.RuleTrustKey{},
@@ -824,6 +829,138 @@ func (s *MemoryStore) DeleteDynamicProtectionRule(_ context.Context, id int64) e
 	return nil
 }
 
+func (s *MemoryStore) ListProtectionRules(context.Context) ([]model.ProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.ProtectionRule, 0, len(s.protectionRules))
+	for _, item := range s.protectionRules {
+		items = append(items, cloneProtectionRule(item))
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetProtectionRule(_ context.Context, id int64) (model.ProtectionRule, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.protectionRules[id]
+	if !ok {
+		return model.ProtectionRule{}, ErrNotFound
+	}
+	return cloneProtectionRule(item), nil
+}
+
+func (s *MemoryStore) CreateProtectionRule(_ context.Context, item model.ProtectionRule) (model.ProtectionRule, error) {
+	item = protectionrules.Normalize(item)
+	if err := protectionrules.Validate(item); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextProtectionRuleID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item = cloneProtectionRule(item)
+	s.protectionRules[item.ID] = item
+	s.nextProtectionRuleID++
+	return cloneProtectionRule(item), nil
+}
+
+func (s *MemoryStore) UpdateProtectionRule(_ context.Context, id int64, item model.ProtectionRule) (model.ProtectionRule, error) {
+	item = protectionrules.Normalize(item)
+	if err := protectionrules.Validate(item); err != nil {
+		return model.ProtectionRule{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.protectionRules[id]
+	if !ok {
+		return model.ProtectionRule{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	item = cloneProtectionRule(item)
+	s.protectionRules[id] = item
+	return cloneProtectionRule(item), nil
+}
+
+func (s *MemoryStore) DeleteProtectionRule(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.protectionRules[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.protectionRules, id)
+	return nil
+}
+
+func (s *MemoryStore) BackfillProtectionRules(context.Context) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	created := 0
+	add := func(item model.ProtectionRule) error {
+		item = protectionrules.Normalize(item)
+		item.ID = 0
+		item.Source = protectionrules.SourceLegacy
+		item.MigrationStatus = protectionrules.StatusMigrated
+		if err := protectionrules.Validate(item); err != nil {
+			return err
+		}
+		if item.LegacyRef != "" {
+			for _, existing := range s.protectionRules {
+				if existing.LegacyRef == item.LegacyRef {
+					return nil
+				}
+			}
+		}
+		now := time.Now().UTC()
+		item.ID = s.nextProtectionRuleID
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		s.protectionRules[item.ID] = cloneProtectionRule(item)
+		s.nextProtectionRuleID++
+		created++
+		return nil
+	}
+	for _, item := range s.rateLimits {
+		if err := add(protectionrules.FromRateLimit(item)); err != nil {
+			return created, err
+		}
+	}
+	for _, item := range s.accessLists {
+		if err := add(protectionrules.FromAccessList(item)); err != nil {
+			return created, err
+		}
+	}
+	for _, item := range s.uploadRules {
+		if err := add(protectionrules.FromUpload(item)); err != nil {
+			return created, err
+		}
+	}
+	for _, item := range s.botRules {
+		if err := add(protectionrules.FromBot(item)); err != nil {
+			return created, err
+		}
+	}
+	for _, item := range s.dynamicRules {
+		if err := add(protectionrules.FromDynamic(item)); err != nil {
+			return created, err
+		}
+	}
+	for _, raw := range s.rules {
+		rule := attackmeta.NormalizeRule(raw)
+		if rule.Module != attackmeta.Module || rule.Category != attackmeta.Category {
+			continue
+		}
+		if err := add(protectionrules.FromAttackRule(rule)); err != nil {
+			return created, err
+		}
+	}
+	return created, nil
+}
+
 func (s *MemoryStore) ListRuleCatalogSources(context.Context) ([]model.RuleCatalogSource, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1212,4 +1349,22 @@ func cloneStrings(values []string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+func cloneProtectionRule(item model.ProtectionRule) model.ProtectionRule {
+	item.Match.Methods = cloneStrings(item.Match.Methods)
+	if item.Upload != nil {
+		upload := *item.Upload
+		upload.Extensions = cloneStrings(upload.Extensions)
+		item.Upload = &upload
+	}
+	if item.Challenge != nil {
+		challenge := *item.Challenge
+		item.Challenge = &challenge
+	}
+	if item.Dynamic != nil {
+		dynamic := *item.Dynamic
+		item.Dynamic = &dynamic
+	}
+	return item
 }

@@ -82,6 +82,13 @@ type Store interface {
 	UpdateDynamicProtectionRule(context.Context, int64, model.DynamicProtectionRule) (model.DynamicProtectionRule, error)
 	DeleteDynamicProtectionRule(context.Context, int64) error
 
+	ListProtectionRules(context.Context) ([]model.ProtectionRule, error)
+	GetProtectionRule(context.Context, int64) (model.ProtectionRule, error)
+	CreateProtectionRule(context.Context, model.ProtectionRule) (model.ProtectionRule, error)
+	UpdateProtectionRule(context.Context, int64, model.ProtectionRule) (model.ProtectionRule, error)
+	DeleteProtectionRule(context.Context, int64) error
+	BackfillProtectionRules(context.Context) (int, error)
+
 	ListRuleCatalogSources(context.Context) ([]model.RuleCatalogSource, error)
 	GetRuleCatalogSource(context.Context, int64) (model.RuleCatalogSource, error)
 	CreateRuleCatalogSource(context.Context, model.RuleCatalogSource) (model.RuleCatalogSource, error)

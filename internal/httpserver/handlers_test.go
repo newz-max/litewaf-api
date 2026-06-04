@@ -985,6 +985,25 @@ func TestCCProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	if createResponse.Item.Action.Type != "rate-limit" {
 		t.Fatalf("expected user-facing action mapping to rate-limit, got %+v", createResponse.Item.Action)
 	}
+	if createResponse.Item.Source != "protection_rules" || createResponse.Item.MigrationStatus != "native" {
+		t.Fatalf("expected native protection rule metadata, got %+v", createResponse.Item)
+	}
+
+	listReq := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/cc-protection/rules", nil), token)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list native cc protection status = %d body=%s", listRec.Code, listRec.Body.String())
+	}
+	var nativeList struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&nativeList); err != nil {
+		t.Fatalf("decode native cc list: %v", err)
+	}
+	if len(nativeList.Items) != 1 || nativeList.Items[0].ID != createResponse.Item.ID || nativeList.Items[0].Source != "protection_rules" {
+		t.Fatalf("expected list to prefer native protection rule, got %+v", nativeList.Items)
+	}
 
 	updateBody := bytes.NewBufferString(`{"name":"Login ban","site_id":3,"enabled":false,"match":{"path":"/api/login","path_match":"exact","methods":["POST"]},"limit":{"counter":"client_ip","threshold":10,"window_sec":60,"ban_duration_sec":600},"action":{"type":"ban"}}`)
 	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/cc-protection/rules/"+strconv.FormatInt(createResponse.Item.ID, 10), updateBody), token)

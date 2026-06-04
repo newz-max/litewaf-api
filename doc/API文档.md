@@ -90,7 +90,7 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
-发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并同步输出 CC 防护、访问控制、上传防护、Bot / 人机验证和动态防护子集到 `protection_rules`；托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
+发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并优先从通用 `protection_rules` 表输出 CC 防护、访问控制、上传防护、Bot / 人机验证和动态防护子集；尚未迁移的旧表记录会作为兼容 fallback 输出，发布时按 `legacy_ref` 去重，避免同一有效规则重复进入网关 `protection_rules`。托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
 
 ```json
 {
@@ -189,7 +189,7 @@ Authorization: Bearer <token>
 }
 ```
 
-发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。`summary.dynamic_protection` 包含动态防护规则总数、启用数量、动态令牌数量、页面动态化数量、等候室数量、阻断数量、观察数量、等候室动作数量和宽泛路径提示。
+发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。`summary.dynamic_protection` 包含动态防护规则总数、启用数量、动态令牌数量、页面动态化数量、等候室数量、阻断数量、观察数量、等候室动作数量和宽泛路径提示。模块摘要还包含 `migrated`、`legacy_fallback` 和 `disabled` 计数，用于区分通用表原生/已迁移记录、旧表兼容记录和停用记录。
 
 发布预览还会返回 `summary.module_matrix` 和 `summary.risk_warnings`。`module_matrix` 按防护模块汇总规则总数、启用数、观察数、阻断数、兼容来源和高风险提示，前端应优先展示模块语义，再展示 `rate_limits`、`access_lists` 等兼容上下文。`risk_warnings` 是跨模块风险摘要，不参与网关执行；实际发布配置仍只依赖原有可执行规则字段和 `protection_rules`。
 
@@ -209,7 +209,7 @@ Authorization: Bearer <token>
 
 ## 访问控制
 
-访问控制接口复用现有黑白名单存储，对外以 `module=access-control`、`category=access-control` 的防护规则模型呈现。第一阶段覆盖 IP/CIDR、路径、Header 和 Host 条件，支持 `allow`、`log-only` 和 `block` 动作；旧 `/api/v1/access-lists` 接口和发布字段继续保留用于兼容。
+访问控制接口以通用 `protection_rules` 表作为主存储，对外以 `module=access-control`、`category=access-control` 的防护规则模型呈现。当前覆盖 IP/CIDR、路径、Header 和 Host 条件，支持 `allow`、`log-only` 和 `block` 动作；旧 `/api/v1/access-lists` 接口和发布字段继续保留用于兼容，未迁移旧记录仍会作为 `legacy-only` 规则出现在访问控制列表中。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -260,7 +260,7 @@ Authorization: Bearer <token>
 
 ## 上传防护
 
-上传防护接口使用独立的上传防护规则存储，对外以 `module=upload-protection`、`category=upload` 的防护规则模型呈现。当前阶段覆盖上传路径、HTTP 方法、危险扩展名和上传大小限制，支持 `log-only` 和 `block` 动作；策略级高级上传检测字段继续保留用于兼容。
+上传防护接口以通用 `protection_rules` 表作为主存储，对外以 `module=upload-protection`、`category=upload` 的防护规则模型呈现。当前阶段覆盖上传路径、HTTP 方法、危险扩展名和上传大小限制，支持 `log-only` 和 `block` 动作；旧上传防护记录和策略级高级上传检测字段继续保留用于兼容。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -313,7 +313,7 @@ Authorization: Bearer <token>
 
 ## Bot / 人机验证
 
-Bot / 人机验证接口使用独立规则存储，对外以 `module=bot-protection`、`category=challenge` 的防护规则模型呈现。当前阶段只支持本地 JavaScript challenge，不包含第三方 captcha、行为评分、设备指纹、动态令牌或等候室。
+Bot / 人机验证接口以通用 `protection_rules` 表作为主存储，对外以 `module=bot-protection`、`category=challenge` 的防护规则模型呈现。当前阶段只支持本地 JavaScript challenge，不包含第三方 captcha、行为评分、设备指纹、动态令牌或等候室。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -367,7 +367,7 @@ Bot / 人机验证接口使用独立规则存储，对外以 `module=bot-protect
 
 ## 动态防护 / 等候室
 
-动态防护接口使用独立规则存储，对外以 `module=dynamic-protection` 的防护规则模型呈现。当前阶段支持 `dynamic-token`、`page-mutation` 和 `waiting-room` 三类规则，不包含 captcha、行为评分、设备指纹、完整 JavaScript 混淆或分布式全局队列。
+动态防护接口以通用 `protection_rules` 表作为主存储，对外以 `module=dynamic-protection` 的防护规则模型呈现。当前阶段支持 `dynamic-token`、`page-mutation` 和 `waiting-room` 三类规则，不包含 captcha、行为评分、设备指纹、完整 JavaScript 混淆或分布式全局队列。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -488,7 +488,7 @@ Bot / 人机验证接口使用独立规则存储，对外以 `module=bot-protect
 
 ## CC 防护
 
-CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`category=rate-limit` 的防护规则模型呈现。第一阶段只覆盖 URL 访问频率限制、登录防爆破和 API 调用限流，不包含攻击防护、上传防护、Bot、人机验证或动态防护。
+CC 防护接口以通用 `protection_rules` 表作为主存储，对外以 `module=cc-protection`、`category=rate-limit` 的防护规则模型呈现。当前覆盖 URL 访问频率限制、登录防爆破和 API 调用限流；旧限流配置继续保留为兼容入口，未迁移旧记录仍会作为 `legacy-only` 规则出现在 CC 防护列表中。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |

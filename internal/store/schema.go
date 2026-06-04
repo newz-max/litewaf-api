@@ -56,6 +56,9 @@ ALTER TABLE rules ADD COLUMN IF NOT EXISTS signature_status TEXT NOT NULL DEFAUL
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS last_test_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS remote_catalog_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS provider_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS provider_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS provider_package_ref TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS last_synced_version TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS pending_update_state TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS local_override_state TEXT NOT NULL DEFAULT '';
@@ -410,6 +413,7 @@ CREATE TABLE IF NOT EXISTS rule_catalog_sources (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,
 	source TEXT NOT NULL,
+	provider_id BIGINT NOT NULL DEFAULT 0,
 	enabled BOOLEAN NOT NULL DEFAULT true,
 	timeout_sec INTEGER NOT NULL DEFAULT 5,
 	status TEXT NOT NULL DEFAULT 'never-synced',
@@ -419,9 +423,15 @@ CREATE TABLE IF NOT EXISTS rule_catalog_sources (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE rule_catalog_sources ADD COLUMN IF NOT EXISTS provider_id BIGINT NOT NULL DEFAULT 0;
+
 CREATE TABLE IF NOT EXISTS rule_catalog_packages (
 	id BIGSERIAL PRIMARY KEY,
 	catalog_id BIGINT NOT NULL REFERENCES rule_catalog_sources(id) ON DELETE CASCADE,
+	provider_id BIGINT NOT NULL DEFAULT 0,
+	provider_name TEXT NOT NULL DEFAULT '',
+	provider_package_ref TEXT NOT NULL DEFAULT '',
+	entitlement_state TEXT NOT NULL DEFAULT '',
 	package_id TEXT NOT NULL,
 	name TEXT NOT NULL,
 	version TEXT NOT NULL,
@@ -444,6 +454,67 @@ CREATE TABLE IF NOT EXISTS rule_catalog_packages (
 	UNIQUE (catalog_id, package_id)
 );
 
+ALTER TABLE rule_catalog_packages ADD COLUMN IF NOT EXISTS provider_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE rule_catalog_packages ADD COLUMN IF NOT EXISTS provider_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE rule_catalog_packages ADD COLUMN IF NOT EXISTS provider_package_ref TEXT NOT NULL DEFAULT '';
+ALTER TABLE rule_catalog_packages ADD COLUMN IF NOT EXISTS entitlement_state TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS rule_provider_adapters (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	provider_type TEXT NOT NULL,
+	endpoint TEXT NOT NULL,
+	auth_mode TEXT NOT NULL DEFAULT 'none',
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	timeout_sec INTEGER NOT NULL DEFAULT 5,
+	retry_max_attempts INTEGER NOT NULL DEFAULT 3,
+	retry_backoff_sec INTEGER NOT NULL DEFAULT 60,
+	credential_alias TEXT NOT NULL DEFAULT '',
+	credential_fingerprint TEXT NOT NULL DEFAULT '',
+	credential_last_four TEXT NOT NULL DEFAULT '',
+	credential_expires_at TIMESTAMPTZ NULL,
+	credential_last_validated_at TIMESTAMPTZ NULL,
+	credential_status TEXT NOT NULL DEFAULT '',
+	credential_secret TEXT NOT NULL DEFAULT '',
+	health_status TEXT NOT NULL DEFAULT 'never-synced',
+	sync_status TEXT NOT NULL DEFAULT 'never-synced',
+	last_sync_at TIMESTAMPTZ NULL,
+	last_failed_sync_at TIMESTAMPTZ NULL,
+	last_error TEXT NOT NULL DEFAULT '',
+	attempt_count INTEGER NOT NULL DEFAULT 0,
+	next_retry_at TIMESTAMPTZ NULL,
+	retry_exhausted BOOLEAN NOT NULL DEFAULT false,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_provider_packages (
+	id BIGSERIAL PRIMARY KEY,
+	provider_id BIGINT NOT NULL REFERENCES rule_provider_adapters(id) ON DELETE CASCADE,
+	provider_package_ref TEXT NOT NULL,
+	package_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	version TEXT NOT NULL,
+	compatibility TEXT NOT NULL,
+	checksum TEXT NOT NULL,
+	signature_key_id TEXT NOT NULL DEFAULT '',
+	signature_checksum TEXT NOT NULL DEFAULT '',
+	signature_value TEXT NOT NULL DEFAULT '',
+	signature_expires_at TEXT NOT NULL DEFAULT '',
+	signature_status TEXT NOT NULL DEFAULT '',
+	updated_at_text TEXT NOT NULL DEFAULT '',
+	manifest_url TEXT NOT NULL DEFAULT '',
+	package_json TEXT NOT NULL DEFAULT '',
+	source_identity TEXT NOT NULL DEFAULT '',
+	entitlement_state TEXT NOT NULL DEFAULT '',
+	sync_status TEXT NOT NULL DEFAULT '',
+	stale BOOLEAN NOT NULL DEFAULT false,
+	last_synced_at TIMESTAMPTZ NULL,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	UNIQUE(provider_id, package_id)
+);
+
 CREATE TABLE IF NOT EXISTS rule_trust_keys (
 	id BIGSERIAL PRIMARY KEY,
 	key_id TEXT NOT NULL UNIQUE,
@@ -461,6 +532,7 @@ CREATE TABLE IF NOT EXISTS rule_community_account_sources (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,
 	provider_type TEXT NOT NULL,
+	provider_adapter_id BIGINT NOT NULL DEFAULT 0,
 	endpoint TEXT NOT NULL,
 	enabled BOOLEAN NOT NULL DEFAULT true,
 	timeout_sec INTEGER NOT NULL DEFAULT 5,
@@ -480,6 +552,8 @@ CREATE TABLE IF NOT EXISTS rule_community_account_sources (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE rule_community_account_sources ADD COLUMN IF NOT EXISTS provider_adapter_id BIGINT NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS rule_contribution_targets (
 	id BIGSERIAL PRIMARY KEY,

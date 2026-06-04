@@ -31,6 +31,8 @@ type MemoryStore struct {
 	nextCatalogID        int64
 	nextCatalogPackageID int64
 	nextTrustKeyID       int64
+	nextProviderID       int64
+	nextProviderPackageID int64
 	nextAccountSourceID  int64
 	nextContributionID   int64
 	nextPushAttemptID    int64
@@ -54,6 +56,9 @@ type MemoryStore struct {
 	catalogSources       map[int64]model.RuleCatalogSource
 	catalogPackages      map[int64]model.RuleCatalogPackage
 	trustKeys            map[int64]model.RuleTrustKey
+	providers            map[int64]model.RuleProviderAdapter
+	providerSecrets      map[int64]string
+	providerPackages     map[int64]model.RuleProviderPackage
 	accountSources       map[int64]model.RuleCommunityAccountSource
 	accountSecrets       map[int64]string
 	contributionTargets  map[int64]model.RuleContributionTarget
@@ -83,6 +88,8 @@ func NewMemoryStore() *MemoryStore {
 		nextCatalogID:        1,
 		nextCatalogPackageID: 1,
 		nextTrustKeyID:       1,
+		nextProviderID:       1,
+		nextProviderPackageID: 1,
 		nextAccountSourceID:  1,
 		nextContributionID:   1,
 		nextPushAttemptID:    1,
@@ -106,6 +113,9 @@ func NewMemoryStore() *MemoryStore {
 		catalogSources:       map[int64]model.RuleCatalogSource{},
 		catalogPackages:      map[int64]model.RuleCatalogPackage{},
 		trustKeys:            map[int64]model.RuleTrustKey{},
+		providers:            map[int64]model.RuleProviderAdapter{},
+		providerSecrets:      map[int64]string{},
+		providerPackages:     map[int64]model.RuleProviderPackage{},
 		accountSources:       map[int64]model.RuleCommunityAccountSource{},
 		accountSecrets:       map[int64]string{},
 		contributionTargets:  map[int64]model.RuleContributionTarget{},
@@ -1172,10 +1182,170 @@ func (s *MemoryStore) UpdateRuleTrustKey(_ context.Context, id int64, item model
 	return item, nil
 }
 
+func (s *MemoryStore) ListRuleProviderAdapters(context.Context) ([]model.RuleProviderAdapter, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleProviderAdapter, 0, len(s.providers))
+	for _, item := range s.providers {
+		item.PackageCount = s.providerPackageCountLocked(item.ID)
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleProviderAdapter(_ context.Context, id int64) (model.RuleProviderAdapter, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.providers[id]
+	if !ok {
+		return model.RuleProviderAdapter{}, ErrNotFound
+	}
+	item.PackageCount = s.providerPackageCountLocked(id)
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleProviderAdapter(_ context.Context, item model.RuleProviderAdapter, secret model.RuleCommunityAccountSecret) (model.RuleProviderAdapter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextProviderID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item.Credential = redactCredential(item.Credential, secret.Secret, now)
+	s.providers[item.ID] = item
+	if secret.Secret != "" {
+		s.providerSecrets[item.ID] = secret.Secret
+	}
+	s.nextProviderID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRuleProviderAdapter(_ context.Context, id int64, item model.RuleProviderAdapter, secret model.RuleCommunityAccountSecret) (model.RuleProviderAdapter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.providers[id]
+	if !ok {
+		return model.RuleProviderAdapter{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = now
+	item.LastSyncAt = existing.LastSyncAt
+	item.LastFailedSyncAt = existing.LastFailedSyncAt
+	item.LastError = existing.LastError
+	item.AttemptCount = existing.AttemptCount
+	item.NextRetryAt = existing.NextRetryAt
+	item.RetryExhausted = existing.RetryExhausted
+	if secret.Secret == "" {
+		item.Credential = existing.Credential
+	} else {
+		item.Credential = redactCredential(item.Credential, secret.Secret, now)
+		s.providerSecrets[id] = secret.Secret
+	}
+	s.providers[id] = item
+	item.PackageCount = s.providerPackageCountLocked(id)
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteRuleProviderAdapter(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.providers[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.providers, id)
+	delete(s.providerSecrets, id)
+	for packageID, item := range s.providerPackages {
+		if item.ProviderID == id {
+			delete(s.providerPackages, packageID)
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) UpdateRuleProviderSyncState(_ context.Context, id int64, item model.RuleProviderAdapter, packages []model.RuleProviderPackage) (model.RuleProviderAdapter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.providers[id]
+	if !ok {
+		return model.RuleProviderAdapter{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	item.Credential = existing.Credential
+	s.providers[id] = item
+	if packages != nil {
+		for packageID, candidate := range s.providerPackages {
+			if candidate.ProviderID == id {
+				delete(s.providerPackages, packageID)
+			}
+		}
+		for _, candidate := range packages {
+			candidate.ID = s.nextProviderPackageID
+			candidate.ProviderID = id
+			candidate.ProviderName = item.Name
+			candidate.ProviderType = item.ProviderType
+			candidate.CreatedAt = item.UpdatedAt
+			candidate.UpdatedAt = item.UpdatedAt
+			if candidate.LastSyncedAt.IsZero() {
+				candidate.LastSyncedAt = item.UpdatedAt
+			}
+			s.providerPackages[candidate.ID] = candidate
+			s.nextProviderPackageID++
+		}
+	}
+	item.PackageCount = s.providerPackageCountLocked(id)
+	s.providers[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) ListRuleProviderPackages(_ context.Context, providerID int64) ([]model.RuleProviderPackage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleProviderPackage, 0, len(s.providerPackages))
+	for _, item := range s.providerPackages {
+		if providerID > 0 && item.ProviderID != providerID {
+			continue
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].ProviderID == items[j].ProviderID {
+			return items[i].PackageID < items[j].PackageID
+		}
+		return items[i].ProviderID < items[j].ProviderID
+	})
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleProviderPackage(_ context.Context, providerID int64, packageID string) (model.RuleProviderPackage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.providerPackages {
+		if item.ProviderID == providerID && (item.PackageID == packageID || item.ProviderPackageRef == packageID) {
+			return item, nil
+		}
+	}
+	return model.RuleProviderPackage{}, ErrNotFound
+}
+
 func (s *MemoryStore) catalogPackageCountLocked(catalogID int64) int {
 	count := 0
 	for _, item := range s.catalogPackages {
 		if item.CatalogID == catalogID {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *MemoryStore) providerPackageCountLocked(providerID int64) int {
+	count := 0
+	for _, item := range s.providerPackages {
+		if item.ProviderID == providerID {
 			count++
 		}
 	}
@@ -1188,6 +1358,7 @@ func (s *MemoryStore) ListRuleCommunityAccountSources(context.Context) ([]model.
 	items := make([]model.RuleCommunityAccountSource, 0, len(s.accountSources))
 	for _, item := range s.accountSources {
 		item.RecommendationCount = s.recommendationCountLocked(item.ID)
+		item = s.attachProviderStateLocked(item)
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
@@ -1202,7 +1373,7 @@ func (s *MemoryStore) GetRuleCommunityAccountSource(_ context.Context, id int64)
 		return model.RuleCommunityAccountSource{}, ErrNotFound
 	}
 	item.RecommendationCount = s.recommendationCountLocked(id)
-	return item, nil
+	return s.attachProviderStateLocked(item), nil
 }
 
 func (s *MemoryStore) CreateRuleCommunityAccountSource(_ context.Context, item model.RuleCommunityAccountSource, secret model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error) {
@@ -1468,6 +1639,28 @@ func (s *MemoryStore) recommendationCountLocked(sourceID int64) int {
 		}
 	}
 	return count
+}
+
+func (s *MemoryStore) attachProviderStateLocked(item model.RuleCommunityAccountSource) model.RuleCommunityAccountSource {
+	if item.ProviderAdapterID <= 0 {
+		return item
+	}
+	provider, ok := s.providers[item.ProviderAdapterID]
+	if !ok {
+		item.ProviderHealth = "missing"
+		item.ProviderRetryState = "unavailable"
+		return item
+	}
+	item.ProviderAdapterName = provider.Name
+	item.ProviderHealth = provider.HealthStatus
+	if provider.RetryExhausted {
+		item.ProviderRetryState = "exhausted"
+	} else if provider.AttemptCount > 0 {
+		item.ProviderRetryState = "retrying"
+	} else {
+		item.ProviderRetryState = "ready"
+	}
+	return item
 }
 
 func redactCredential(meta model.RuleAccountCredential, secret string, now time.Time) model.RuleAccountCredential {

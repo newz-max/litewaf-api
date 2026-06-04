@@ -103,6 +103,15 @@ type Store interface {
 	CreateRuleTrustKey(context.Context, model.RuleTrustKey) (model.RuleTrustKey, error)
 	UpdateRuleTrustKey(context.Context, int64, model.RuleTrustKey) (model.RuleTrustKey, error)
 
+	ListRuleProviderAdapters(context.Context) ([]model.RuleProviderAdapter, error)
+	GetRuleProviderAdapter(context.Context, int64) (model.RuleProviderAdapter, error)
+	CreateRuleProviderAdapter(context.Context, model.RuleProviderAdapter, model.RuleCommunityAccountSecret) (model.RuleProviderAdapter, error)
+	UpdateRuleProviderAdapter(context.Context, int64, model.RuleProviderAdapter, model.RuleCommunityAccountSecret) (model.RuleProviderAdapter, error)
+	DeleteRuleProviderAdapter(context.Context, int64) error
+	UpdateRuleProviderSyncState(context.Context, int64, model.RuleProviderAdapter, []model.RuleProviderPackage) (model.RuleProviderAdapter, error)
+	ListRuleProviderPackages(context.Context, int64) ([]model.RuleProviderPackage, error)
+	GetRuleProviderPackage(context.Context, int64, string) (model.RuleProviderPackage, error)
+
 	ListRuleCommunityAccountSources(context.Context) ([]model.RuleCommunityAccountSource, error)
 	GetRuleCommunityAccountSource(context.Context, int64) (model.RuleCommunityAccountSource, error)
 	CreateRuleCommunityAccountSource(context.Context, model.RuleCommunityAccountSource, model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error)

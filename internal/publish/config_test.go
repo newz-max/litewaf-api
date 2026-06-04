@@ -588,3 +588,72 @@ func TestGenerateDoesNotLeakRuleCommunityPhaseTwoControlPlaneState(t *testing.T)
 		}
 	}
 }
+
+func TestGenerateDoesNotLeakRuleProviderControlPlaneState(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	site, err := dataStore.CreateSite(ctx, model.Site{Name: "app", Host: "provider.example.com", Upstream: "http://127.0.0.1:9000", Mode: "protect", Enabled: true})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	provider, err := dataStore.CreateRuleProviderAdapter(ctx, model.RuleProviderAdapter{
+		Name: "Provider feed", ProviderType: "https-catalog", Endpoint: "https://rules.example.com/catalog.json", AuthMode: "bearer-token", Enabled: true, TimeoutSec: 5,
+		RetryPolicy:  model.RuleProviderRetryPolicy{MaxAttempts: 2, BackoffSec: 60},
+		Credential:   model.RuleAccountCredential{Alias: "prod"},
+		HealthStatus: "healthy", SyncStatus: "synced",
+	}, model.RuleCommunityAccountSecret{Secret: "provider-secret"})
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	rule, err := dataStore.CreateRule(ctx, model.Rule{
+		Name: "Provider SQLi", Type: "sqli", Target: "args", Action: "block", Expression: "(?i)union\\s+select", Score: 80, Enabled: true,
+		Module: "attack-protection", Category: "managed", AttackType: "sqli", Group: "SQL 注入防护", Priority: 100,
+		PackageID: "provider-pack", PackageVersion: "v1", PackageRuleID: "provider-sqli", SourceChecksum: "checksum", ReviewStatus: "approved",
+		ProviderID: provider.ID, ProviderName: provider.Name, ProviderPackageRef: "provider-pack@v1",
+	})
+	if err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if _, err := dataStore.UpdateRuleProviderSyncState(ctx, provider.ID, model.RuleProviderAdapter{
+		ID: provider.ID, Name: provider.Name, ProviderType: provider.ProviderType, Endpoint: provider.Endpoint, AuthMode: provider.AuthMode, Enabled: true, TimeoutSec: 5,
+		RetryPolicy: provider.RetryPolicy, Credential: provider.Credential, HealthStatus: "unauthorized", SyncStatus: "failed", LastError: "provider authorization denied",
+		AttemptCount: 2, RetryExhausted: true,
+	}, []model.RuleProviderPackage{{
+		ProviderID: provider.ID, ProviderName: provider.Name, ProviderType: provider.ProviderType, ProviderPackageRef: "provider-pack@v1",
+		PackageID: "provider-pack", Name: "Provider Pack", Version: "v1", Compatibility: "litewaf-rule-package-v1", Checksum: "checksum",
+		EntitlementState: "denied", SyncStatus: "failed", Stale: true,
+	}}); err != nil {
+		t.Fatalf("update provider state: %v", err)
+	}
+	if _, err := dataStore.CreatePolicy(ctx, model.Policy{Name: "default", SiteIDs: []int64{site.ID}, RuleIDs: []int64{rule.ID}, Enabled: true}); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+
+	config, payload, _, err := GenerateExtended(ctx, dataStore, "ruleset-provider")
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	if len(config.Sites) != 1 || len(config.Sites[0].Rules) != 1 {
+		t.Fatalf("expected provider-origin rule in gateway config, got %+v", config.Sites)
+	}
+	published := config.Sites[0].Rules[0]
+	if published.PackageID != "provider-pack" || published.PackageRuleID != "provider-sqli" {
+		t.Fatalf("expected package identity only, got %+v", published)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte("provider_id"),
+		[]byte("provider_name"),
+		[]byte("provider_package_ref"),
+		[]byte("rule_provider"),
+		[]byte("credential"),
+		[]byte("provider-secret"),
+		[]byte("entitlement"),
+		[]byte("retry"),
+		[]byte("authorization denied"),
+		[]byte("stale"),
+	} {
+		if bytes.Contains(payload, forbidden) {
+			t.Fatalf("gateway payload leaked %s: %s", string(forbidden), string(payload))
+		}
+	}
+}

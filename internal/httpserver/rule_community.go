@@ -40,6 +40,7 @@ type ruleTrustKeyRequest struct {
 type ruleAccountSourceRequest struct {
 	Name               string                      `json:"name"`
 	ProviderType       string                      `json:"provider_type"`
+	ProviderAdapterID  int64                       `json:"provider_adapter_id"`
 	Endpoint           string                      `json:"endpoint"`
 	Enabled            *bool                       `json:"enabled"`
 	TimeoutSec         int                         `json:"timeout_sec"`
@@ -54,6 +55,7 @@ func (r ruleAccountSourceRequest) toModel() model.RuleCommunityAccountSource {
 	return model.RuleCommunityAccountSource{
 		Name:               r.Name,
 		ProviderType:       r.ProviderType,
+		ProviderAdapterID:  r.ProviderAdapterID,
 		Endpoint:           r.Endpoint,
 		Enabled:            boolValue(r.Enabled, true),
 		TimeoutSec:         r.TimeoutSec,
@@ -61,6 +63,31 @@ func (r ruleAccountSourceRequest) toModel() model.RuleCommunityAccountSource {
 		SubscriptionStatus: r.SubscriptionStatus,
 		EntitlementSummary: r.EntitlementSummary,
 		PackageCount:       r.PackageCount,
+	}
+}
+
+type ruleProviderRequest struct {
+	Name             string                         `json:"name"`
+	ProviderType     string                         `json:"provider_type"`
+	Endpoint         string                         `json:"endpoint"`
+	AuthMode         string                         `json:"auth_mode"`
+	Enabled          *bool                          `json:"enabled"`
+	TimeoutSec       int                            `json:"timeout_sec"`
+	RetryPolicy      model.RuleProviderRetryPolicy  `json:"retry_policy"`
+	Credential       model.RuleAccountCredential     `json:"credential"`
+	CredentialSecret string                         `json:"credential_secret"`
+}
+
+func (r ruleProviderRequest) toModel() model.RuleProviderAdapter {
+	return model.RuleProviderAdapter{
+		Name:        r.Name,
+		ProviderType: r.ProviderType,
+		Endpoint:    r.Endpoint,
+		AuthMode:    r.AuthMode,
+		Enabled:     boolValue(r.Enabled, true),
+		TimeoutSec:  r.TimeoutSec,
+		RetryPolicy: r.RetryPolicy,
+		Credential:  r.Credential,
 	}
 }
 
@@ -299,6 +326,175 @@ func (h handlers) updateRuleTrustKey(w http.ResponseWriter, r *http.Request) {
 	item, err := h.app.Store.UpdateRuleTrustKey(r.Context(), id, input)
 	h.audit(r, "update", "rule_trust_key", id, resultFromErr(err), err)
 	h.writeItem(w, item, err)
+}
+
+func (h handlers) listRuleProviders(w http.ResponseWriter, r *http.Request) {
+	items, err := h.app.Store.ListRuleProviderAdapters(r.Context())
+	h.writeList(w, items, err)
+}
+
+func (h handlers) getRuleProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.app.Store.GetRuleProviderAdapter(r.Context(), id)
+	h.writeItem(w, item, err)
+}
+
+func (h handlers) createRuleProvider(w http.ResponseWriter, r *http.Request) {
+	var req ruleProviderRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	input := rulepkg.NormalizeProviderAdapter(req.toModel())
+	secret := model.RuleCommunityAccountSecret{Secret: strings.TrimSpace(req.CredentialSecret)}
+	if err := rulepkg.ValidateProviderAdapter(input, secret, input.AuthMode == rulepkg.ProviderAuthBearer); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	item, err := h.app.Store.CreateRuleProviderAdapter(r.Context(), input, secret)
+	h.audit(r, "create", "rule_provider", item.ID, resultFromErr(err), err)
+	h.writeCreated(w, item, err)
+}
+
+func (h handlers) updateRuleProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	var req ruleProviderRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	input := rulepkg.NormalizeProviderAdapter(req.toModel())
+	secret := model.RuleCommunityAccountSecret{Secret: strings.TrimSpace(req.CredentialSecret)}
+	if err := rulepkg.ValidateProviderAdapter(input, secret, false); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	item, err := h.app.Store.UpdateRuleProviderAdapter(r.Context(), id, input, secret)
+	h.audit(r, "update", "rule_provider", id, resultFromErr(err), err)
+	h.writeItem(w, item, err)
+}
+
+func (h handlers) deleteRuleProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	err := h.app.Store.DeleteRuleProviderAdapter(r.Context(), id)
+	h.audit(r, "delete", "rule_provider", id, resultFromErr(err), err)
+	h.writeNoContent(w, err)
+}
+
+func (h handlers) validateRuleProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	provider, err := h.app.Store.GetRuleProviderAdapter(r.Context(), id)
+	if err != nil {
+		h.writeKnownError(w, err)
+		return
+	}
+	provider, validationErr := rulepkg.ValidateProviderCredentials(provider)
+	item, err := h.app.Store.UpdateRuleProviderAdapter(r.Context(), id, provider, model.RuleCommunityAccountSecret{})
+	if err == nil && validationErr != nil {
+		err = validationErr
+	}
+	h.audit(r, "validate_credentials", "rule_provider", id, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item})
+}
+
+func (h handlers) syncRuleProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	provider, err := h.app.Store.GetRuleProviderAdapter(r.Context(), id)
+	if err != nil {
+		h.writeKnownError(w, err)
+		return
+	}
+	item, packages, err := rulepkg.SyncProvider(r.Context(), h.app.Store, provider)
+	h.audit(r, "sync", "rule_provider", id, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item, "items": packages})
+}
+
+func (h handlers) retryRuleProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	provider, err := h.app.Store.GetRuleProviderAdapter(r.Context(), id)
+	if err != nil {
+		h.writeKnownError(w, err)
+		return
+	}
+	item, packages, err := rulepkg.RetryProvider(r.Context(), h.app.Store, provider)
+	h.audit(r, "retry", "rule_provider", id, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": item, "items": packages})
+}
+
+func (h handlers) listRuleProviderPackages(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.app.Store.ListRuleProviderPackages(r.Context(), id)
+	h.writeList(w, items, err)
+}
+
+func (h handlers) previewRuleProviderPackage(w http.ResponseWriter, r *http.Request) {
+	provider, providerPackage, ok := h.providerPackageFromPath(w, r)
+	if !ok {
+		return
+	}
+	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
+	preview, err := rulepkg.ProviderPackagePreview(r.Context(), h.app.Store, provider, providerPackage, trustKeys)
+	h.audit(r, "preview", "rule_provider_package", providerPackage.ID, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": preview})
+}
+
+func (h handlers) importRuleProviderPackage(w http.ResponseWriter, r *http.Request) {
+	provider, providerPackage, ok := h.providerPackageFromPath(w, r)
+	if !ok {
+		return
+	}
+	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
+	catalogPackage := rulepkg.ProviderPackageCatalogPackage(provider, providerPackage)
+	result, err := rulepkg.ApplyUpdateWithTrustKeys(r.Context(), h.app.Store, catalogPackage, trustKeys)
+	if err == nil {
+		for _, rule := range append(result.Imported, result.Changed...) {
+			rule.ProviderID = provider.ID
+			rule.ProviderName = provider.Name
+			rule.ProviderPackageRef = providerPackage.ProviderPackageRef
+			_, _ = h.app.Store.UpdateRule(r.Context(), rule.ID, rule)
+		}
+	}
+	h.audit(r, "import", "rule_provider_package", providerPackage.ID, resultFromErr(err), err)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, envelope{"item": result})
 }
 
 func (h handlers) previewRulePackageExport(w http.ResponseWriter, r *http.Request) {
@@ -602,4 +798,24 @@ func (h handlers) catalogPackageFromPath(w http.ResponseWriter, r *http.Request)
 		return model.RuleCatalogPackage{}, false
 	}
 	return item, true
+}
+
+func (h handlers) providerPackageFromPath(w http.ResponseWriter, r *http.Request) (model.RuleProviderAdapter, model.RuleProviderPackage, bool) {
+	providerID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || providerID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid provider id")
+		return model.RuleProviderAdapter{}, model.RuleProviderPackage{}, false
+	}
+	packageID := strings.TrimSpace(r.PathValue("package_id"))
+	provider, err := h.app.Store.GetRuleProviderAdapter(r.Context(), providerID)
+	if err != nil {
+		h.writeKnownError(w, err)
+		return model.RuleProviderAdapter{}, model.RuleProviderPackage{}, false
+	}
+	item, err := h.app.Store.GetRuleProviderPackage(r.Context(), providerID, packageID)
+	if err != nil {
+		h.writeKnownError(w, err)
+		return model.RuleProviderAdapter{}, model.RuleProviderPackage{}, false
+	}
+	return provider, item, true
 }

@@ -1,0 +1,88 @@
+{
+  "create_provider": {
+    "name": "Commercial rule feed",
+    "provider_type": "https-catalog",
+    "endpoint": "https://rules.example.com/catalog.json",
+    "auth_mode": "bearer-token",
+    "enabled": true,
+    "timeout_sec": 5,
+    "retry_policy": {
+      "max_attempts": 3,
+      "backoff_sec": 60
+    },
+    "credential": {
+      "alias": "prod-feed"
+    },
+    "credential_secret": "write-only-token"
+  },
+  "sync_response_shape": {
+    "item": {
+      "id": 1,
+      "name": "Commercial rule feed",
+      "provider_type": "https-catalog",
+      "auth_mode": "bearer-token",
+      "health_status": "healthy",
+      "sync_status": "synced",
+      "package_count": 1,
+      "credential": {
+        "alias": "prod-feed",
+        "fingerprint": "sha256:...",
+        "last_four": "oken",
+        "status": "configured"
+      }
+    },
+    "items": [
+      {
+        "provider_id": 1,
+        "provider_name": "Commercial rule feed",
+        "provider_package_ref": "commercial-baseline@v1",
+        "package_id": "commercial-baseline",
+        "version": "v1",
+        "compatibility": "litewaf-rule-package-v1",
+        "signature_status": "unsigned",
+        "entitlement_state": "allowed",
+        "sync_status": "synced",
+        "stale": false
+      }
+    ]
+  },
+  "preview_response_shape": {
+    "item": {
+      "provider_id": 1,
+      "provider_name": "Commercial rule feed",
+      "provider_package_ref": "commercial-baseline@v1",
+      "retry_state": "ready",
+      "trust_status": "unsigned",
+      "blocked": false,
+      "package": {
+        "id": "commercial-baseline",
+        "name": "Commercial Baseline",
+        "version": "v1",
+        "compatibility": "litewaf-rule-package-v1",
+        "signature_status": "unsigned"
+      },
+      "added": [],
+      "changed": [],
+      "skipped": [],
+      "invalid": [],
+      "warnings": [
+        "package signature status is unsigned"
+      ]
+    }
+  },
+  "authorization_denial_shape": {
+    "item": {
+      "health_status": "unauthorized",
+      "sync_status": "failed",
+      "last_error": "provider authorization denied",
+      "attempt_count": 1,
+      "retry_exhausted": true
+    }
+  },
+  "boundaries": [
+    "Provider sync and retry only update provider/package metadata.",
+    "Package preview never mutates rules.",
+    "Package import requires an explicit admin action.",
+    "Gateway payload excludes credentials, provider health, retry state, entitlement state, raw catalog documents, and trust stores."
+  ]
+}

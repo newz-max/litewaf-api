@@ -52,6 +52,9 @@ func NormalizeAccountSource(item model.RuleCommunityAccountSource) model.RuleCom
 	if item.Credential.Alias == "" {
 		item.Credential.Alias = "default"
 	}
+	if item.ProviderAdapterID > 0 && item.ProviderType == "" {
+		item.ProviderType = ProviderTypeHTTPSCatalog
+	}
 	return item
 }
 

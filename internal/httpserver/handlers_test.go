@@ -1596,6 +1596,211 @@ func TestRuleCommunityPhaseTwoAccountsQueueFeedbackAndRedaction(t *testing.T) {
 	}
 }
 
+func TestRuleCommunityProviderAdaptersSyncPreviewImportAndSafety(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	packageBody := `{"id":"provider-pack","name":"provider-pack","version":"v1","author":"LiteWaf","license":"MIT","compatibility":"litewaf-rule-package-v1","defaults":{"enabled":false,"review_status":"pending-review"},"rules":[{"id":"provider-xss","name":"Provider XSS","type":"xss","target":"args","action":"block","expression":"(?i)<svg","score":70}]}`
+	catalog := map[string]any{
+		"schema_version": "litewaf-rule-catalog-v1",
+		"packages": []map[string]any{
+			{"id": "provider-pack", "name": "Provider Pack", "version": "v1", "compatibility": "litewaf-rule-package-v1", "package": json.RawMessage(packageBody)},
+		},
+	}
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatalf("marshal provider catalog: %v", err)
+	}
+	catalogPath := t.TempDir() + "/provider-catalog.json"
+	if err := os.WriteFile(catalogPath, data, 0o644); err != nil {
+		t.Fatalf("write provider catalog: %v", err)
+	}
+
+	providerBody := `{"name":"Provider feed","provider_type":"https-catalog","endpoint":` + strconv.Quote(catalogPath) + `,"auth_mode":"bearer-token","enabled":true,"timeout_sec":5,"retry_policy":{"max_attempts":2,"backoff_sec":1},"credential":{"alias":"prod"},"credential_secret":"provider-secret-token"}`
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers", bytes.NewBufferString(providerBody)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("provider-secret-token")) || bytes.Contains(rec.Body.Bytes(), []byte("credential_secret")) {
+		t.Fatalf("provider response leaked secret: %s", rec.Body.String())
+	}
+	var providerResponse struct {
+		Item model.RuleProviderAdapter `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&providerResponse); err != nil {
+		t.Fatalf("decode provider: %v", err)
+	}
+	provider := providerResponse.Item
+	if provider.Credential.LastFour != "oken" || provider.Credential.Status != "configured" || provider.HealthStatus != "never-synced" {
+		t.Fatalf("unexpected redacted provider metadata: %+v", provider)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers/"+strconv.FormatInt(provider.ID, 10)+"/validate", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("validate provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers/"+strconv.FormatInt(provider.ID, 10)+"/sync", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var syncResponse struct {
+		Item  model.RuleProviderAdapter   `json:"item"`
+		Items []model.RuleProviderPackage `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&syncResponse); err != nil {
+		t.Fatalf("decode sync: %v", err)
+	}
+	if syncResponse.Item.HealthStatus != "healthy" || syncResponse.Item.PackageCount != 1 || len(syncResponse.Items) != 1 {
+		t.Fatalf("unexpected sync response: %+v", syncResponse)
+	}
+	if syncResponse.Items[0].ProviderPackageRef != "provider-pack@v1" || syncResponse.Items[0].EntitlementState != "allowed" {
+		t.Fatalf("unexpected provider package: %+v", syncResponse.Items[0])
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list rules before import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var beforeRules struct {
+		Items []model.Rule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&beforeRules); err != nil {
+		t.Fatalf("decode before rules: %v", err)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers/"+strconv.FormatInt(provider.ID, 10)+"/packages/provider-pack/preview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview provider package status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var previewResponse struct {
+		Item model.RulePackagePreview `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&previewResponse); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if previewResponse.Item.ProviderID != provider.ID || previewResponse.Item.ProviderPackageRef != "provider-pack@v1" || len(previewResponse.Item.Added) != 1 {
+		t.Fatalf("unexpected provider preview: %+v", previewResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list rules after preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var afterPreviewRules struct {
+		Items []model.Rule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&afterPreviewRules); err != nil {
+		t.Fatalf("decode after preview rules: %v", err)
+	}
+	if len(afterPreviewRules.Items) != len(beforeRules.Items) {
+		t.Fatalf("provider preview mutated rules: before=%d after=%d", len(beforeRules.Items), len(afterPreviewRules.Items))
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers/"+strconv.FormatInt(provider.ID, 10)+"/packages/provider-pack/import", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("import provider package status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list rules after import status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var importedRules struct {
+		Items []model.Rule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&importedRules); err != nil {
+		t.Fatalf("decode imported rules: %v", err)
+	}
+	var imported model.Rule
+	for _, rule := range importedRules.Items {
+		if rule.PackageID == "provider-pack" {
+			imported = rule
+			break
+		}
+	}
+	if imported.ID == 0 || imported.ProviderID != provider.ID || imported.ProviderName != "Provider feed" || imported.ProviderPackageRef != "provider-pack@v1" {
+		t.Fatalf("expected imported provider lineage, got %+v", imported)
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers/"+strconv.FormatInt(provider.ID, 10)+"/sync", nil), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly provider sync status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	failedProviderBody := `{"name":"Denied feed","provider_type":"https-catalog","endpoint":"https://unauthorized.example.com/catalog.json","auth_mode":"none","enabled":true,"timeout_sec":1,"retry_policy":{"max_attempts":1,"backoff_sec":1}}`
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers", bytes.NewBufferString(failedProviderBody)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create failed provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var failedProviderResponse struct {
+		Item model.RuleProviderAdapter `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&failedProviderResponse); err != nil {
+		t.Fatalf("decode failed provider: %v", err)
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/providers/"+strconv.FormatInt(failedProviderResponse.Item.ID, 10)+"/retry", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("retry denied provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rule-community/providers/"+strconv.FormatInt(failedProviderResponse.Item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get denied provider status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var deniedDetail struct {
+		Item model.RuleProviderAdapter `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&deniedDetail); err != nil {
+		t.Fatalf("decode denied provider detail: %v", err)
+	}
+	if deniedDetail.Item.HealthStatus != "unauthorized" || !deniedDetail.Item.RetryExhausted {
+		t.Fatalf("expected unauthorized exhausted provider, got %+v", deniedDetail.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list rules after failed retry status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var afterFailedRetryRules struct {
+		Items []model.Rule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&afterFailedRetryRules); err != nil {
+		t.Fatalf("decode after failed retry rules: %v", err)
+	}
+	if len(afterFailedRetryRules.Items) != len(importedRules.Items) {
+		t.Fatalf("failed provider retry mutated rules: before=%d after=%d", len(importedRules.Items), len(afterFailedRetryRules.Items))
+	}
+}
+
 func TestAttackProtectionEventQueryAndSummary(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

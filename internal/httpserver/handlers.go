@@ -476,13 +476,15 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	catalogs, _ := h.app.Store.ListRuleCatalogSources(r.Context())
 	catalogPackages, _ := h.app.Store.ListRuleCatalogPackages(r.Context(), 0)
 	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
+	providers, _ := h.app.Store.ListRuleProviderAdapters(r.Context())
+	providerPackages, _ := h.app.Store.ListRuleProviderPackages(r.Context(), 0)
 	ccSummary := ccProtectionSummary(mergedCCProtectionRules(protectionRules, rateLimits))
 	accessControlSummary := accessControlSummary(mergedAccessControlRules(protectionRules, accessLists))
 	attackSummary := attackProtectionSummary(rules)
 	uploadSummary := uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules))
 	botSummary := botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules))
 	dynamicSummary := dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules))
-	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys)
+	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys, providers, providerPackages)
 	compatibilityDiagnostics := buildPublishCompatibilityDiagnostics(protectionRules, accessLists, rateLimits, uploadRules, botRules, dynamicRules)
 	modules := protectionModuleMatrix(
 		ccSummary,
@@ -557,6 +559,14 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 	if err != nil {
 		return model.ProtectionOverview{}, err
 	}
+	providers, err := h.app.Store.ListRuleProviderAdapters(ctx)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
+	providerPackages, err := h.app.Store.ListRuleProviderPackages(ctx, 0)
+	if err != nil {
+		return model.ProtectionOverview{}, err
+	}
 	summary, err := h.app.Store.GetObservabilitySummary(ctx, filter)
 	if err != nil {
 		return model.ProtectionOverview{}, err
@@ -568,7 +578,7 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 		uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules)),
 		botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules)),
 		dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules)),
-		ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys),
+		ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys, providers, providerPackages),
 		summary,
 	)
 	return model.ProtectionOverview{
@@ -772,13 +782,15 @@ func envelopeStrings(data envelope, key string) []string {
 	return out
 }
 
-func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource, catalogPackages []model.RuleCatalogPackage, trustKeys []model.RuleTrustKey) envelope {
+func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource, catalogPackages []model.RuleCatalogPackage, trustKeys []model.RuleTrustKey, providers []model.RuleProviderAdapter, providerPackages []model.RuleProviderPackage) envelope {
 	packages := rulepkg.PackagesFromRules(rules)
 	signatures := map[string]int{}
 	disabledImported := 0
 	untestedBlocking := 0
 	pendingUpdates := 0
 	remoteOriginPackages := map[string]bool{}
+	providerOriginPackages := map[string]bool{}
+	staleProviderPackages := 0
 	warnings := []string{}
 	for _, rule := range rules {
 		if rule.PackageID == "" {
@@ -802,6 +814,9 @@ func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource
 		if rule.RemoteCatalogID != "" {
 			remoteOriginPackages[rule.PackageID] = true
 		}
+		if rule.ProviderID > 0 {
+			providerOriginPackages[rule.PackageID] = true
+		}
 		if rule.PendingUpdateState == rulepkg.UpdatePending {
 			pendingUpdates++
 			warnings = append(warnings, fmt.Sprintf("规则 %s 来源包存在待审核更新", rule.Name))
@@ -817,6 +832,33 @@ func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource
 			warnings = append(warnings, fmt.Sprintf("目录包 %s@%s 信任状态为 %s", item.PackageID, item.Version, status))
 		}
 	}
+	for _, provider := range providers {
+		switch provider.HealthStatus {
+		case rulepkg.ProviderHealthUnauthorized:
+			warnings = append(warnings, fmt.Sprintf("Provider %s 授权失败，已导入规则不会被自动停用", provider.Name))
+		case rulepkg.ProviderHealthFailed:
+			warnings = append(warnings, fmt.Sprintf("Provider %s 同步失败：%s", provider.Name, provider.LastError))
+		case rulepkg.ProviderHealthStale:
+			warnings = append(warnings, fmt.Sprintf("Provider %s 元数据已过期", provider.Name))
+		}
+		if provider.RetryExhausted {
+			warnings = append(warnings, fmt.Sprintf("Provider %s 重试次数已耗尽", provider.Name))
+		}
+	}
+	for _, item := range providerPackages {
+		status := item.SignatureStatus
+		if status == "" {
+			status = rulepkg.SignatureUnsigned
+		}
+		signatures[status] += 0
+		if item.Stale {
+			staleProviderPackages++
+			warnings = append(warnings, fmt.Sprintf("Provider 包 %s@%s 使用过期同步元数据", item.PackageID, item.Version))
+		}
+		if item.EntitlementState == rulepkg.ProviderEntitlementUnauthorized || item.EntitlementState == rulepkg.ProviderEntitlementDenied {
+			warnings = append(warnings, fmt.Sprintf("Provider 包 %s@%s 授权状态为 %s", item.PackageID, item.Version, item.EntitlementState))
+		}
+	}
 	for _, key := range trustKeys {
 		if key.Revoked {
 			warnings = append(warnings, fmt.Sprintf("信任密钥 %s 已撤销", key.KeyID))
@@ -830,18 +872,22 @@ func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource
 		packageIDs = append(packageIDs, item.ID+"@"+item.Version)
 	}
 	return envelope{
-		"packages":               len(packages),
-		"package_ids":            packageIDs,
-		"signature_status":       signatures,
-		"disabled_imported":      disabledImported,
-		"untested_blocking":      untestedBlocking,
-		"catalog_sources":        len(catalogs),
-		"catalog_packages":       len(catalogPackages),
-		"remote_origin_packages": len(remoteOriginPackages),
-		"pending_updates":        pendingUpdates,
-		"warnings":               warnings,
-		"gateway_hot_path":       "published-rules-only",
-		"remote_sync_enabled":    len(catalogs) > 0,
+		"packages":                 len(packages),
+		"package_ids":              packageIDs,
+		"signature_status":         signatures,
+		"disabled_imported":        disabledImported,
+		"untested_blocking":        untestedBlocking,
+		"catalog_sources":          len(catalogs),
+		"catalog_packages":         len(catalogPackages),
+		"remote_origin_packages":   len(remoteOriginPackages),
+		"provider_adapters":        len(providers),
+		"provider_packages":        len(providerPackages),
+		"provider_origin_packages": len(providerOriginPackages),
+		"stale_provider_packages":  staleProviderPackages,
+		"pending_updates":          pendingUpdates,
+		"warnings":                 warnings,
+		"gateway_hot_path":         "published-rules-only",
+		"remote_sync_enabled":      len(catalogs) > 0 || len(providers) > 0,
 	}
 }
 

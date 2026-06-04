@@ -676,6 +676,49 @@ CC 防护接口以通用 `protection_rules` 表作为主存储，对外以 `modu
 
 请求字段：`key_id`、`algorithm`、`owner`、`public_key`、`enabled`、`revoked`、`expires_at`。响应不会返回 `public_key` 或私钥材料。信任决策会应用到本地包预览/导入、远程包预览、更新预览、更新应用和发布预览。
 
+### 外部规则源 Provider
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/rule-community/providers` | 读 | 查询 Provider 配置和健康状态 |
+| POST | `/api/v1/rule-community/providers` | 写 | 创建 Provider |
+| GET | `/api/v1/rule-community/providers/{id}` | 读 | 查询 Provider 详情 |
+| PUT | `/api/v1/rule-community/providers/{id}` | 写 | 更新 Provider |
+| DELETE | `/api/v1/rule-community/providers/{id}` | 写 | 删除 Provider |
+| POST | `/api/v1/rule-community/providers/{id}/validate` | 写 | 校验 Provider 凭据状态 |
+| POST | `/api/v1/rule-community/providers/{id}/sync` | 写 | 同步 Provider 目录包元数据 |
+| POST | `/api/v1/rule-community/providers/{id}/retry` | 写 | 手动重试同步 |
+| GET | `/api/v1/rule-community/providers/{id}/packages` | 读 | 查询 Provider 包列表 |
+| POST | `/api/v1/rule-community/providers/{id}/packages/{package_id}/preview` | 写 | 预览 Provider 包 |
+| POST | `/api/v1/rule-community/providers/{id}/packages/{package_id}/import` | 写 | 显式导入 Provider 包 |
+
+当前支持 `provider_type=https-catalog`，认证方式支持 `auth_mode=none` 和 `auth_mode=bearer-token`。创建和更新请求字段包括 `name`、`provider_type`、`endpoint`、`auth_mode`、`enabled`、`timeout_sec`、`retry_policy`、`credential` 和只写字段 `credential_secret`。
+
+创建示例：
+
+```json
+{
+  "name": "Commercial rule feed",
+  "provider_type": "https-catalog",
+  "endpoint": "https://rules.example.com/catalog.json",
+  "auth_mode": "bearer-token",
+  "enabled": true,
+  "timeout_sec": 5,
+  "retry_policy": {
+    "max_attempts": 3,
+    "backoff_sec": 60
+  },
+  "credential": {
+    "alias": "prod-feed"
+  },
+  "credential_secret": "write-only-token"
+}
+```
+
+响应只返回凭据公开元数据，例如 `alias`、`fingerprint`、`last_four`、`last_validated_at` 和 `status`，不会返回原始密钥。同步失败会更新 `health_status`、`sync_status`、`last_error`、`attempt_count`、`next_retry_at` 和 `retry_exhausted`，并保留上一次成功同步的包元数据。
+
+Provider 包预览返回普通规则包预览字段，并额外包含 `provider_id`、`provider_name`、`provider_package_ref`、`entitlement_warnings`、`retry_state`、`trust_status`、`blocked` 和 `block_reason`。预览和同步都不会创建、启用、停用、删除、发布或修改规则；只有 `/import` 会在管理员明确确认后导入包内规则。
+
 ### 贡献导出
 
 | 方法 | 路径 | 权限 | 说明 |

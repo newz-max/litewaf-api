@@ -35,6 +35,9 @@ type Rule struct {
 	ReviewStatus            string    `json:"review_status"`
 	LastTestStatus          string    `json:"last_test_status"`
 	RemoteCatalogID         string    `json:"remote_catalog_id"`
+	ProviderID              int64     `json:"provider_id,omitempty"`
+	ProviderName            string    `json:"provider_name,omitempty"`
+	ProviderPackageRef      string    `json:"provider_package_ref,omitempty"`
 	LastSyncedVersion       string    `json:"last_synced_version"`
 	PendingUpdateState      string    `json:"pending_update_state"`
 	LocalOverrideState      string    `json:"local_override_state"`
@@ -582,6 +585,14 @@ type RulePackagePreview struct {
 	Warnings            []string            `json:"warnings"`
 	CompatibilityStatus string              `json:"compatibility_status"`
 	SourceCatalogID     string              `json:"source_catalog_id,omitempty"`
+	ProviderID          int64               `json:"provider_id,omitempty"`
+	ProviderName        string              `json:"provider_name,omitempty"`
+	ProviderPackageRef  string              `json:"provider_package_ref,omitempty"`
+	EntitlementWarnings []string            `json:"entitlement_warnings,omitempty"`
+	RetryState          string              `json:"retry_state,omitempty"`
+	TrustStatus         string              `json:"trust_status,omitempty"`
+	Blocked             bool                `json:"blocked,omitempty"`
+	BlockReason         string              `json:"block_reason,omitempty"`
 }
 
 type RulePackageError struct {
@@ -601,6 +612,9 @@ type RuleCatalogSource struct {
 	ID           int64     `json:"id"`
 	Name         string    `json:"name"`
 	Source       string    `json:"source"`
+	ProviderID   int64     `json:"provider_id,omitempty"`
+	ProviderName string    `json:"provider_name,omitempty"`
+	ProviderHealth string  `json:"provider_health,omitempty"`
 	Enabled      bool      `json:"enabled"`
 	TimeoutSec   int       `json:"timeout_sec"`
 	Status       string    `json:"status"`
@@ -614,6 +628,10 @@ type RuleCatalogSource struct {
 type RuleCatalogPackage struct {
 	ID              int64                `json:"id"`
 	CatalogID       int64                `json:"catalog_id"`
+	ProviderID      int64                `json:"provider_id,omitempty"`
+	ProviderName    string               `json:"provider_name,omitempty"`
+	ProviderPackageRef string            `json:"provider_package_ref,omitempty"`
+	EntitlementState string              `json:"entitlement_state,omitempty"`
 	PackageID       string               `json:"package_id"`
 	Name            string               `json:"name"`
 	Version         string               `json:"version"`
@@ -700,10 +718,67 @@ type RuleAccountCredential struct {
 	Status          string    `json:"status"`
 }
 
+type RuleProviderRetryPolicy struct {
+	MaxAttempts int `json:"max_attempts"`
+	BackoffSec  int `json:"backoff_sec"`
+}
+
+type RuleProviderAdapter struct {
+	ID               int64                   `json:"id"`
+	Name             string                  `json:"name"`
+	ProviderType     string                  `json:"provider_type"`
+	Endpoint         string                  `json:"endpoint"`
+	AuthMode         string                  `json:"auth_mode"`
+	Enabled          bool                    `json:"enabled"`
+	TimeoutSec       int                     `json:"timeout_sec"`
+	RetryPolicy      RuleProviderRetryPolicy `json:"retry_policy"`
+	Credential        RuleAccountCredential   `json:"credential"`
+	HealthStatus     string                  `json:"health_status"`
+	SyncStatus       string                  `json:"sync_status"`
+	LastSyncAt        time.Time               `json:"last_sync_at,omitempty"`
+	LastFailedSyncAt  time.Time               `json:"last_failed_sync_at,omitempty"`
+	LastError         string                  `json:"last_error,omitempty"`
+	AttemptCount      int                     `json:"attempt_count"`
+	NextRetryAt       time.Time               `json:"next_retry_at,omitempty"`
+	RetryExhausted    bool                    `json:"retry_exhausted"`
+	PackageCount      int                     `json:"package_count"`
+	CreatedAt         time.Time               `json:"created_at"`
+	UpdatedAt         time.Time               `json:"updated_at"`
+}
+
+type RuleProviderPackage struct {
+	ID                 int64                `json:"id"`
+	ProviderID         int64                `json:"provider_id"`
+	ProviderName       string               `json:"provider_name"`
+	ProviderType       string               `json:"provider_type"`
+	ProviderPackageRef string               `json:"provider_package_ref"`
+	PackageID          string               `json:"package_id"`
+	Name               string               `json:"name"`
+	Version            string               `json:"version"`
+	Compatibility      string               `json:"compatibility"`
+	Checksum           string               `json:"checksum"`
+	Signature          RulePackageSignature `json:"signature"`
+	SignatureStatus    string               `json:"signature_status"`
+	UpdatedAtText      string               `json:"updated_at_text"`
+	ManifestURL        string               `json:"manifest_url"`
+	PackageJSON        string               `json:"-"`
+	SourceIdentity     string               `json:"source_identity"`
+	EntitlementState   string               `json:"entitlement_state"`
+	SyncStatus         string               `json:"sync_status"`
+	Stale              bool                 `json:"stale"`
+	LastSyncedAt       time.Time            `json:"last_synced_at,omitempty"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+}
+
 type RuleCommunityAccountSource struct {
 	ID                  int64                 `json:"id"`
 	Name                string                `json:"name"`
 	ProviderType        string                `json:"provider_type"`
+	ProviderAdapterID   int64                 `json:"provider_adapter_id,omitempty"`
+	ProviderAdapterName string                `json:"provider_adapter_name,omitempty"`
+	ProviderHealth      string                `json:"provider_health,omitempty"`
+	ProviderRetryState  string                `json:"provider_retry_state,omitempty"`
 	Endpoint            string                `json:"endpoint"`
 	Enabled             bool                  `json:"enabled"`
 	TimeoutSec          int                   `json:"timeout_sec"`

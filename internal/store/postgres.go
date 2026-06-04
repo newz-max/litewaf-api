@@ -99,7 +99,7 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
 			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status,
-			remote_catalog_id, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons,
+			remote_catalog_id, provider_id, provider_name, provider_package_ref, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons,
 			created_at, updated_at
 		FROM rules
 		ORDER BY id`)
@@ -117,7 +117,7 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 			&item.Enabled, &item.Module, &item.Category, &item.AttackType, &item.Group, &item.Priority,
 			&item.PackageID, &item.PackageVersion, &item.PackageRuleID, &item.SourceChecksum,
 			&item.SignatureStatus, &item.ReviewStatus, &item.LastTestStatus,
-			&item.RemoteCatalogID, &item.LastSyncedVersion, &item.PendingUpdateState, &item.LocalOverrideState, &item.ExportEligible, &exportReasons,
+			&item.RemoteCatalogID, &item.ProviderID, &item.ProviderName, &item.ProviderPackageRef, &item.LastSyncedVersion, &item.PendingUpdateState, &item.LocalOverrideState, &item.ExportEligible, &exportReasons,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -135,7 +135,7 @@ func (s *PostgresStore) GetRule(ctx context.Context, id int64) (model.Rule, erro
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
 			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status,
-			remote_catalog_id, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons,
+			remote_catalog_id, provider_id, provider_name, provider_package_ref, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons,
 			created_at, updated_at
 		FROM rules
 		WHERE id = $1`, id).
@@ -144,7 +144,7 @@ func (s *PostgresStore) GetRule(ctx context.Context, id int64) (model.Rule, erro
 			&item.Enabled, &item.Module, &item.Category, &item.AttackType, &item.Group, &item.Priority,
 			&item.PackageID, &item.PackageVersion, &item.PackageRuleID, &item.SourceChecksum,
 			&item.SignatureStatus, &item.ReviewStatus, &item.LastTestStatus,
-			&item.RemoteCatalogID, &item.LastSyncedVersion, &item.PendingUpdateState, &item.LocalOverrideState, &item.ExportEligible, &exportReasons,
+			&item.RemoteCatalogID, &item.ProviderID, &item.ProviderName, &item.ProviderPackageRef, &item.LastSyncedVersion, &item.PendingUpdateState, &item.LocalOverrideState, &item.ExportEligible, &exportReasons,
 			&item.CreatedAt, &item.UpdatedAt,
 		)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -160,15 +160,15 @@ func (s *PostgresStore) CreateRule(ctx context.Context, rule model.Rule) (model.
 		INSERT INTO rules (
 			name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
 			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status,
-			remote_catalog_id, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons
+			remote_catalog_id, provider_id, provider_name, provider_package_ref, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
 		RETURNING id, created_at, updated_at`,
 		rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled,
 		rule.Module, rule.Category, rule.AttackType, rule.Group, rule.Priority,
 		rule.PackageID, rule.PackageVersion, rule.PackageRuleID, rule.SourceChecksum,
 		rule.SignatureStatus, rule.ReviewStatus, rule.LastTestStatus,
-		rule.RemoteCatalogID, rule.LastSyncedVersion, rule.PendingUpdateState, rule.LocalOverrideState, rule.ExportEligible, joinCSV(rule.ExportIneligibleReasons)).
+		rule.RemoteCatalogID, rule.ProviderID, rule.ProviderName, rule.ProviderPackageRef, rule.LastSyncedVersion, rule.PendingUpdateState, rule.LocalOverrideState, rule.ExportEligible, joinCSV(rule.ExportIneligibleReasons)).
 		Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt)
 	return rule, err
 }
@@ -181,15 +181,16 @@ func (s *PostgresStore) UpdateRule(ctx context.Context, id int64, rule model.Rul
 			module = $9, category = $10, attack_type = $11, group_name = $12, priority = $13,
 			package_id = $14, package_version = $15, package_rule_id = $16, source_checksum = $17,
 			signature_status = $18, review_status = $19, last_test_status = $20,
-			remote_catalog_id = $21, last_synced_version = $22, pending_update_state = $23,
-			local_override_state = $24, export_eligible = $25, export_ineligible_reasons = $26, updated_at = now()
+			remote_catalog_id = $21, provider_id = $22, provider_name = $23, provider_package_ref = $24,
+			last_synced_version = $25, pending_update_state = $26,
+			local_override_state = $27, export_eligible = $28, export_ineligible_reasons = $29, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
 		id, rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled,
 		rule.Module, rule.Category, rule.AttackType, rule.Group, rule.Priority,
 		rule.PackageID, rule.PackageVersion, rule.PackageRuleID, rule.SourceChecksum,
 		rule.SignatureStatus, rule.ReviewStatus, rule.LastTestStatus,
-		rule.RemoteCatalogID, rule.LastSyncedVersion, rule.PendingUpdateState, rule.LocalOverrideState, rule.ExportEligible, joinCSV(rule.ExportIneligibleReasons)).
+		rule.RemoteCatalogID, rule.ProviderID, rule.ProviderName, rule.ProviderPackageRef, rule.LastSyncedVersion, rule.PendingUpdateState, rule.LocalOverrideState, rule.ExportEligible, joinCSV(rule.ExportIneligibleReasons)).
 		Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Rule{}, ErrNotFound
@@ -1071,10 +1072,12 @@ func (s *PostgresStore) BackfillProtectionRules(ctx context.Context) (int, error
 
 func (s *PostgresStore) ListRuleCatalogSources(ctx context.Context) ([]model.RuleCatalogSource, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT s.id, s.name, s.source, s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
+		SELECT s.id, s.name, s.source, s.provider_id, COALESCE(pa.name, ''), COALESCE(pa.health_status, ''),
+			s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
 		FROM rule_catalog_sources s
 		LEFT JOIN rule_catalog_packages p ON p.catalog_id = s.id
-		GROUP BY s.id
+		LEFT JOIN rule_provider_adapters pa ON pa.id = s.provider_id
+		GROUP BY s.id, pa.name, pa.health_status
 		ORDER BY s.id`)
 	if err != nil {
 		return nil, err
@@ -1084,7 +1087,7 @@ func (s *PostgresStore) ListRuleCatalogSources(ctx context.Context) ([]model.Rul
 	for rows.Next() {
 		var item model.RuleCatalogSource
 		var lastSync sql.NullTime
-		if err := rows.Scan(&item.ID, &item.Name, &item.Source, &item.Enabled, &item.TimeoutSec, &item.Status, &lastSync, &item.LastError, &item.PackageCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Source, &item.ProviderID, &item.ProviderName, &item.ProviderHealth, &item.Enabled, &item.TimeoutSec, &item.Status, &lastSync, &item.LastError, &item.PackageCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if lastSync.Valid {
@@ -1099,12 +1102,14 @@ func (s *PostgresStore) GetRuleCatalogSource(ctx context.Context, id int64) (mod
 	var item model.RuleCatalogSource
 	var lastSync sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.name, s.source, s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
+		SELECT s.id, s.name, s.source, s.provider_id, COALESCE(pa.name, ''), COALESCE(pa.health_status, ''),
+			s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
 		FROM rule_catalog_sources s
 		LEFT JOIN rule_catalog_packages p ON p.catalog_id = s.id
+		LEFT JOIN rule_provider_adapters pa ON pa.id = s.provider_id
 		WHERE s.id = $1
-		GROUP BY s.id`, id).
-		Scan(&item.ID, &item.Name, &item.Source, &item.Enabled, &item.TimeoutSec, &item.Status, &lastSync, &item.LastError, &item.PackageCount, &item.CreatedAt, &item.UpdatedAt)
+		GROUP BY s.id, pa.name, pa.health_status`, id).
+		Scan(&item.ID, &item.Name, &item.Source, &item.ProviderID, &item.ProviderName, &item.ProviderHealth, &item.Enabled, &item.TimeoutSec, &item.Status, &lastSync, &item.LastError, &item.PackageCount, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RuleCatalogSource{}, ErrNotFound
 	}
@@ -1116,10 +1121,10 @@ func (s *PostgresStore) GetRuleCatalogSource(ctx context.Context, id int64) (mod
 
 func (s *PostgresStore) CreateRuleCatalogSource(ctx context.Context, item model.RuleCatalogSource) (model.RuleCatalogSource, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO rule_catalog_sources (name, source, enabled, timeout_sec, status, last_error)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO rule_catalog_sources (name, source, provider_id, enabled, timeout_sec, status, last_error)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.Source, item.Enabled, item.TimeoutSec, item.Status, item.LastError).
+		item.Name, item.Source, item.ProviderID, item.Enabled, item.TimeoutSec, item.Status, item.LastError).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
@@ -1127,10 +1132,10 @@ func (s *PostgresStore) CreateRuleCatalogSource(ctx context.Context, item model.
 func (s *PostgresStore) UpdateRuleCatalogSource(ctx context.Context, id int64, item model.RuleCatalogSource) (model.RuleCatalogSource, error) {
 	err := s.db.QueryRowContext(ctx, `
 		UPDATE rule_catalog_sources
-		SET name = $2, source = $3, enabled = $4, timeout_sec = $5, status = $6, last_sync_at = $7, last_error = $8, updated_at = now()
+		SET name = $2, source = $3, provider_id = $4, enabled = $5, timeout_sec = $6, status = $7, last_sync_at = $8, last_error = $9, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.Source, item.Enabled, item.TimeoutSec, item.Status, nullableTime(item.LastSyncAt), item.LastError).
+		id, item.Name, item.Source, item.ProviderID, item.Enabled, item.TimeoutSec, item.Status, nullableTime(item.LastSyncAt), item.LastError).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RuleCatalogSource{}, ErrNotFound
@@ -1145,7 +1150,7 @@ func (s *PostgresStore) DeleteRuleCatalogSource(ctx context.Context, id int64) e
 
 func (s *PostgresStore) ListRuleCatalogPackages(ctx context.Context, catalogID int64) ([]model.RuleCatalogPackage, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, catalog_id, package_id, name, version, compatibility, checksum,
+		SELECT id, catalog_id, provider_id, provider_name, provider_package_ref, entitlement_state, package_id, name, version, compatibility, checksum,
 			signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
 			updated_at_text, manifest_url, package_json, source_identity, sync_status, stale, last_synced_at, created_at, updated_at
 		FROM rule_catalog_packages
@@ -1168,7 +1173,7 @@ func (s *PostgresStore) ListRuleCatalogPackages(ctx context.Context, catalogID i
 
 func (s *PostgresStore) GetRuleCatalogPackage(ctx context.Context, catalogID int64, packageID string) (model.RuleCatalogPackage, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, catalog_id, package_id, name, version, compatibility, checksum,
+		SELECT id, catalog_id, provider_id, provider_name, provider_package_ref, entitlement_state, package_id, name, version, compatibility, checksum,
 			signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
 			updated_at_text, manifest_url, package_json, source_identity, sync_status, stale, last_synced_at, created_at, updated_at
 		FROM rule_catalog_packages
@@ -1199,12 +1204,12 @@ func (s *PostgresStore) ReplaceRuleCatalogPackages(ctx context.Context, catalogI
 	for _, item := range items {
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO rule_catalog_packages (
-				catalog_id, package_id, name, version, compatibility, checksum,
+				catalog_id, provider_id, provider_name, provider_package_ref, entitlement_state, package_id, name, version, compatibility, checksum,
 				signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
 				updated_at_text, manifest_url, package_json, source_identity, sync_status, stale, last_synced_at
 			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-			catalogID, item.PackageID, item.Name, item.Version, item.Compatibility, item.Checksum,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
+			catalogID, item.ProviderID, item.ProviderName, item.ProviderPackageRef, item.EntitlementState, item.PackageID, item.Name, item.Version, item.Compatibility, item.Checksum,
 			item.Signature.KeyID, item.Signature.Checksum, item.Signature.Signature, item.Signature.ExpiresAt, item.SignatureStatus,
 			item.UpdatedAtText, item.ManifestURL, item.PackageJSON, item.SourceIdentity, item.SyncStatus, item.Stale, nullableTime(item.LastSyncedAt)); err != nil {
 			return err
@@ -1284,15 +1289,201 @@ func (s *PostgresStore) UpdateRuleTrustKey(ctx context.Context, id int64, item m
 	return item, err
 }
 
+func (s *PostgresStore) ListRuleProviderAdapters(ctx context.Context) ([]model.RuleProviderAdapter, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.id, p.name, p.provider_type, p.endpoint, p.auth_mode, p.enabled, p.timeout_sec,
+			p.retry_max_attempts, p.retry_backoff_sec,
+			p.credential_alias, p.credential_fingerprint, p.credential_last_four, p.credential_expires_at, p.credential_last_validated_at, p.credential_status,
+			p.health_status, p.sync_status, p.last_sync_at, p.last_failed_sync_at, p.last_error, p.attempt_count, p.next_retry_at, p.retry_exhausted,
+			count(pkg.id), p.created_at, p.updated_at
+		FROM rule_provider_adapters p
+		LEFT JOIN rule_provider_packages pkg ON pkg.provider_id = p.id
+		GROUP BY p.id
+		ORDER BY p.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleProviderAdapter
+	for rows.Next() {
+		item, err := scanRuleProviderAdapter(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleProviderAdapter(ctx context.Context, id int64) (model.RuleProviderAdapter, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT p.id, p.name, p.provider_type, p.endpoint, p.auth_mode, p.enabled, p.timeout_sec,
+			p.retry_max_attempts, p.retry_backoff_sec,
+			p.credential_alias, p.credential_fingerprint, p.credential_last_four, p.credential_expires_at, p.credential_last_validated_at, p.credential_status,
+			p.health_status, p.sync_status, p.last_sync_at, p.last_failed_sync_at, p.last_error, p.attempt_count, p.next_retry_at, p.retry_exhausted,
+			count(pkg.id), p.created_at, p.updated_at
+		FROM rule_provider_adapters p
+		LEFT JOIN rule_provider_packages pkg ON pkg.provider_id = p.id
+		WHERE p.id = $1
+		GROUP BY p.id`, id)
+	item, err := scanRuleProviderAdapter(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleProviderAdapter{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleProviderAdapter(ctx context.Context, item model.RuleProviderAdapter, secret model.RuleCommunityAccountSecret) (model.RuleProviderAdapter, error) {
+	item.Credential = postgresRedactCredential(item.Credential, secret.Secret, time.Now().UTC())
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_provider_adapters (
+			name, provider_type, endpoint, auth_mode, enabled, timeout_sec, retry_max_attempts, retry_backoff_sec,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status, credential_secret,
+			health_status, sync_status, last_error, attempt_count, retry_exhausted
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.ProviderType, item.Endpoint, item.AuthMode, item.Enabled, item.TimeoutSec, item.RetryPolicy.MaxAttempts, item.RetryPolicy.BackoffSec,
+		item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour, nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret,
+		item.HealthStatus, item.SyncStatus, item.LastError, item.AttemptCount, item.RetryExhausted).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRuleProviderAdapter(ctx context.Context, id int64, item model.RuleProviderAdapter, secret model.RuleCommunityAccountSecret) (model.RuleProviderAdapter, error) {
+	existing, err := s.GetRuleProviderAdapter(ctx, id)
+	if err != nil {
+		return model.RuleProviderAdapter{}, err
+	}
+	if secret.Secret == "" {
+		item.Credential = existing.Credential
+	} else {
+		item.Credential = postgresRedactCredential(item.Credential, secret.Secret, time.Now().UTC())
+	}
+	err = s.db.QueryRowContext(ctx, `
+		UPDATE rule_provider_adapters
+		SET name = $2, provider_type = $3, endpoint = $4, auth_mode = $5, enabled = $6, timeout_sec = $7,
+			retry_max_attempts = $8, retry_backoff_sec = $9,
+			credential_alias = $10, credential_fingerprint = $11, credential_last_four = $12,
+			credential_expires_at = $13, credential_last_validated_at = $14, credential_status = $15,
+			credential_secret = CASE WHEN $16 = '' THEN credential_secret ELSE $16 END,
+			health_status = $17, sync_status = $18, last_error = $19, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.ProviderType, item.Endpoint, item.AuthMode, item.Enabled, item.TimeoutSec,
+		item.RetryPolicy.MaxAttempts, item.RetryPolicy.BackoffSec,
+		item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour,
+		nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret,
+		item.HealthStatus, item.SyncStatus, item.LastError).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleProviderAdapter{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteRuleProviderAdapter(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM rule_provider_adapters WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) UpdateRuleProviderSyncState(ctx context.Context, id int64, item model.RuleProviderAdapter, packages []model.RuleProviderPackage) (model.RuleProviderAdapter, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.RuleProviderAdapter{}, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `
+		UPDATE rule_provider_adapters
+		SET health_status = $2, sync_status = $3, last_sync_at = $4, last_failed_sync_at = $5, last_error = $6,
+			attempt_count = $7, next_retry_at = $8, retry_exhausted = $9, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.HealthStatus, item.SyncStatus, nullableTime(item.LastSyncAt), nullableTime(item.LastFailedSyncAt), item.LastError,
+		item.AttemptCount, nullableTime(item.NextRetryAt), item.RetryExhausted).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleProviderAdapter{}, ErrNotFound
+	}
+	if err != nil {
+		return model.RuleProviderAdapter{}, err
+	}
+	if packages != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM rule_provider_packages WHERE provider_id = $1`, id); err != nil {
+			return model.RuleProviderAdapter{}, err
+		}
+		for _, pkg := range packages {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO rule_provider_packages (
+					provider_id, provider_package_ref, package_id, name, version, compatibility, checksum,
+					signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
+					updated_at_text, manifest_url, package_json, source_identity, entitlement_state, sync_status, stale, last_synced_at
+				)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+				id, pkg.ProviderPackageRef, pkg.PackageID, pkg.Name, pkg.Version, pkg.Compatibility, pkg.Checksum,
+				pkg.Signature.KeyID, pkg.Signature.Checksum, pkg.Signature.Signature, pkg.Signature.ExpiresAt, pkg.SignatureStatus,
+				pkg.UpdatedAtText, pkg.ManifestURL, pkg.PackageJSON, pkg.SourceIdentity, pkg.EntitlementState, pkg.SyncStatus, pkg.Stale, nullableTime(pkg.LastSyncedAt)); err != nil {
+				return model.RuleProviderAdapter{}, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return model.RuleProviderAdapter{}, err
+	}
+	return s.GetRuleProviderAdapter(ctx, id)
+}
+
+func (s *PostgresStore) ListRuleProviderPackages(ctx context.Context, providerID int64) ([]model.RuleProviderPackage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT pkg.id, pkg.provider_id, p.name, p.provider_type, pkg.provider_package_ref, pkg.package_id, pkg.name, pkg.version, pkg.compatibility, pkg.checksum,
+			pkg.signature_key_id, pkg.signature_checksum, pkg.signature_value, pkg.signature_expires_at, pkg.signature_status,
+			pkg.updated_at_text, pkg.manifest_url, pkg.package_json, pkg.source_identity, pkg.entitlement_state, pkg.sync_status, pkg.stale, pkg.last_synced_at, pkg.created_at, pkg.updated_at
+		FROM rule_provider_packages pkg
+		JOIN rule_provider_adapters p ON p.id = pkg.provider_id
+		WHERE ($1 = 0 OR pkg.provider_id = $1)
+		ORDER BY pkg.provider_id, pkg.package_id`, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleProviderPackage
+	for rows.Next() {
+		item, err := scanRuleProviderPackage(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleProviderPackage(ctx context.Context, providerID int64, packageID string) (model.RuleProviderPackage, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT pkg.id, pkg.provider_id, p.name, p.provider_type, pkg.provider_package_ref, pkg.package_id, pkg.name, pkg.version, pkg.compatibility, pkg.checksum,
+			pkg.signature_key_id, pkg.signature_checksum, pkg.signature_value, pkg.signature_expires_at, pkg.signature_status,
+			pkg.updated_at_text, pkg.manifest_url, pkg.package_json, pkg.source_identity, pkg.entitlement_state, pkg.sync_status, pkg.stale, pkg.last_synced_at, pkg.created_at, pkg.updated_at
+		FROM rule_provider_packages pkg
+		JOIN rule_provider_adapters p ON p.id = pkg.provider_id
+		WHERE pkg.provider_id = $1 AND (pkg.package_id = $2 OR pkg.provider_package_ref = $2)`, providerID, packageID)
+	item, err := scanRuleProviderPackage(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleProviderPackage{}, ErrNotFound
+	}
+	return item, err
+}
+
 func (s *PostgresStore) ListRuleCommunityAccountSources(ctx context.Context) ([]model.RuleCommunityAccountSource, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, provider_type, endpoint, enabled, timeout_sec,
-			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
-			subscription_status, entitlement_summary, package_count, status, last_sync_at, last_error,
-			(SELECT count(*) FROM rule_review_queue q WHERE q.source_identity = 'account:' || rule_community_account_sources.id AND q.state = 'queued') AS recommendation_count,
-			created_at, updated_at
-		FROM rule_community_account_sources
-		ORDER BY id`)
+		SELECT s.id, s.name, s.provider_type, s.provider_adapter_id, COALESCE(p.name, ''), COALESCE(p.health_status, ''),
+			CASE WHEN COALESCE(p.retry_exhausted, false) THEN 'exhausted' WHEN COALESCE(p.attempt_count, 0) > 0 THEN 'retrying' ELSE 'ready' END,
+			s.endpoint, s.enabled, s.timeout_sec,
+			s.credential_alias, s.credential_fingerprint, s.credential_last_four, s.credential_expires_at, s.credential_last_validated_at, s.credential_status,
+			s.subscription_status, s.entitlement_summary, s.package_count, s.status, s.last_sync_at, s.last_error,
+			(SELECT count(*) FROM rule_review_queue q WHERE q.source_identity = 'account:' || s.id AND q.state = 'queued') AS recommendation_count,
+			s.created_at, s.updated_at
+		FROM rule_community_account_sources s
+		LEFT JOIN rule_provider_adapters p ON p.id = s.provider_adapter_id
+		ORDER BY s.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1310,13 +1501,16 @@ func (s *PostgresStore) ListRuleCommunityAccountSources(ctx context.Context) ([]
 
 func (s *PostgresStore) GetRuleCommunityAccountSource(ctx context.Context, id int64) (model.RuleCommunityAccountSource, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, provider_type, endpoint, enabled, timeout_sec,
-			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
-			subscription_status, entitlement_summary, package_count, status, last_sync_at, last_error,
-			(SELECT count(*) FROM rule_review_queue q WHERE q.source_identity = 'account:' || rule_community_account_sources.id AND q.state = 'queued') AS recommendation_count,
-			created_at, updated_at
-		FROM rule_community_account_sources
-		WHERE id = $1`, id)
+		SELECT s.id, s.name, s.provider_type, s.provider_adapter_id, COALESCE(p.name, ''), COALESCE(p.health_status, ''),
+			CASE WHEN COALESCE(p.retry_exhausted, false) THEN 'exhausted' WHEN COALESCE(p.attempt_count, 0) > 0 THEN 'retrying' ELSE 'ready' END,
+			s.endpoint, s.enabled, s.timeout_sec,
+			s.credential_alias, s.credential_fingerprint, s.credential_last_four, s.credential_expires_at, s.credential_last_validated_at, s.credential_status,
+			s.subscription_status, s.entitlement_summary, s.package_count, s.status, s.last_sync_at, s.last_error,
+			(SELECT count(*) FROM rule_review_queue q WHERE q.source_identity = 'account:' || s.id AND q.state = 'queued') AS recommendation_count,
+			s.created_at, s.updated_at
+		FROM rule_community_account_sources s
+		LEFT JOIN rule_provider_adapters p ON p.id = s.provider_adapter_id
+		WHERE s.id = $1`, id)
 	item, err := scanRuleCommunityAccountSource(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.RuleCommunityAccountSource{}, ErrNotFound
@@ -1328,13 +1522,13 @@ func (s *PostgresStore) CreateRuleCommunityAccountSource(ctx context.Context, it
 	item.Credential = postgresRedactCredential(item.Credential, secret.Secret, time.Now().UTC())
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO rule_community_account_sources (
-			name, provider_type, endpoint, enabled, timeout_sec,
+			name, provider_type, provider_adapter_id, endpoint, enabled, timeout_sec,
 			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status, credential_secret,
 			subscription_status, entitlement_summary, package_count, status, last_error
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.ProviderType, item.Endpoint, item.Enabled, item.TimeoutSec,
+		item.Name, item.ProviderType, item.ProviderAdapterID, item.Endpoint, item.Enabled, item.TimeoutSec,
 		item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour, nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret,
 		item.SubscriptionStatus, item.EntitlementSummary, item.PackageCount, item.Status, item.LastError).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
@@ -1353,15 +1547,15 @@ func (s *PostgresStore) UpdateRuleCommunityAccountSource(ctx context.Context, id
 	}
 	err = s.db.QueryRowContext(ctx, `
 		UPDATE rule_community_account_sources
-		SET name = $2, provider_type = $3, endpoint = $4, enabled = $5, timeout_sec = $6,
-			credential_alias = $7, credential_fingerprint = $8, credential_last_four = $9,
-			credential_expires_at = $10, credential_last_validated_at = $11, credential_status = $12,
-			credential_secret = CASE WHEN $13 = '' THEN credential_secret ELSE $13 END,
-			subscription_status = $14, entitlement_summary = $15, package_count = $16,
-			status = $17, last_error = $18, updated_at = now()
+		SET name = $2, provider_type = $3, provider_adapter_id = $4, endpoint = $5, enabled = $6, timeout_sec = $7,
+			credential_alias = $8, credential_fingerprint = $9, credential_last_four = $10,
+			credential_expires_at = $11, credential_last_validated_at = $12, credential_status = $13,
+			credential_secret = CASE WHEN $14 = '' THEN credential_secret ELSE $14 END,
+			subscription_status = $15, entitlement_summary = $16, package_count = $17,
+			status = $18, last_error = $19, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.ProviderType, item.Endpoint, item.Enabled, item.TimeoutSec,
+		id, item.Name, item.ProviderType, item.ProviderAdapterID, item.Endpoint, item.Enabled, item.TimeoutSec,
 		item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour,
 		nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret,
 		item.SubscriptionStatus, item.EntitlementSummary, item.PackageCount, item.Status, item.LastError).
@@ -1391,11 +1585,11 @@ func (s *PostgresStore) RefreshRuleCommunityAccountSource(ctx context.Context, i
 		SET subscription_status = $2, entitlement_summary = $3, package_count = $4, status = $5,
 			last_sync_at = $6, last_error = $7, updated_at = now()
 		WHERE id = $1
-		RETURNING id, name, provider_type, endpoint, enabled, timeout_sec,
+		RETURNING id, name, provider_type, provider_adapter_id, '', '', '', endpoint, enabled, timeout_sec,
 			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
 			subscription_status, entitlement_summary, package_count, status, last_sync_at, last_error, 0, created_at, updated_at`,
 		id, item.SubscriptionStatus, item.EntitlementSummary, item.PackageCount, item.Status, nullableTime(item.LastSyncAt), item.LastError).
-		Scan(&item.ID, &item.Name, &item.ProviderType, &item.Endpoint, &item.Enabled, &item.TimeoutSec,
+		Scan(&item.ID, &item.Name, &item.ProviderType, &item.ProviderAdapterID, &item.ProviderAdapterName, &item.ProviderHealth, &item.ProviderRetryState, &item.Endpoint, &item.Enabled, &item.TimeoutSec,
 			&item.Credential.Alias, &item.Credential.Fingerprint, &item.Credential.LastFour, &credentialExpires, &credentialValidated, &item.Credential.Status,
 			&item.SubscriptionStatus, &item.EntitlementSummary, &item.PackageCount, &item.Status, &lastSync, &item.LastError, &item.RecommendationCount, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1648,13 +1842,67 @@ type ruleCommunityAccountScanner interface {
 	Scan(dest ...any) error
 }
 
+type ruleProviderAdapterScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleProviderAdapter(row ruleProviderAdapterScanner) (model.RuleProviderAdapter, error) {
+	var item model.RuleProviderAdapter
+	var credentialExpires sql.NullTime
+	var credentialValidated sql.NullTime
+	var lastSync sql.NullTime
+	var lastFailed sql.NullTime
+	var nextRetry sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.Name, &item.ProviderType, &item.Endpoint, &item.AuthMode, &item.Enabled, &item.TimeoutSec,
+		&item.RetryPolicy.MaxAttempts, &item.RetryPolicy.BackoffSec,
+		&item.Credential.Alias, &item.Credential.Fingerprint, &item.Credential.LastFour, &credentialExpires, &credentialValidated, &item.Credential.Status,
+		&item.HealthStatus, &item.SyncStatus, &lastSync, &lastFailed, &item.LastError, &item.AttemptCount, &nextRetry, &item.RetryExhausted,
+		&item.PackageCount, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if credentialExpires.Valid {
+		item.Credential.ExpiresAt = credentialExpires.Time
+	}
+	if credentialValidated.Valid {
+		item.Credential.LastValidatedAt = credentialValidated.Time
+	}
+	if lastSync.Valid {
+		item.LastSyncAt = lastSync.Time
+	}
+	if lastFailed.Valid {
+		item.LastFailedSyncAt = lastFailed.Time
+	}
+	if nextRetry.Valid {
+		item.NextRetryAt = nextRetry.Time
+	}
+	return item, err
+}
+
+type ruleProviderPackageScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleProviderPackage(row ruleProviderPackageScanner) (model.RuleProviderPackage, error) {
+	var item model.RuleProviderPackage
+	var lastSynced sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.ProviderID, &item.ProviderName, &item.ProviderType, &item.ProviderPackageRef, &item.PackageID, &item.Name, &item.Version, &item.Compatibility, &item.Checksum,
+		&item.Signature.KeyID, &item.Signature.Checksum, &item.Signature.Signature, &item.Signature.ExpiresAt, &item.SignatureStatus,
+		&item.UpdatedAtText, &item.ManifestURL, &item.PackageJSON, &item.SourceIdentity, &item.EntitlementState, &item.SyncStatus, &item.Stale, &lastSynced, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if lastSynced.Valid {
+		item.LastSyncedAt = lastSynced.Time
+	}
+	return item, err
+}
+
 func scanRuleCommunityAccountSource(row ruleCommunityAccountScanner) (model.RuleCommunityAccountSource, error) {
 	var item model.RuleCommunityAccountSource
 	var credentialExpires sql.NullTime
 	var credentialValidated sql.NullTime
 	var lastSync sql.NullTime
 	err := row.Scan(
-		&item.ID, &item.Name, &item.ProviderType, &item.Endpoint, &item.Enabled, &item.TimeoutSec,
+		&item.ID, &item.Name, &item.ProviderType, &item.ProviderAdapterID, &item.ProviderAdapterName, &item.ProviderHealth, &item.ProviderRetryState, &item.Endpoint, &item.Enabled, &item.TimeoutSec,
 		&item.Credential.Alias, &item.Credential.Fingerprint, &item.Credential.LastFour, &credentialExpires, &credentialValidated, &item.Credential.Status,
 		&item.SubscriptionStatus, &item.EntitlementSummary, &item.PackageCount, &item.Status, &lastSync, &item.LastError,
 		&item.RecommendationCount, &item.CreatedAt, &item.UpdatedAt,

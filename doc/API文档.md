@@ -193,6 +193,8 @@ Authorization: Bearer <token>
 
 ## 黑白名单
 
+黑白名单接口作为旧入口继续保留，用于兼容既有客户端和发布字段。后台新建 IP/CIDR、路径、Header 和 Host 访问规则时，推荐使用“访问控制”模块；访问控制会以 `module=access-control`、`category=access-control` 呈现同类规则。
+
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/api/v1/access-lists` | 读 | 查询名单 |
@@ -469,6 +471,8 @@ Bot / 人机验证接口使用独立规则存储，对外以 `module=bot-protect
 管理员可以创建、更新和删除动态防护规则；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=dynamic_protection_rule` 的审计日志。
 
 ## 限流
+
+限流接口作为旧入口继续保留，用于兼容既有客户端和发布字段。后台新建 URL 频率限制、登录防爆破、API 调用限流和临时封禁规则时，推荐使用“CC 防护”模块；CC 防护会以 `module=cc-protection`、`category=rate-limit` 呈现同类规则。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |

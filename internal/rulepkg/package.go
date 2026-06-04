@@ -128,7 +128,7 @@ func Parse(data []byte) (model.RulePackage, []model.RulePackageError) {
 			PackageVersion:  pkg.Metadata.Version,
 			PackageRuleID:   ruleID,
 			SourceChecksum:  checksumRule(raw),
-			SignatureStatus: signatureStatus(pkg.Metadata),
+			SignatureStatus: pkg.Metadata.SignatureStatus,
 			ReviewStatus:    pkg.Defaults.ReviewStatus,
 			LastTestStatus:  "",
 		}
@@ -155,7 +155,12 @@ func Parse(data []byte) (model.RulePackage, []model.RulePackageError) {
 }
 
 func Preview(ctx context.Context, dataStore store.Store, data []byte) (model.RulePackagePreview, error) {
+	return PreviewWithTrustKeys(ctx, dataStore, data, nil)
+}
+
+func PreviewWithTrustKeys(ctx context.Context, dataStore store.Store, data []byte, trustKeys []model.RuleTrustKey) (model.RulePackagePreview, error) {
 	pkg, invalid := Parse(data)
+	pkg = ApplyTrustKeys(pkg, trustKeys)
 	if len(validateMetadata(pkg.Metadata)) > 0 {
 		return model.RulePackagePreview{}, errors.New("rule package metadata is invalid")
 	}
@@ -194,7 +199,11 @@ func Preview(ctx context.Context, dataStore store.Store, data []byte) (model.Rul
 }
 
 func Import(ctx context.Context, dataStore store.Store, data []byte) (model.RulePackageImportResult, error) {
-	preview, err := Preview(ctx, dataStore, data)
+	return ImportWithTrustKeys(ctx, dataStore, data, nil)
+}
+
+func ImportWithTrustKeys(ctx context.Context, dataStore store.Store, data []byte, trustKeys []model.RuleTrustKey) (model.RulePackageImportResult, error) {
+	preview, err := PreviewWithTrustKeys(ctx, dataStore, data, trustKeys)
 	if err != nil {
 		return model.RulePackageImportResult{}, err
 	}
@@ -223,6 +232,15 @@ func Import(ctx context.Context, dataStore store.Store, data []byte) (model.Rule
 		result.Changed = append(result.Changed, updated)
 	}
 	return result, nil
+}
+
+func ApplyTrustKeys(pkg model.RulePackage, trustKeys []model.RuleTrustKey) model.RulePackage {
+	pkg.Metadata.SignatureStatus = SignatureStatus(pkg.Metadata.Signature, pkg.Metadata.Checksum, trustKeys)
+	pkg.Metadata.Warnings = signatureWarnings(pkg.Metadata)
+	for i := range pkg.Rules {
+		pkg.Rules[i].SignatureStatus = pkg.Metadata.SignatureStatus
+	}
+	return pkg
 }
 
 func PackagesFromRules(rules []model.Rule) []model.RulePackageMetadata {
@@ -390,19 +408,7 @@ func validateMetadata(meta model.RulePackageMetadata) []model.RulePackageError {
 }
 
 func signatureStatus(meta model.RulePackageMetadata) string {
-	if meta.Signature.KeyID == "" && meta.Signature.Signature == "" {
-		return SignatureUnsigned
-	}
-	if !trustedKeyIDs[meta.Signature.KeyID] {
-		return SignatureUntrustedKey
-	}
-	if meta.Signature.Checksum != "" && meta.Checksum != "" && !strings.EqualFold(meta.Signature.Checksum, meta.Checksum) {
-		return SignatureInvalid
-	}
-	if meta.Signature.Signature != "" && meta.Checksum != "" && strings.EqualFold(meta.Signature.Signature, meta.Checksum) {
-		return SignatureVerified
-	}
-	return SignatureInvalid
+	return SignatureStatus(meta.Signature, meta.Checksum, nil)
 }
 
 func signatureWarnings(meta model.RulePackageMetadata) []string {
@@ -419,6 +425,10 @@ func signatureWarnings(meta model.RulePackageMetadata) []string {
 		return []string{"package signature is invalid"}
 	case SignatureUntrustedKey:
 		return []string{"package signature key is not trusted"}
+	case SignatureRevokedKey:
+		return []string{"package signature key is revoked"}
+	case SignatureExpired:
+		return []string{"package signature or key is expired"}
 	default:
 		return []string{"package signature status is unknown"}
 	}

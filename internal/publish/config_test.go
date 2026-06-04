@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -459,6 +460,7 @@ func TestGenerateKeepsPackageOriginMetadataGatewayCompatible(t *testing.T) {
 		Module: "attack-protection", Category: "managed", AttackType: "xss", Group: "XSS 防护", Priority: 100,
 		PackageID: "community-baseline", PackageVersion: "v1", PackageRuleID: "xss-query", SourceChecksum: "checksum",
 		SignatureStatus: "unsigned", ReviewStatus: "approved", LastTestStatus: "passed",
+		RemoteCatalogID: "1", LastSyncedVersion: "v1", PendingUpdateState: "current", LocalOverrideState: "none", ExportEligible: true,
 	})
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
@@ -466,7 +468,7 @@ func TestGenerateKeepsPackageOriginMetadataGatewayCompatible(t *testing.T) {
 	if _, err := dataStore.CreatePolicy(ctx, model.Policy{Name: "default", SiteIDs: []int64{site.ID}, RuleIDs: []int64{rule.ID}, Enabled: true}); err != nil {
 		t.Fatalf("create policy: %v", err)
 	}
-	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-package")
+	config, payload, _, err := GenerateExtended(ctx, dataStore, "ruleset-package")
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -476,5 +478,8 @@ func TestGenerateKeepsPackageOriginMetadataGatewayCompatible(t *testing.T) {
 	published := config.Sites[0].Rules[0]
 	if published.PackageID != "community-baseline" || published.PackageRuleID != "xss-query" {
 		t.Fatalf("missing package metadata: %+v", published)
+	}
+	if bytes.Contains(payload, []byte("remote_catalog_id")) || bytes.Contains(payload, []byte("signature_status")) || bytes.Contains(payload, []byte("export_eligible")) {
+		t.Fatalf("gateway payload leaked control-plane community metadata: %s", string(payload))
 	}
 }

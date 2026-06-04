@@ -14,28 +14,34 @@ type Site struct {
 }
 
 type Rule struct {
-	ID              int64     `json:"id"`
-	Name            string    `json:"name"`
-	Type            string    `json:"type"`
-	Target          string    `json:"target"`
-	Action          string    `json:"action"`
-	Expression      string    `json:"expression"`
-	Score           int       `json:"score"`
-	Enabled         bool      `json:"enabled"`
-	Module          string    `json:"module"`
-	Category        string    `json:"category"`
-	AttackType      string    `json:"attack_type"`
-	Group           string    `json:"group"`
-	Priority        int       `json:"priority"`
-	PackageID       string    `json:"package_id"`
-	PackageVersion  string    `json:"package_version"`
-	PackageRuleID   string    `json:"package_rule_id"`
-	SourceChecksum  string    `json:"source_checksum"`
-	SignatureStatus string    `json:"signature_status"`
-	ReviewStatus    string    `json:"review_status"`
-	LastTestStatus  string    `json:"last_test_status"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                      int64     `json:"id"`
+	Name                    string    `json:"name"`
+	Type                    string    `json:"type"`
+	Target                  string    `json:"target"`
+	Action                  string    `json:"action"`
+	Expression              string    `json:"expression"`
+	Score                   int       `json:"score"`
+	Enabled                 bool      `json:"enabled"`
+	Module                  string    `json:"module"`
+	Category                string    `json:"category"`
+	AttackType              string    `json:"attack_type"`
+	Group                   string    `json:"group"`
+	Priority                int       `json:"priority"`
+	PackageID               string    `json:"package_id"`
+	PackageVersion          string    `json:"package_version"`
+	PackageRuleID           string    `json:"package_rule_id"`
+	SourceChecksum          string    `json:"source_checksum"`
+	SignatureStatus         string    `json:"signature_status"`
+	ReviewStatus            string    `json:"review_status"`
+	LastTestStatus          string    `json:"last_test_status"`
+	RemoteCatalogID         string    `json:"remote_catalog_id"`
+	LastSyncedVersion       string    `json:"last_synced_version"`
+	PendingUpdateState      string    `json:"pending_update_state"`
+	LocalOverrideState      string    `json:"local_override_state"`
+	ExportEligible          bool      `json:"export_eligible"`
+	ExportIneligibleReasons []string  `json:"export_ineligible_reasons,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }
 
 type Policy struct {
@@ -427,6 +433,7 @@ type RulePackageSignature struct {
 	KeyID     string `json:"key_id"`
 	Checksum  string `json:"checksum"`
 	Signature string `json:"signature"`
+	ExpiresAt string `json:"expires_at"`
 }
 
 type RulePackageMetadata struct {
@@ -457,13 +464,15 @@ type RulePackageDefaults struct {
 }
 
 type RulePackagePreview struct {
-	Package      RulePackageMetadata `json:"package"`
-	Added        []Rule              `json:"added"`
-	Changed      []Rule              `json:"changed"`
-	Skipped      []Rule              `json:"skipped"`
-	Invalid      []RulePackageError  `json:"invalid"`
-	DefaultState bool                `json:"default_enabled"`
-	Warnings     []string            `json:"warnings"`
+	Package             RulePackageMetadata `json:"package"`
+	Added               []Rule              `json:"added"`
+	Changed             []Rule              `json:"changed"`
+	Skipped             []Rule              `json:"skipped"`
+	Invalid             []RulePackageError  `json:"invalid"`
+	DefaultState        bool                `json:"default_enabled"`
+	Warnings            []string            `json:"warnings"`
+	CompatibilityStatus string              `json:"compatibility_status"`
+	SourceCatalogID     string              `json:"source_catalog_id,omitempty"`
 }
 
 type RulePackageError struct {
@@ -477,6 +486,100 @@ type RulePackageImportResult struct {
 	Changed  []Rule              `json:"changed"`
 	Skipped  []Rule              `json:"skipped"`
 	Invalid  []RulePackageError  `json:"invalid"`
+}
+
+type RuleCatalogSource struct {
+	ID           int64     `json:"id"`
+	Name         string    `json:"name"`
+	Source       string    `json:"source"`
+	Enabled      bool      `json:"enabled"`
+	TimeoutSec   int       `json:"timeout_sec"`
+	Status       string    `json:"status"`
+	LastSyncAt   time.Time `json:"last_sync_at,omitempty"`
+	LastError    string    `json:"last_error,omitempty"`
+	PackageCount int       `json:"package_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type RuleCatalogPackage struct {
+	ID              int64                `json:"id"`
+	CatalogID       int64                `json:"catalog_id"`
+	PackageID       string               `json:"package_id"`
+	Name            string               `json:"name"`
+	Version         string               `json:"version"`
+	Compatibility   string               `json:"compatibility"`
+	Checksum        string               `json:"checksum"`
+	Signature       RulePackageSignature `json:"signature"`
+	SignatureStatus string               `json:"signature_status"`
+	UpdatedAtText   string               `json:"updated_at_text"`
+	ManifestURL     string               `json:"manifest_url"`
+	PackageJSON     string               `json:"-"`
+	SourceIdentity  string               `json:"source_identity"`
+	SyncStatus      string               `json:"sync_status"`
+	Stale           bool                 `json:"stale"`
+	LastSyncedAt    time.Time            `json:"last_synced_at,omitempty"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+}
+
+type RuleTrustKey struct {
+	ID        int64     `json:"id"`
+	KeyID     string    `json:"key_id"`
+	Algorithm string    `json:"algorithm"`
+	Owner     string    `json:"owner"`
+	PublicKey string    `json:"public_key,omitempty"`
+	Enabled   bool      `json:"enabled"`
+	Revoked   bool      `json:"revoked"`
+	ExpiresAt time.Time `json:"expires_at,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type RulePackageUpdatePreview struct {
+	Package           RulePackageMetadata `json:"package"`
+	CurrentVersion    string              `json:"current_version"`
+	CandidateVersion  string              `json:"candidate_version"`
+	CurrentChecksum   string              `json:"current_checksum"`
+	CandidateChecksum string              `json:"candidate_checksum"`
+	SourceCatalogID   int64               `json:"source_catalog_id"`
+	Added             []Rule              `json:"added"`
+	Changed           []Rule              `json:"changed"`
+	Removed           []Rule              `json:"removed"`
+	Unchanged         []Rule              `json:"unchanged"`
+	Skipped           []Rule              `json:"skipped"`
+	Invalid           []RulePackageError  `json:"invalid"`
+	Warnings          []string            `json:"warnings"`
+	SignatureStatus   string              `json:"signature_status"`
+}
+
+type RulePackageExportRequest struct {
+	PackageID     string  `json:"package_id"`
+	Name          string  `json:"name"`
+	Version       string  `json:"version"`
+	Author        string  `json:"author"`
+	License       string  `json:"license"`
+	Compatibility string  `json:"compatibility"`
+	RuleIDs       []int64 `json:"rule_ids"`
+	SigningKeyID  string  `json:"signing_key_id"`
+}
+
+type RulePackageExportPreview struct {
+	Package       RulePackageMetadata `json:"package"`
+	SelectedRules []Rule              `json:"selected_rules"`
+	Invalid       []RulePackageError  `json:"invalid"`
+	Warnings      []string            `json:"warnings"`
+	ChecksumPlan  string              `json:"checksum_plan"`
+	SigningStatus string              `json:"signing_status"`
+}
+
+type RulePackageExportArtifact struct {
+	Package   RulePackageMetadata `json:"package"`
+	Artifact  string              `json:"artifact"`
+	Checksum  string              `json:"checksum"`
+	RuleCount int                 `json:"rule_count"`
+	Guidance  []string            `json:"guidance"`
+	CreatedAt time.Time           `json:"created_at"`
 }
 
 type RuleTestSample struct {

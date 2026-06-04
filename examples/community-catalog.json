@@ -1,0 +1,54 @@
+{
+  "schema_version": "litewaf-rule-catalog-v1",
+  "packages": [
+    {
+      "id": "litewaf-community-demo",
+      "name": "LiteWaf Community Demo",
+      "version": "v1.0.0",
+      "compatibility": "litewaf-rule-package-v1",
+      "updated_at": "2026-06-01T00:00:00Z",
+      "package": {
+        "id": "litewaf-community-demo",
+        "name": "LiteWaf Community Demo",
+        "version": "v1.0.0",
+        "author": "LiteWaf Community",
+        "license": "MIT",
+        "compatibility": "litewaf-rule-package-v1",
+        "defaults": {
+          "enabled": false,
+          "review_status": "pending-review"
+        },
+        "rules": [
+          {
+            "id": "demo-xss-query",
+            "name": "Demo XSS query detector",
+            "type": "xss",
+            "target": "args",
+            "action": "block",
+            "expression": "(?i)<script|javascript:",
+            "score": 80,
+            "module": "attack-protection",
+            "category": "managed",
+            "attack_type": "xss",
+            "group": "XSS 防护",
+            "priority": 120
+          },
+          {
+            "id": "demo-rce-query",
+            "name": "Demo command injection detector",
+            "type": "rce",
+            "target": "args",
+            "action": "block",
+            "expression": "(?i)(wget|curl|bash\\s+-c)",
+            "score": 90,
+            "module": "attack-protection",
+            "category": "managed",
+            "attack_type": "rce",
+            "group": "RCE 防护",
+            "priority": 120
+          }
+        ]
+      }
+    }
+  ]
+}

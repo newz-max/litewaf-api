@@ -152,6 +152,9 @@ func (h handlers) deleteSite(w http.ResponseWriter, r *http.Request) {
 
 func (h handlers) listRules(w http.ResponseWriter, r *http.Request) {
 	items, err := h.app.Store.ListRules(r.Context())
+	for i := range items {
+		items[i] = rulepkg.EvaluateRuleExportEligibility(items[i])
+	}
 	h.writeList(w, items, err)
 }
 
@@ -199,7 +202,8 @@ func (h handlers) previewRulePackage(w http.ResponseWriter, r *http.Request) {
 	if len(data) == 0 {
 		data = defaults.DefaultRulePackageJSON()
 	}
-	preview, err := rulepkg.Preview(r.Context(), h.app.Store, data)
+	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
+	preview, err := rulepkg.PreviewWithTrustKeys(r.Context(), h.app.Store, data, trustKeys)
 	h.audit(r, "preview", "rule_package", 0, resultFromErr(err), err)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -219,7 +223,8 @@ func (h handlers) importRulePackage(w http.ResponseWriter, r *http.Request) {
 	if len(data) == 0 {
 		data = defaults.DefaultRulePackageJSON()
 	}
-	result, err := rulepkg.Import(r.Context(), h.app.Store, data)
+	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
+	result, err := rulepkg.ImportWithTrustKeys(r.Context(), h.app.Store, data, trustKeys)
 	h.audit(r, "import", "rule_package", 0, resultFromErr(err), err)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -465,13 +470,16 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
 	botRules, _ := h.app.Store.ListBotProtectionRules(r.Context())
 	dynamicRules, _ := h.app.Store.ListDynamicProtectionRules(r.Context())
+	catalogs, _ := h.app.Store.ListRuleCatalogSources(r.Context())
+	catalogPackages, _ := h.app.Store.ListRuleCatalogPackages(r.Context(), 0)
+	trustKeys, _ := h.app.Store.ListRuleTrustKeys(r.Context())
 	ccSummary := ccProtectionSummary(rateLimits)
 	accessControlSummary := accessControlSummary(accessLists)
 	attackSummary := attackProtectionSummary(rules)
 	uploadSummary := uploadProtectionSummary(uploadRules)
 	botSummary := botProtectionSummary(botRules)
 	dynamicSummary := dynamicProtectionSummary(dynamicRules)
-	ecosystemSummary := ruleEcosystemSummary(rules)
+	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
 			"sites":               len(sites),
@@ -491,11 +499,13 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func ruleEcosystemSummary(rules []model.Rule) envelope {
+func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource, catalogPackages []model.RuleCatalogPackage, trustKeys []model.RuleTrustKey) envelope {
 	packages := rulepkg.PackagesFromRules(rules)
 	signatures := map[string]int{}
 	disabledImported := 0
 	untestedBlocking := 0
+	pendingUpdates := 0
+	remoteOriginPackages := map[string]bool{}
 	warnings := []string{}
 	for _, rule := range rules {
 		if rule.PackageID == "" {
@@ -516,20 +526,49 @@ func ruleEcosystemSummary(rules []model.Rule) envelope {
 		if status != rulepkg.SignatureVerified {
 			warnings = append(warnings, fmt.Sprintf("规则 %s 来源包签名状态为 %s", rule.Name, status))
 		}
+		if rule.RemoteCatalogID != "" {
+			remoteOriginPackages[rule.PackageID] = true
+		}
+		if rule.PendingUpdateState == rulepkg.UpdatePending {
+			pendingUpdates++
+			warnings = append(warnings, fmt.Sprintf("规则 %s 来源包存在待审核更新", rule.Name))
+		}
+	}
+	for _, item := range catalogPackages {
+		status := item.SignatureStatus
+		if status == "" {
+			status = rulepkg.SignatureUnsigned
+		}
+		signatures[status] += 0
+		if status == rulepkg.SignatureRevokedKey || status == rulepkg.SignatureExpired || status == rulepkg.SignatureInvalid || status == rulepkg.SignatureUntrustedKey {
+			warnings = append(warnings, fmt.Sprintf("目录包 %s@%s 信任状态为 %s", item.PackageID, item.Version, status))
+		}
+	}
+	for _, key := range trustKeys {
+		if key.Revoked {
+			warnings = append(warnings, fmt.Sprintf("信任密钥 %s 已撤销", key.KeyID))
+		}
+		if !key.ExpiresAt.IsZero() && time.Now().UTC().After(key.ExpiresAt) {
+			warnings = append(warnings, fmt.Sprintf("信任密钥 %s 已过期", key.KeyID))
+		}
 	}
 	packageIDs := make([]string, 0, len(packages))
 	for _, item := range packages {
 		packageIDs = append(packageIDs, item.ID+"@"+item.Version)
 	}
 	return envelope{
-		"packages":            len(packages),
-		"package_ids":         packageIDs,
-		"signature_status":    signatures,
-		"disabled_imported":   disabledImported,
-		"untested_blocking":   untestedBlocking,
-		"warnings":            warnings,
-		"gateway_hot_path":    "published-rules-only",
-		"remote_sync_enabled": false,
+		"packages":               len(packages),
+		"package_ids":            packageIDs,
+		"signature_status":       signatures,
+		"disabled_imported":      disabledImported,
+		"untested_blocking":      untestedBlocking,
+		"catalog_sources":        len(catalogs),
+		"catalog_packages":       len(catalogPackages),
+		"remote_origin_packages": len(remoteOriginPackages),
+		"pending_updates":        pendingUpdates,
+		"warnings":               warnings,
+		"gateway_hot_path":       "published-rules-only",
+		"remote_sync_enabled":    len(catalogs) > 0,
 	}
 }
 
@@ -935,33 +974,59 @@ func (r siteRequest) toModel() model.Site {
 }
 
 type ruleRequest struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Target     string `json:"target"`
-	Action     string `json:"action"`
-	Expression string `json:"expression"`
-	Score      int    `json:"score"`
-	Enabled    *bool  `json:"enabled"`
-	Module     string `json:"module"`
-	Category   string `json:"category"`
-	AttackType string `json:"attack_type"`
-	Group      string `json:"group"`
-	Priority   int    `json:"priority"`
+	Name                    string   `json:"name"`
+	Type                    string   `json:"type"`
+	Target                  string   `json:"target"`
+	Action                  string   `json:"action"`
+	Expression              string   `json:"expression"`
+	Score                   int      `json:"score"`
+	Enabled                 *bool    `json:"enabled"`
+	Module                  string   `json:"module"`
+	Category                string   `json:"category"`
+	AttackType              string   `json:"attack_type"`
+	Group                   string   `json:"group"`
+	Priority                int      `json:"priority"`
+	PackageID               string   `json:"package_id"`
+	PackageVersion          string   `json:"package_version"`
+	PackageRuleID           string   `json:"package_rule_id"`
+	SourceChecksum          string   `json:"source_checksum"`
+	SignatureStatus         string   `json:"signature_status"`
+	ReviewStatus            string   `json:"review_status"`
+	LastTestStatus          string   `json:"last_test_status"`
+	RemoteCatalogID         string   `json:"remote_catalog_id"`
+	LastSyncedVersion       string   `json:"last_synced_version"`
+	PendingUpdateState      string   `json:"pending_update_state"`
+	LocalOverrideState      string   `json:"local_override_state"`
+	ExportEligible          bool     `json:"export_eligible"`
+	ExportIneligibleReasons []string `json:"export_ineligible_reasons"`
 }
 
 func (r ruleRequest) toModel() model.Rule {
 	return model.Rule{
-		Name:       r.Name,
-		Type:       r.Type,
-		Target:     r.Target,
-		Action:     r.Action,
-		Expression: r.Expression,
-		Score:      r.Score,
-		Module:     r.Module,
-		Category:   r.Category,
-		AttackType: r.AttackType,
-		Group:      r.Group,
-		Priority:   r.Priority,
+		Name:                    r.Name,
+		Type:                    r.Type,
+		Target:                  r.Target,
+		Action:                  r.Action,
+		Expression:              r.Expression,
+		Score:                   r.Score,
+		Module:                  r.Module,
+		Category:                r.Category,
+		AttackType:              r.AttackType,
+		Group:                   r.Group,
+		Priority:                r.Priority,
+		PackageID:               r.PackageID,
+		PackageVersion:          r.PackageVersion,
+		PackageRuleID:           r.PackageRuleID,
+		SourceChecksum:          r.SourceChecksum,
+		SignatureStatus:         r.SignatureStatus,
+		ReviewStatus:            r.ReviewStatus,
+		LastTestStatus:          r.LastTestStatus,
+		RemoteCatalogID:         r.RemoteCatalogID,
+		LastSyncedVersion:       r.LastSyncedVersion,
+		PendingUpdateState:      r.PendingUpdateState,
+		LocalOverrideState:      r.LocalOverrideState,
+		ExportEligible:          r.ExportEligible,
+		ExportIneligibleReasons: cloneStrings(r.ExportIneligibleReasons),
 	}
 }
 

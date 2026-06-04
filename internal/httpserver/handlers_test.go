@@ -1136,6 +1136,111 @@ func TestAttackProtectionValidationAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestRuleCommunityCatalogTrustExportAndAuthorization(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	packageBody := `{"id":"community-pack","name":"community-pack","version":"v1","author":"LiteWaf","license":"MIT","compatibility":"litewaf-rule-package-v1","defaults":{"enabled":false,"review_status":"pending-review"},"rules":[{"id":"xss-query","name":"Community XSS","type":"xss","target":"args","action":"block","expression":"(?i)<script","score":80}]}`
+	catalog := map[string]any{
+		"schema_version": "litewaf-rule-catalog-v1",
+		"packages": []map[string]any{
+			{"id": "community-pack", "name": "Community Pack", "version": "v1", "compatibility": "litewaf-rule-package-v1", "package": json.RawMessage(packageBody)},
+		},
+	}
+	data, err := json.Marshal(catalog)
+	if err != nil {
+		t.Fatalf("marshal catalog: %v", err)
+	}
+	catalogPath := t.TempDir() + "/catalog.json"
+	if err := os.WriteFile(catalogPath, data, 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	body := bytes.NewBufferString(`{"name":"Local catalog","source":` + strconv.Quote(catalogPath) + `,"enabled":true,"timeout_sec":5}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/catalogs", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create catalog status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var catalogResponse struct {
+		Item model.RuleCatalogSource `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&catalogResponse); err != nil {
+		t.Fatalf("decode catalog: %v", err)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/catalogs/"+strconv.FormatInt(catalogResponse.Item.ID, 10)+"/sync", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync catalog status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/catalogs/"+strconv.FormatInt(catalogResponse.Item.ID, 10)+"/packages/community-pack/preview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview remote status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/catalogs/"+strconv.FormatInt(catalogResponse.Item.ID, 10)+"/packages/community-pack/apply-update", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply update status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/trust-keys", bytes.NewBufferString(`{"key_id":"community-key","algorithm":"local","owner":"Community","public_key":"public","enabled":true}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create trust key status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("public_key")) {
+		t.Fatalf("trust key response leaked public key payload: %s", rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rules", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list rules status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var rulesResponse struct {
+		Items []model.Rule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&rulesResponse); err != nil {
+		t.Fatalf("decode rules: %v", err)
+	}
+	var importedID int64
+	for _, rule := range rulesResponse.Items {
+		if rule.PackageID == "community-pack" {
+			importedID = rule.ID
+		}
+	}
+	if importedID == 0 {
+		t.Fatalf("expected imported rule, got %+v", rulesResponse.Items)
+	}
+	exportBody := bytes.NewBufferString(`{"package_id":"exported-pack","name":"Exported Pack","version":"v1","author":"LiteWaf","license":"MIT","rule_ids":[` + strconv.FormatInt(importedID, 10) + `]}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/export/preview", exportBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("export preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/catalogs", bytes.NewBufferString(`{"name":"x","source":"https://example.com/catalog.json"}`)), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly create catalog status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAttackProtectionEventQueryAndSummary(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

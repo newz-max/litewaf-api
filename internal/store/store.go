@@ -81,6 +81,20 @@ type Store interface {
 	CreateDynamicProtectionRule(context.Context, model.DynamicProtectionRule) (model.DynamicProtectionRule, error)
 	UpdateDynamicProtectionRule(context.Context, int64, model.DynamicProtectionRule) (model.DynamicProtectionRule, error)
 	DeleteDynamicProtectionRule(context.Context, int64) error
+
+	ListRuleCatalogSources(context.Context) ([]model.RuleCatalogSource, error)
+	GetRuleCatalogSource(context.Context, int64) (model.RuleCatalogSource, error)
+	CreateRuleCatalogSource(context.Context, model.RuleCatalogSource) (model.RuleCatalogSource, error)
+	UpdateRuleCatalogSource(context.Context, int64, model.RuleCatalogSource) (model.RuleCatalogSource, error)
+	DeleteRuleCatalogSource(context.Context, int64) error
+	ListRuleCatalogPackages(context.Context, int64) ([]model.RuleCatalogPackage, error)
+	GetRuleCatalogPackage(context.Context, int64, string) (model.RuleCatalogPackage, error)
+	ReplaceRuleCatalogPackages(context.Context, int64, []model.RuleCatalogPackage) error
+
+	ListRuleTrustKeys(context.Context) ([]model.RuleTrustKey, error)
+	GetRuleTrustKey(context.Context, string) (model.RuleTrustKey, error)
+	CreateRuleTrustKey(context.Context, model.RuleTrustKey) (model.RuleTrustKey, error)
+	UpdateRuleTrustKey(context.Context, int64, model.RuleTrustKey) (model.RuleTrustKey, error)
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {

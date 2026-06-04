@@ -33,6 +33,12 @@ CREATE TABLE IF NOT EXISTS rules (
 	signature_status TEXT NOT NULL DEFAULT '',
 	review_status TEXT NOT NULL DEFAULT '',
 	last_test_status TEXT NOT NULL DEFAULT '',
+	remote_catalog_id TEXT NOT NULL DEFAULT '',
+	last_synced_version TEXT NOT NULL DEFAULT '',
+	pending_update_state TEXT NOT NULL DEFAULT '',
+	local_override_state TEXT NOT NULL DEFAULT '',
+	export_eligible BOOLEAN NOT NULL DEFAULT false,
+	export_ineligible_reasons TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -49,6 +55,12 @@ ALTER TABLE rules ADD COLUMN IF NOT EXISTS source_checksum TEXT NOT NULL DEFAULT
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS signature_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS review_status TEXT NOT NULL DEFAULT '';
 ALTER TABLE rules ADD COLUMN IF NOT EXISTS last_test_status TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS remote_catalog_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS last_synced_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS pending_update_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS local_override_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS export_eligible BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE rules ADD COLUMN IF NOT EXISTS export_ineligible_reasons TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS policies (
 	id BIGSERIAL PRIMARY KEY,
@@ -359,6 +371,57 @@ ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS admission_ttl_sec 
 ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS retry_interval_sec INTEGER NOT NULL DEFAULT 5;
 ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS overflow_action TEXT NOT NULL DEFAULT 'waiting-room';
 ALTER TABLE dynamic_protection_rules ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
+
+CREATE TABLE IF NOT EXISTS rule_catalog_sources (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	source TEXT NOT NULL,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	timeout_sec INTEGER NOT NULL DEFAULT 5,
+	status TEXT NOT NULL DEFAULT 'never-synced',
+	last_sync_at TIMESTAMPTZ,
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_catalog_packages (
+	id BIGSERIAL PRIMARY KEY,
+	catalog_id BIGINT NOT NULL REFERENCES rule_catalog_sources(id) ON DELETE CASCADE,
+	package_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	version TEXT NOT NULL,
+	compatibility TEXT NOT NULL DEFAULT '',
+	checksum TEXT NOT NULL DEFAULT '',
+	signature_key_id TEXT NOT NULL DEFAULT '',
+	signature_checksum TEXT NOT NULL DEFAULT '',
+	signature_value TEXT NOT NULL DEFAULT '',
+	signature_expires_at TEXT NOT NULL DEFAULT '',
+	signature_status TEXT NOT NULL DEFAULT '',
+	updated_at_text TEXT NOT NULL DEFAULT '',
+	manifest_url TEXT NOT NULL DEFAULT '',
+	package_json TEXT NOT NULL DEFAULT '',
+	source_identity TEXT NOT NULL DEFAULT '',
+	sync_status TEXT NOT NULL DEFAULT 'synced',
+	stale BOOLEAN NOT NULL DEFAULT false,
+	last_synced_at TIMESTAMPTZ,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	UNIQUE (catalog_id, package_id)
+);
+
+CREATE TABLE IF NOT EXISTS rule_trust_keys (
+	id BIGSERIAL PRIMARY KEY,
+	key_id TEXT NOT NULL UNIQUE,
+	algorithm TEXT NOT NULL,
+	owner TEXT NOT NULL DEFAULT '',
+	public_key TEXT NOT NULL DEFAULT '',
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	revoked BOOLEAN NOT NULL DEFAULT false,
+	expires_at TIMESTAMPTZ,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
 SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true, 'attack-protection', 'managed', 'sqli', 'SQL 注入防护', 100

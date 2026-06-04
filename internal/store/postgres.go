@@ -97,6 +97,7 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
 			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status,
+			remote_catalog_id, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons,
 			created_at, updated_at
 		FROM rules
 		ORDER BY id`)
@@ -108,14 +109,18 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 	var items []model.Rule
 	for rows.Next() {
 		var item model.Rule
+		var exportReasons string
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.Type, &item.Target, &item.Action, &item.Expression, &item.Score,
 			&item.Enabled, &item.Module, &item.Category, &item.AttackType, &item.Group, &item.Priority,
 			&item.PackageID, &item.PackageVersion, &item.PackageRuleID, &item.SourceChecksum,
-			&item.SignatureStatus, &item.ReviewStatus, &item.LastTestStatus, &item.CreatedAt, &item.UpdatedAt,
+			&item.SignatureStatus, &item.ReviewStatus, &item.LastTestStatus,
+			&item.RemoteCatalogID, &item.LastSyncedVersion, &item.PendingUpdateState, &item.LocalOverrideState, &item.ExportEligible, &exportReasons,
+			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
+		item.ExportIneligibleReasons = splitCSV(exportReasons)
 		item = attackmeta.NormalizeRule(item)
 		items = append(items, item)
 	}
@@ -124,9 +129,11 @@ func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 
 func (s *PostgresStore) GetRule(ctx context.Context, id int64) (model.Rule, error) {
 	var item model.Rule
+	var exportReasons string
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
 			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status,
+			remote_catalog_id, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons,
 			created_at, updated_at
 		FROM rules
 		WHERE id = $1`, id).
@@ -134,11 +141,14 @@ func (s *PostgresStore) GetRule(ctx context.Context, id int64) (model.Rule, erro
 			&item.ID, &item.Name, &item.Type, &item.Target, &item.Action, &item.Expression, &item.Score,
 			&item.Enabled, &item.Module, &item.Category, &item.AttackType, &item.Group, &item.Priority,
 			&item.PackageID, &item.PackageVersion, &item.PackageRuleID, &item.SourceChecksum,
-			&item.SignatureStatus, &item.ReviewStatus, &item.LastTestStatus, &item.CreatedAt, &item.UpdatedAt,
+			&item.SignatureStatus, &item.ReviewStatus, &item.LastTestStatus,
+			&item.RemoteCatalogID, &item.LastSyncedVersion, &item.PendingUpdateState, &item.LocalOverrideState, &item.ExportEligible, &exportReasons,
+			&item.CreatedAt, &item.UpdatedAt,
 		)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Rule{}, ErrNotFound
 	}
+	item.ExportIneligibleReasons = splitCSV(exportReasons)
 	return attackmeta.NormalizeRule(item), err
 }
 
@@ -147,14 +157,16 @@ func (s *PostgresStore) CreateRule(ctx context.Context, rule model.Rule) (model.
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO rules (
 			name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
-			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status
+			package_id, package_version, package_rule_id, source_checksum, signature_status, review_status, last_test_status,
+			remote_catalog_id, last_synced_version, pending_update_state, local_override_state, export_eligible, export_ineligible_reasons
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 		RETURNING id, created_at, updated_at`,
 		rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled,
 		rule.Module, rule.Category, rule.AttackType, rule.Group, rule.Priority,
 		rule.PackageID, rule.PackageVersion, rule.PackageRuleID, rule.SourceChecksum,
-		rule.SignatureStatus, rule.ReviewStatus, rule.LastTestStatus).
+		rule.SignatureStatus, rule.ReviewStatus, rule.LastTestStatus,
+		rule.RemoteCatalogID, rule.LastSyncedVersion, rule.PendingUpdateState, rule.LocalOverrideState, rule.ExportEligible, joinCSV(rule.ExportIneligibleReasons)).
 		Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt)
 	return rule, err
 }
@@ -166,13 +178,16 @@ func (s *PostgresStore) UpdateRule(ctx context.Context, id int64, rule model.Rul
 		SET name = $2, type = $3, target = $4, action = $5, expression = $6, score = $7, enabled = $8,
 			module = $9, category = $10, attack_type = $11, group_name = $12, priority = $13,
 			package_id = $14, package_version = $15, package_rule_id = $16, source_checksum = $17,
-			signature_status = $18, review_status = $19, last_test_status = $20, updated_at = now()
+			signature_status = $18, review_status = $19, last_test_status = $20,
+			remote_catalog_id = $21, last_synced_version = $22, pending_update_state = $23,
+			local_override_state = $24, export_eligible = $25, export_ineligible_reasons = $26, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
 		id, rule.Name, rule.Type, rule.Target, rule.Action, rule.Expression, rule.Score, rule.Enabled,
 		rule.Module, rule.Category, rule.AttackType, rule.Group, rule.Priority,
 		rule.PackageID, rule.PackageVersion, rule.PackageRuleID, rule.SourceChecksum,
-		rule.SignatureStatus, rule.ReviewStatus, rule.LastTestStatus).
+		rule.SignatureStatus, rule.ReviewStatus, rule.LastTestStatus,
+		rule.RemoteCatalogID, rule.LastSyncedVersion, rule.PendingUpdateState, rule.LocalOverrideState, rule.ExportEligible, joinCSV(rule.ExportIneligibleReasons)).
 		Scan(&rule.ID, &rule.CreatedAt, &rule.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Rule{}, ErrNotFound
@@ -877,6 +892,239 @@ func (s *PostgresStore) UpdateDynamicProtectionRule(ctx context.Context, id int6
 func (s *PostgresStore) DeleteDynamicProtectionRule(ctx context.Context, id int64) error {
 	result, err := s.db.ExecContext(ctx, `DELETE FROM dynamic_protection_rules WHERE id = $1`, id)
 	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) ListRuleCatalogSources(ctx context.Context) ([]model.RuleCatalogSource, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT s.id, s.name, s.source, s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
+		FROM rule_catalog_sources s
+		LEFT JOIN rule_catalog_packages p ON p.catalog_id = s.id
+		GROUP BY s.id
+		ORDER BY s.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleCatalogSource
+	for rows.Next() {
+		var item model.RuleCatalogSource
+		var lastSync sql.NullTime
+		if err := rows.Scan(&item.ID, &item.Name, &item.Source, &item.Enabled, &item.TimeoutSec, &item.Status, &lastSync, &item.LastError, &item.PackageCount, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if lastSync.Valid {
+			item.LastSyncAt = lastSync.Time
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleCatalogSource(ctx context.Context, id int64) (model.RuleCatalogSource, error) {
+	var item model.RuleCatalogSource
+	var lastSync sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT s.id, s.name, s.source, s.enabled, s.timeout_sec, s.status, s.last_sync_at, s.last_error, count(p.id), s.created_at, s.updated_at
+		FROM rule_catalog_sources s
+		LEFT JOIN rule_catalog_packages p ON p.catalog_id = s.id
+		WHERE s.id = $1
+		GROUP BY s.id`, id).
+		Scan(&item.ID, &item.Name, &item.Source, &item.Enabled, &item.TimeoutSec, &item.Status, &lastSync, &item.LastError, &item.PackageCount, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleCatalogSource{}, ErrNotFound
+	}
+	if lastSync.Valid {
+		item.LastSyncAt = lastSync.Time
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleCatalogSource(ctx context.Context, item model.RuleCatalogSource) (model.RuleCatalogSource, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_catalog_sources (name, source, enabled, timeout_sec, status, last_error)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Source, item.Enabled, item.TimeoutSec, item.Status, item.LastError).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRuleCatalogSource(ctx context.Context, id int64, item model.RuleCatalogSource) (model.RuleCatalogSource, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE rule_catalog_sources
+		SET name = $2, source = $3, enabled = $4, timeout_sec = $5, status = $6, last_sync_at = $7, last_error = $8, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Source, item.Enabled, item.TimeoutSec, item.Status, nullableTime(item.LastSyncAt), item.LastError).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleCatalogSource{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteRuleCatalogSource(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM rule_catalog_sources WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) ListRuleCatalogPackages(ctx context.Context, catalogID int64) ([]model.RuleCatalogPackage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, catalog_id, package_id, name, version, compatibility, checksum,
+			signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
+			updated_at_text, manifest_url, package_json, source_identity, sync_status, stale, last_synced_at, created_at, updated_at
+		FROM rule_catalog_packages
+		WHERE ($1 = 0 OR catalog_id = $1)
+		ORDER BY catalog_id, package_id`, catalogID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleCatalogPackage
+	for rows.Next() {
+		item, err := scanRuleCatalogPackage(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleCatalogPackage(ctx context.Context, catalogID int64, packageID string) (model.RuleCatalogPackage, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, catalog_id, package_id, name, version, compatibility, checksum,
+			signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
+			updated_at_text, manifest_url, package_json, source_identity, sync_status, stale, last_synced_at, created_at, updated_at
+		FROM rule_catalog_packages
+		WHERE catalog_id = $1 AND package_id = $2`, catalogID, packageID)
+	item, err := scanRuleCatalogPackage(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleCatalogPackage{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) ReplaceRuleCatalogPackages(ctx context.Context, catalogID int64, items []model.RuleCatalogPackage) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM rule_catalog_sources WHERE id = $1)`, catalogID).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM rule_catalog_packages WHERE catalog_id = $1`, catalogID); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO rule_catalog_packages (
+				catalog_id, package_id, name, version, compatibility, checksum,
+				signature_key_id, signature_checksum, signature_value, signature_expires_at, signature_status,
+				updated_at_text, manifest_url, package_json, source_identity, sync_status, stale, last_synced_at
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
+			catalogID, item.PackageID, item.Name, item.Version, item.Compatibility, item.Checksum,
+			item.Signature.KeyID, item.Signature.Checksum, item.Signature.Signature, item.Signature.ExpiresAt, item.SignatureStatus,
+			item.UpdatedAtText, item.ManifestURL, item.PackageJSON, item.SourceIdentity, item.SyncStatus, item.Stale, nullableTime(item.LastSyncedAt)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE rule_catalog_sources SET status = 'synced', last_sync_at = now(), last_error = '', updated_at = now() WHERE id = $1`, catalogID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *PostgresStore) ListRuleTrustKeys(ctx context.Context) ([]model.RuleTrustKey, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, key_id, algorithm, owner, enabled, revoked, expires_at, created_at, updated_at
+		FROM rule_trust_keys
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleTrustKey
+	for rows.Next() {
+		var item model.RuleTrustKey
+		var expires sql.NullTime
+		if err := rows.Scan(&item.ID, &item.KeyID, &item.Algorithm, &item.Owner, &item.Enabled, &item.Revoked, &expires, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if expires.Valid {
+			item.ExpiresAt = expires.Time
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleTrustKey(ctx context.Context, keyID string) (model.RuleTrustKey, error) {
+	var item model.RuleTrustKey
+	var expires sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, key_id, algorithm, owner, public_key, enabled, revoked, expires_at, created_at, updated_at
+		FROM rule_trust_keys
+		WHERE key_id = $1`, keyID).
+		Scan(&item.ID, &item.KeyID, &item.Algorithm, &item.Owner, &item.PublicKey, &item.Enabled, &item.Revoked, &expires, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleTrustKey{}, ErrNotFound
+	}
+	if expires.Valid {
+		item.ExpiresAt = expires.Time
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleTrustKey(ctx context.Context, item model.RuleTrustKey) (model.RuleTrustKey, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_trust_keys (key_id, algorithm, owner, public_key, enabled, revoked, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, created_at, updated_at`,
+		item.KeyID, item.Algorithm, item.Owner, item.PublicKey, item.Enabled, item.Revoked, nullableTime(item.ExpiresAt)).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	item.PublicKey = ""
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRuleTrustKey(ctx context.Context, id int64, item model.RuleTrustKey) (model.RuleTrustKey, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE rule_trust_keys
+		SET key_id = $2, algorithm = $3, owner = $4, public_key = CASE WHEN $5 = '' THEN public_key ELSE $5 END,
+			enabled = $6, revoked = $7, expires_at = $8, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.KeyID, item.Algorithm, item.Owner, item.PublicKey, item.Enabled, item.Revoked, nullableTime(item.ExpiresAt)).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleTrustKey{}, ErrNotFound
+	}
+	item.PublicKey = ""
+	return item, err
+}
+
+type catalogPackageScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleCatalogPackage(row catalogPackageScanner) (model.RuleCatalogPackage, error) {
+	var item model.RuleCatalogPackage
+	var lastSynced sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.CatalogID, &item.PackageID, &item.Name, &item.Version, &item.Compatibility, &item.Checksum,
+		&item.Signature.KeyID, &item.Signature.Checksum, &item.Signature.Signature, &item.Signature.ExpiresAt, &item.SignatureStatus,
+		&item.UpdatedAtText, &item.ManifestURL, &item.PackageJSON, &item.SourceIdentity, &item.SyncStatus, &item.Stale, &lastSynced, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if lastSynced.Valid {
+		item.LastSyncedAt = lastSynced.Time
+	}
+	return item, err
 }
 
 func (s *PostgresStore) policyBindings(ctx context.Context, policyID int64) ([]int64, []int64, error) {

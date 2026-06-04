@@ -565,7 +565,7 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 
 ## 高级规则生态
 
-高级规则生态接口用于本地规则包预览、导入、来源追踪和规则测试。第一版只支持操作员主动提交本地 JSON 规则包，不实现远程市场、付费规则源或自动更新。
+高级规则生态接口用于本地规则包预览、导入、来源追踪和规则测试。规则社区增强进一步提供远程目录、显式更新审核、信任密钥和贡献导出；付费规则源、云账号绑定、远程仓库推送和自动激活仍不在当前范围。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -606,7 +606,7 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 }
 ```
 
-`package` 为空对象时，API 使用内置默认规则包进行预览或导入。签名状态包括 `verified`、`unsigned`、`invalid`、`untrusted-key`；第一版将签名作为来源状态和发布预览警告，不强制拒绝未签名本地包。
+`package` 为空对象时，API 使用内置默认规则包进行预览或导入。签名状态包括 `verified`、`unsigned`、`invalid`、`untrusted-key`、`revoked-key`、`expired`；签名作为来源状态和发布预览警告，不强制拒绝未签名本地包。
 
 规则测试请求：
 
@@ -631,6 +631,53 @@ CC 防护接口复用现有限流存储，对外以 `module=cc-protection`、`ca
 ```
 
 规则测试不会保存完整请求体、Authorization、Cookie 或上传文件内容；样例字段有大小和敏感头限制。成功测试会更新规则的 `last_test_status`，发布预览会提示未测试的启用阻断型导入规则。
+
+## 规则社区增强
+
+规则社区增强接口用于社区目录、远程规则包预览、显式更新审核、信任密钥管理和贡献导出。目录同步、远程预览和更新检查都不会自动创建、启用、禁用或发布规则；网关运行时不依赖目录、信任库或导出产物。
+
+### 社区目录
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/rule-community/catalogs` | 读 | 查询目录来源 |
+| POST | `/api/v1/rule-community/catalogs` | 写 | 创建目录来源 |
+| GET | `/api/v1/rule-community/catalogs/{id}` | 读 | 查询目录来源 |
+| PUT | `/api/v1/rule-community/catalogs/{id}` | 写 | 更新目录来源 |
+| DELETE | `/api/v1/rule-community/catalogs/{id}` | 写 | 删除目录来源 |
+| POST | `/api/v1/rule-community/catalogs/{id}/sync` | 写 | 同步目录包元数据 |
+| GET | `/api/v1/rule-community/catalogs/{id}/packages` | 读 | 查询目录包列表 |
+
+目录来源字段：`name`、`source`、`enabled`、`timeout_sec`。`source` 支持 HTTPS 或本地文件路径，不支持明文 HTTP。同步返回目录包元数据和签名状态；同步失败会记录 `last_error`，并保留上次成功同步的包元数据。
+
+### 远程预览和更新
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/rule-community/catalogs/{id}/packages/{package_id}/preview` | 写 | 预览远程规则包 |
+| POST | `/api/v1/rule-community/catalogs/{id}/packages/{package_id}/update-preview` | 写 | 预览待更新规则差异 |
+| POST | `/api/v1/rule-community/catalogs/{id}/packages/{package_id}/apply-update` | 写 | 显式应用规则包更新 |
+
+远程预览返回 `package`、`added`、`changed`、`skipped`、`invalid`、`warnings`、`compatibility_status` 和 `source_catalog_id`。更新预览额外返回 `removed`、`unchanged`、当前/候选版本、当前/候选 checksum 和 `signature_status`。应用更新按 `package_id + package_rule_id` 更新，不会因目录同步自动激活。
+
+### 信任密钥
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/rule-community/trust-keys` | 读 | 查询信任密钥公开元数据 |
+| POST | `/api/v1/rule-community/trust-keys` | 写 | 创建信任密钥 |
+| PUT | `/api/v1/rule-community/trust-keys/{id}` | 写 | 更新、禁用或撤销信任密钥 |
+
+请求字段：`key_id`、`algorithm`、`owner`、`public_key`、`enabled`、`revoked`、`expires_at`。响应不会返回 `public_key` 或私钥材料。信任决策会应用到本地包预览/导入、远程包预览、更新预览、更新应用和发布预览。
+
+### 贡献导出
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/api/v1/rule-community/export/preview` | 写 | 预览导出包、校验规则和元数据 |
+| POST | `/api/v1/rule-community/export` | 写 | 生成贡献规则包产物 |
+
+导出请求字段：`package_id`、`name`、`version`、`author`、`license`、`compatibility`、`rule_ids`、`signing_key_id`。导出产物包含规则包 JSON、checksum、规则数和贡献提示，不包含私钥、API Token、Authorization/Cookie、原始流量样本、数据库连接串或部署密钥。
 
 ## 日志和观测
 

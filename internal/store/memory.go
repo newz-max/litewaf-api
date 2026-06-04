@@ -14,63 +14,75 @@ import (
 )
 
 type MemoryStore struct {
-	mu              sync.RWMutex
-	nextSiteID      int64
-	nextRuleID      int64
-	nextPolicyID    int64
-	nextPublishID   int64
-	nextUserID      int64
-	nextAuditID     int64
-	nextAccessID    int64
-	nextRateID      int64
-	nextUploadID    int64
-	nextBotID       int64
-	nextDynamicID   int64
-	nextAccessLogID int64
-	nextWAFEventID  int64
-	sites           map[int64]model.Site
-	rules           map[int64]model.Rule
-	policies        map[int64]model.Policy
-	publishes       map[int64]model.PublishRecord
-	users           map[int64]model.User
-	audits          map[int64]model.AuditLog
-	accessLists     map[int64]model.AccessListEntry
-	rateLimits      map[int64]model.RateLimitRule
-	uploadRules     map[int64]model.UploadProtectionRule
-	botRules        map[int64]model.BotProtectionRule
-	dynamicRules    map[int64]model.DynamicProtectionRule
-	accessLogs      map[int64]model.AccessLog
-	wafEvents       map[int64]model.WAFEvent
+	mu                   sync.RWMutex
+	nextSiteID           int64
+	nextRuleID           int64
+	nextPolicyID         int64
+	nextPublishID        int64
+	nextUserID           int64
+	nextAuditID          int64
+	nextAccessID         int64
+	nextRateID           int64
+	nextUploadID         int64
+	nextBotID            int64
+	nextDynamicID        int64
+	nextCatalogID        int64
+	nextCatalogPackageID int64
+	nextTrustKeyID       int64
+	nextAccessLogID      int64
+	nextWAFEventID       int64
+	sites                map[int64]model.Site
+	rules                map[int64]model.Rule
+	policies             map[int64]model.Policy
+	publishes            map[int64]model.PublishRecord
+	users                map[int64]model.User
+	audits               map[int64]model.AuditLog
+	accessLists          map[int64]model.AccessListEntry
+	rateLimits           map[int64]model.RateLimitRule
+	uploadRules          map[int64]model.UploadProtectionRule
+	botRules             map[int64]model.BotProtectionRule
+	dynamicRules         map[int64]model.DynamicProtectionRule
+	catalogSources       map[int64]model.RuleCatalogSource
+	catalogPackages      map[int64]model.RuleCatalogPackage
+	trustKeys            map[int64]model.RuleTrustKey
+	accessLogs           map[int64]model.AccessLog
+	wafEvents            map[int64]model.WAFEvent
 }
 
 func NewMemoryStore() *MemoryStore {
 	store := &MemoryStore{
-		nextSiteID:      1,
-		nextRuleID:      1,
-		nextPolicyID:    1,
-		nextPublishID:   1,
-		nextUserID:      1,
-		nextAuditID:     1,
-		nextAccessID:    1,
-		nextRateID:      1,
-		nextUploadID:    1,
-		nextBotID:       1,
-		nextDynamicID:   1,
-		nextAccessLogID: 1,
-		nextWAFEventID:  1,
-		sites:           map[int64]model.Site{},
-		rules:           map[int64]model.Rule{},
-		policies:        map[int64]model.Policy{},
-		publishes:       map[int64]model.PublishRecord{},
-		users:           map[int64]model.User{},
-		audits:          map[int64]model.AuditLog{},
-		accessLists:     map[int64]model.AccessListEntry{},
-		rateLimits:      map[int64]model.RateLimitRule{},
-		uploadRules:     map[int64]model.UploadProtectionRule{},
-		botRules:        map[int64]model.BotProtectionRule{},
-		dynamicRules:    map[int64]model.DynamicProtectionRule{},
-		accessLogs:      map[int64]model.AccessLog{},
-		wafEvents:       map[int64]model.WAFEvent{},
+		nextSiteID:           1,
+		nextRuleID:           1,
+		nextPolicyID:         1,
+		nextPublishID:        1,
+		nextUserID:           1,
+		nextAuditID:          1,
+		nextAccessID:         1,
+		nextRateID:           1,
+		nextUploadID:         1,
+		nextBotID:            1,
+		nextDynamicID:        1,
+		nextCatalogID:        1,
+		nextCatalogPackageID: 1,
+		nextTrustKeyID:       1,
+		nextAccessLogID:      1,
+		nextWAFEventID:       1,
+		sites:                map[int64]model.Site{},
+		rules:                map[int64]model.Rule{},
+		policies:             map[int64]model.Policy{},
+		publishes:            map[int64]model.PublishRecord{},
+		users:                map[int64]model.User{},
+		audits:               map[int64]model.AuditLog{},
+		accessLists:          map[int64]model.AccessListEntry{},
+		rateLimits:           map[int64]model.RateLimitRule{},
+		uploadRules:          map[int64]model.UploadProtectionRule{},
+		botRules:             map[int64]model.BotProtectionRule{},
+		dynamicRules:         map[int64]model.DynamicProtectionRule{},
+		catalogSources:       map[int64]model.RuleCatalogSource{},
+		catalogPackages:      map[int64]model.RuleCatalogPackage{},
+		trustKeys:            map[int64]model.RuleTrustKey{},
+		accessLogs:           map[int64]model.AccessLog{},
+		wafEvents:            map[int64]model.WAFEvent{},
 	}
 	store.seedRules()
 	return store
@@ -810,6 +822,199 @@ func (s *MemoryStore) DeleteDynamicProtectionRule(_ context.Context, id int64) e
 	}
 	delete(s.dynamicRules, id)
 	return nil
+}
+
+func (s *MemoryStore) ListRuleCatalogSources(context.Context) ([]model.RuleCatalogSource, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleCatalogSource, 0, len(s.catalogSources))
+	for _, item := range s.catalogSources {
+		item.PackageCount = s.catalogPackageCountLocked(item.ID)
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleCatalogSource(_ context.Context, id int64) (model.RuleCatalogSource, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.catalogSources[id]
+	if !ok {
+		return model.RuleCatalogSource{}, ErrNotFound
+	}
+	item.PackageCount = s.catalogPackageCountLocked(id)
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleCatalogSource(_ context.Context, item model.RuleCatalogSource) (model.RuleCatalogSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextCatalogID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	if item.Status == "" {
+		item.Status = "never-synced"
+	}
+	s.catalogSources[item.ID] = item
+	s.nextCatalogID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRuleCatalogSource(_ context.Context, id int64, item model.RuleCatalogSource) (model.RuleCatalogSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.catalogSources[id]
+	if !ok {
+		return model.RuleCatalogSource{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	s.catalogSources[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteRuleCatalogSource(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.catalogSources[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.catalogSources, id)
+	for packageID, item := range s.catalogPackages {
+		if item.CatalogID == id {
+			delete(s.catalogPackages, packageID)
+		}
+	}
+	return nil
+}
+
+func (s *MemoryStore) ListRuleCatalogPackages(_ context.Context, catalogID int64) ([]model.RuleCatalogPackage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleCatalogPackage, 0, len(s.catalogPackages))
+	for _, item := range s.catalogPackages {
+		if catalogID > 0 && item.CatalogID != catalogID {
+			continue
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CatalogID == items[j].CatalogID {
+			return items[i].PackageID < items[j].PackageID
+		}
+		return items[i].CatalogID < items[j].CatalogID
+	})
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleCatalogPackage(_ context.Context, catalogID int64, packageID string) (model.RuleCatalogPackage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.catalogPackages {
+		if item.CatalogID == catalogID && item.PackageID == packageID {
+			return item, nil
+		}
+	}
+	return model.RuleCatalogPackage{}, ErrNotFound
+}
+
+func (s *MemoryStore) ReplaceRuleCatalogPackages(_ context.Context, catalogID int64, items []model.RuleCatalogPackage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.catalogSources[catalogID]; !ok {
+		return ErrNotFound
+	}
+	for id, item := range s.catalogPackages {
+		if item.CatalogID == catalogID {
+			delete(s.catalogPackages, id)
+		}
+	}
+	now := time.Now().UTC()
+	for _, item := range items {
+		item.ID = s.nextCatalogPackageID
+		item.CatalogID = catalogID
+		item.CreatedAt = now
+		item.UpdatedAt = now
+		if item.LastSyncedAt.IsZero() {
+			item.LastSyncedAt = now
+		}
+		s.catalogPackages[item.ID] = item
+		s.nextCatalogPackageID++
+	}
+	source := s.catalogSources[catalogID]
+	source.Status = "synced"
+	source.LastError = ""
+	source.LastSyncAt = now
+	source.UpdatedAt = now
+	s.catalogSources[catalogID] = source
+	return nil
+}
+
+func (s *MemoryStore) ListRuleTrustKeys(context.Context) ([]model.RuleTrustKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleTrustKey, 0, len(s.trustKeys))
+	for _, item := range s.trustKeys {
+		item.PublicKey = ""
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleTrustKey(_ context.Context, keyID string) (model.RuleTrustKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, item := range s.trustKeys {
+		if item.KeyID == keyID {
+			return item, nil
+		}
+	}
+	return model.RuleTrustKey{}, ErrNotFound
+}
+
+func (s *MemoryStore) CreateRuleTrustKey(_ context.Context, item model.RuleTrustKey) (model.RuleTrustKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextTrustKeyID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	s.trustKeys[item.ID] = item
+	s.nextTrustKeyID++
+	item.PublicKey = ""
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRuleTrustKey(_ context.Context, id int64, item model.RuleTrustKey) (model.RuleTrustKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.trustKeys[id]
+	if !ok {
+		return model.RuleTrustKey{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	if item.PublicKey == "" {
+		item.PublicKey = existing.PublicKey
+	}
+	s.trustKeys[id] = item
+	item.PublicKey = ""
+	return item, nil
+}
+
+func (s *MemoryStore) catalogPackageCountLocked(catalogID int64) int {
+	count := 0
+	for _, item := range s.catalogPackages {
+		if item.CatalogID == catalogID {
+			count++
+		}
+	}
+	return count
 }
 
 func auditMatches(item model.AuditLog, filter model.AuditLogFilter) bool {

@@ -1359,6 +1359,147 @@ func TestRuleCommunityCatalogTrustExportAndAuthorization(t *testing.T) {
 	}
 }
 
+func TestRuleCommunityPhaseTwoAccountsQueueFeedbackAndRedaction(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	accountBody := `{"name":"Paid feed","provider_type":"https-catalog","endpoint":"https://rules.example.com/catalog.json","enabled":true,"timeout_sec":5,"credential":{"alias":"prod"},"credential_secret":"super-secret-token"}`
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/account-sources", bytes.NewBufferString(accountBody)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create account source status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("super-secret-token")) || bytes.Contains(rec.Body.Bytes(), []byte("credential_secret")) {
+		t.Fatalf("account source response leaked secret: %s", rec.Body.String())
+	}
+	var accountResponse struct {
+		Item model.RuleCommunityAccountSource `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&accountResponse); err != nil {
+		t.Fatalf("decode account source: %v", err)
+	}
+	if accountResponse.Item.Credential.LastFour != "oken" || accountResponse.Item.Credential.Status != "configured" {
+		t.Fatalf("expected redacted credential metadata, got %+v", accountResponse.Item.Credential)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/account-sources/"+strconv.FormatInt(accountResponse.Item.ID, 10)+"/refresh", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("refresh account source status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rule-community/review-queue", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list queue status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var queueResponse struct {
+		Items []model.RuleReviewQueueItem `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&queueResponse); err != nil {
+		t.Fatalf("decode queue: %v", err)
+	}
+	if len(queueResponse.Items) != 1 || queueResponse.Items[0].State != "queued" {
+		t.Fatalf("expected queued recommendation, got %+v", queueResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPut, "/api/v1/rule-community/review-queue/"+strconv.FormatInt(queueResponse.Items[0].ID, 10), bytes.NewBufferString(`{"state":"dismissed","reason":"not needed"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dismiss queue status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	ruleBody := `{"name":"Feedback XSS","type":"xss","target":"args","action":"block","expression":"(?i)<script","score":80,"enabled":true,"module":"attack-protection","category":"managed","attack_type":"xss","group":"XSS 防护","priority":100}`
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rules", bytes.NewBufferString(ruleBody)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create feedback rule status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var ruleResponse struct {
+		Item model.Rule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&ruleResponse); err != nil {
+		t.Fatalf("decode feedback rule: %v", err)
+	}
+	rule := ruleResponse.Item
+	feedbackBody := `{"rule_id":` + strconv.FormatInt(rule.ID, 10) + `,"reason":"false positive on encoded sample","severity":"medium","redacted_sample":{"path":"/search","body":"[redacted]"}}`
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/feedback", bytes.NewBufferString(feedbackBody)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create feedback status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/rule-community/feedback-suggestions", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list suggestions status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var suggestionsResponse struct {
+		Items []model.RuleFeedbackSuggestion `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&suggestionsResponse); err != nil {
+		t.Fatalf("decode suggestions: %v", err)
+	}
+	if len(suggestionsResponse.Items) != 1 || suggestionsResponse.Items[0].State != "queued" {
+		t.Fatalf("expected queued suggestion, got %+v", suggestionsResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/feedback-suggestions/"+strconv.FormatInt(suggestionsResponse.Items[0].ID, 10)+"/test", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("test suggestion status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	targetBody := `{"name":"Community Git","provider":"https","endpoint":"https://community.example.com/push","channel":"main","enabled":true,"credential":{"alias":"push"},"credential_secret":"push-secret"}`
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/contribution-targets", bytes.NewBufferString(targetBody)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create target status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if bytes.Contains(rec.Body.Bytes(), []byte("push-secret")) {
+		t.Fatalf("target response leaked secret: %s", rec.Body.String())
+	}
+	var targetResponse struct {
+		Item model.RuleContributionTarget `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&targetResponse); err != nil {
+		t.Fatalf("decode target: %v", err)
+	}
+	pushBody := `{"target_id":` + strconv.FormatInt(targetResponse.Item.ID, 10) + `,"artifact":{"package":{"id":"exported-pack","name":"Exported","version":"v1","compatibility":"litewaf-rule-package-v1","signature_status":"unsigned"},"artifact":"{\"id\":\"exported-pack\"}","checksum":"abc","rule_count":1}}`
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/contribution-pushes/preview", bytes.NewBufferString(pushBody)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview push status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/contribution-pushes", bytes.NewBufferString(pushBody)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("execute push status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rule-community/account-sources", bytes.NewBufferString(accountBody)), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly create account source status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAttackProtectionEventQueryAndSummary(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

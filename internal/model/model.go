@@ -615,6 +615,120 @@ type RulePackageExportArtifact struct {
 	CreatedAt time.Time           `json:"created_at"`
 }
 
+type RuleAccountCredential struct {
+	Alias           string    `json:"alias"`
+	Fingerprint     string    `json:"fingerprint"`
+	LastFour        string    `json:"last_four"`
+	ExpiresAt       time.Time `json:"expires_at,omitempty"`
+	LastValidatedAt time.Time `json:"last_validated_at,omitempty"`
+	Status          string    `json:"status"`
+}
+
+type RuleCommunityAccountSource struct {
+	ID                  int64                 `json:"id"`
+	Name                string                `json:"name"`
+	ProviderType        string                `json:"provider_type"`
+	Endpoint            string                `json:"endpoint"`
+	Enabled             bool                  `json:"enabled"`
+	TimeoutSec          int                   `json:"timeout_sec"`
+	Credential          RuleAccountCredential `json:"credential"`
+	SubscriptionStatus  string                `json:"subscription_status"`
+	EntitlementSummary  string                `json:"entitlement_summary"`
+	PackageCount        int                   `json:"package_count"`
+	Status              string                `json:"status"`
+	LastSyncAt          time.Time             `json:"last_sync_at,omitempty"`
+	LastError           string                `json:"last_error,omitempty"`
+	RecommendationCount int                   `json:"recommendation_count"`
+	CreatedAt           time.Time             `json:"created_at"`
+	UpdatedAt           time.Time             `json:"updated_at"`
+}
+
+type RuleCommunityAccountSecret struct {
+	Secret string `json:"secret,omitempty"`
+}
+
+type RuleContributionTarget struct {
+	ID         int64                 `json:"id"`
+	Name       string                `json:"name"`
+	Provider   string                `json:"provider"`
+	Endpoint   string                `json:"endpoint"`
+	Channel    string                `json:"channel"`
+	Enabled    bool                  `json:"enabled"`
+	Credential RuleAccountCredential `json:"credential"`
+	Status     string                `json:"status"`
+	LastPushAt time.Time             `json:"last_push_at,omitempty"`
+	LastError  string                `json:"last_error,omitempty"`
+	CreatedAt  time.Time             `json:"created_at"`
+	UpdatedAt  time.Time             `json:"updated_at"`
+}
+
+type RuleContributionPushRequest struct {
+	TargetID int64                     `json:"target_id"`
+	Artifact RulePackageExportArtifact `json:"artifact"`
+}
+
+type RuleContributionPushAttempt struct {
+	ID              int64     `json:"id"`
+	TargetID        int64     `json:"target_id"`
+	TargetName      string    `json:"target_name"`
+	PackageID       string    `json:"package_id"`
+	PackageVersion  string    `json:"package_version"`
+	Checksum        string    `json:"checksum"`
+	Status          string    `json:"status"`
+	RemoteReference string    `json:"remote_reference,omitempty"`
+	Error           string    `json:"error,omitempty"`
+	Actor           string    `json:"actor"`
+	PreviewOnly     bool      `json:"preview_only"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+type RuleReviewQueueItem struct {
+	ID                  int64     `json:"id"`
+	ItemType            string    `json:"item_type"`
+	PackageID           string    `json:"package_id"`
+	PackageVersion      string    `json:"package_version"`
+	CurrentVersion      string    `json:"current_version,omitempty"`
+	SourceIdentity      string    `json:"source_identity"`
+	Recommendation      string    `json:"recommendation"`
+	RiskSummary         string    `json:"risk_summary"`
+	SignatureStatus     string    `json:"signature_status"`
+	CompatibilityStatus string    `json:"compatibility_status"`
+	State               string    `json:"state"`
+	DecisionReason      string    `json:"decision_reason,omitempty"`
+	Actor               string    `json:"actor,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type RuleFeedback struct {
+	ID             int64             `json:"id"`
+	RuleID         int64             `json:"rule_id"`
+	PackageID      string            `json:"package_id,omitempty"`
+	PackageRuleID  string            `json:"package_rule_id,omitempty"`
+	AttackLogID    int64             `json:"attack_log_id,omitempty"`
+	Reason         string            `json:"reason"`
+	Severity       string            `json:"severity"`
+	Status         string            `json:"status"`
+	RedactedSample map[string]string `json:"redacted_sample,omitempty"`
+	Actor          string            `json:"actor,omitempty"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+type RuleFeedbackSuggestion struct {
+	ID             int64          `json:"id"`
+	FeedbackID     int64          `json:"feedback_id"`
+	RuleID         int64          `json:"rule_id"`
+	ProposedChange string         `json:"proposed_change"`
+	RiskWarning    string         `json:"risk_warning"`
+	Confidence     string         `json:"confidence"`
+	State          string         `json:"state"`
+	TestResult     RuleTestResult `json:"test_result,omitempty"`
+	Actor          string         `json:"actor,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+}
+
 type RuleTestSample struct {
 	Method         string            `json:"method"`
 	Path           string            `json:"path"`

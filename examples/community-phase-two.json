@@ -1,0 +1,40 @@
+{
+  "account_source": {
+    "name": "Paid community feed",
+    "provider_type": "https-catalog",
+    "endpoint": "https://rules.example.com/catalog.json",
+    "enabled": true,
+    "timeout_sec": 5,
+    "credential": {
+      "alias": "prod-feed"
+    },
+    "credential_secret": "write-only-token"
+  },
+  "contribution_target": {
+    "name": "LiteWaf community review",
+    "provider": "https",
+    "endpoint": "https://community.example.com/push",
+    "channel": "main",
+    "enabled": true,
+    "credential": {
+      "alias": "community-push"
+    },
+    "credential_secret": "write-only-push-token"
+  },
+  "queue_decision": {
+    "state": "dismissed",
+    "reason": "operator reviewed and deferred"
+  },
+  "feedback": {
+    "rule_id": 1,
+    "reason": "False positive on a known safe search query.",
+    "severity": "medium",
+    "redacted_sample": {
+      "path": "/search",
+      "query": "[redacted]"
+    }
+  },
+  "feedback_suggestion_decision": {
+    "state": "rejected"
+  }
+}

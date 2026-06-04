@@ -1284,8 +1284,478 @@ func (s *PostgresStore) UpdateRuleTrustKey(ctx context.Context, id int64, item m
 	return item, err
 }
 
+func (s *PostgresStore) ListRuleCommunityAccountSources(ctx context.Context) ([]model.RuleCommunityAccountSource, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, provider_type, endpoint, enabled, timeout_sec,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
+			subscription_status, entitlement_summary, package_count, status, last_sync_at, last_error,
+			(SELECT count(*) FROM rule_review_queue q WHERE q.source_identity = 'account:' || rule_community_account_sources.id AND q.state = 'queued') AS recommendation_count,
+			created_at, updated_at
+		FROM rule_community_account_sources
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleCommunityAccountSource
+	for rows.Next() {
+		item, err := scanRuleCommunityAccountSource(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleCommunityAccountSource(ctx context.Context, id int64) (model.RuleCommunityAccountSource, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, provider_type, endpoint, enabled, timeout_sec,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
+			subscription_status, entitlement_summary, package_count, status, last_sync_at, last_error,
+			(SELECT count(*) FROM rule_review_queue q WHERE q.source_identity = 'account:' || rule_community_account_sources.id AND q.state = 'queued') AS recommendation_count,
+			created_at, updated_at
+		FROM rule_community_account_sources
+		WHERE id = $1`, id)
+	item, err := scanRuleCommunityAccountSource(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleCommunityAccountSource{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleCommunityAccountSource(ctx context.Context, item model.RuleCommunityAccountSource, secret model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error) {
+	item.Credential = postgresRedactCredential(item.Credential, secret.Secret, time.Now().UTC())
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_community_account_sources (
+			name, provider_type, endpoint, enabled, timeout_sec,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status, credential_secret,
+			subscription_status, entitlement_summary, package_count, status, last_error
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.ProviderType, item.Endpoint, item.Enabled, item.TimeoutSec,
+		item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour, nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret,
+		item.SubscriptionStatus, item.EntitlementSummary, item.PackageCount, item.Status, item.LastError).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRuleCommunityAccountSource(ctx context.Context, id int64, item model.RuleCommunityAccountSource, secret model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error) {
+	existing, err := s.GetRuleCommunityAccountSource(ctx, id)
+	if err != nil {
+		return model.RuleCommunityAccountSource{}, err
+	}
+	if secret.Secret == "" {
+		item.Credential = existing.Credential
+	} else {
+		item.Credential = postgresRedactCredential(item.Credential, secret.Secret, time.Now().UTC())
+	}
+	err = s.db.QueryRowContext(ctx, `
+		UPDATE rule_community_account_sources
+		SET name = $2, provider_type = $3, endpoint = $4, enabled = $5, timeout_sec = $6,
+			credential_alias = $7, credential_fingerprint = $8, credential_last_four = $9,
+			credential_expires_at = $10, credential_last_validated_at = $11, credential_status = $12,
+			credential_secret = CASE WHEN $13 = '' THEN credential_secret ELSE $13 END,
+			subscription_status = $14, entitlement_summary = $15, package_count = $16,
+			status = $17, last_error = $18, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.ProviderType, item.Endpoint, item.Enabled, item.TimeoutSec,
+		item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour,
+		nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret,
+		item.SubscriptionStatus, item.EntitlementSummary, item.PackageCount, item.Status, item.LastError).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleCommunityAccountSource{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) DeleteRuleCommunityAccountSource(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM rule_community_account_sources WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) RefreshRuleCommunityAccountSource(ctx context.Context, id int64, item model.RuleCommunityAccountSource, queue []model.RuleReviewQueueItem) (model.RuleCommunityAccountSource, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.RuleCommunityAccountSource{}, err
+	}
+	defer tx.Rollback()
+	var credentialExpires sql.NullTime
+	var credentialValidated sql.NullTime
+	var lastSync sql.NullTime
+	err = tx.QueryRowContext(ctx, `
+		UPDATE rule_community_account_sources
+		SET subscription_status = $2, entitlement_summary = $3, package_count = $4, status = $5,
+			last_sync_at = $6, last_error = $7, updated_at = now()
+		WHERE id = $1
+		RETURNING id, name, provider_type, endpoint, enabled, timeout_sec,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
+			subscription_status, entitlement_summary, package_count, status, last_sync_at, last_error, 0, created_at, updated_at`,
+		id, item.SubscriptionStatus, item.EntitlementSummary, item.PackageCount, item.Status, nullableTime(item.LastSyncAt), item.LastError).
+		Scan(&item.ID, &item.Name, &item.ProviderType, &item.Endpoint, &item.Enabled, &item.TimeoutSec,
+			&item.Credential.Alias, &item.Credential.Fingerprint, &item.Credential.LastFour, &credentialExpires, &credentialValidated, &item.Credential.Status,
+			&item.SubscriptionStatus, &item.EntitlementSummary, &item.PackageCount, &item.Status, &lastSync, &item.LastError, &item.RecommendationCount, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleCommunityAccountSource{}, ErrNotFound
+	}
+	if err != nil {
+		return model.RuleCommunityAccountSource{}, err
+	}
+	if credentialExpires.Valid {
+		item.Credential.ExpiresAt = credentialExpires.Time
+	}
+	if credentialValidated.Valid {
+		item.Credential.LastValidatedAt = credentialValidated.Time
+	}
+	if lastSync.Valid {
+		item.LastSyncAt = lastSync.Time
+	}
+	for _, q := range queue {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO rule_review_queue (item_type, package_id, package_version, current_version, source_identity, recommendation, risk_summary, signature_status, compatibility_status, state, actor)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			q.ItemType, q.PackageID, q.PackageVersion, q.CurrentVersion, q.SourceIdentity, q.Recommendation, q.RiskSummary, q.SignatureStatus, q.CompatibilityStatus, q.State, q.Actor); err != nil {
+			return model.RuleCommunityAccountSource{}, err
+		}
+	}
+	return item, tx.Commit()
+}
+
+func (s *PostgresStore) ListRuleContributionTargets(ctx context.Context) ([]model.RuleContributionTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, provider, endpoint, channel, enabled,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
+			status, last_push_at, last_error, created_at, updated_at
+		FROM rule_contribution_targets ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleContributionTarget
+	for rows.Next() {
+		item, err := scanRuleContributionTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleContributionTarget(ctx context.Context, id int64) (model.RuleContributionTarget, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, provider, endpoint, channel, enabled,
+			credential_alias, credential_fingerprint, credential_last_four, credential_expires_at, credential_last_validated_at, credential_status,
+			status, last_push_at, last_error, created_at, updated_at
+		FROM rule_contribution_targets WHERE id = $1`, id)
+	item, err := scanRuleContributionTarget(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleContributionTarget{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleContributionTarget(ctx context.Context, item model.RuleContributionTarget, secret model.RuleCommunityAccountSecret) (model.RuleContributionTarget, error) {
+	item.Credential = postgresRedactCredential(item.Credential, secret.Secret, time.Now().UTC())
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_contribution_targets (
+			name, provider, endpoint, channel, enabled, credential_alias, credential_fingerprint, credential_last_four,
+			credential_expires_at, credential_last_validated_at, credential_status, credential_secret, status, last_error
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Provider, item.Endpoint, item.Channel, item.Enabled, item.Credential.Alias, item.Credential.Fingerprint, item.Credential.LastFour,
+		nullableTime(item.Credential.ExpiresAt), nullableTime(item.Credential.LastValidatedAt), item.Credential.Status, secret.Secret, item.Status, item.LastError).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleContributionPushAttempt(ctx context.Context, item model.RuleContributionPushAttempt) (model.RuleContributionPushAttempt, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_contribution_push_attempts (target_id, target_name, package_id, package_version, checksum, status, remote_reference, error, actor, preview_only)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		RETURNING id, created_at`,
+		item.TargetID, item.TargetName, item.PackageID, item.PackageVersion, item.Checksum, item.Status, item.RemoteReference, item.Error, item.Actor, item.PreviewOnly).
+		Scan(&item.ID, &item.CreatedAt)
+	if err != nil {
+		return item, err
+	}
+	_, _ = s.db.ExecContext(ctx, `UPDATE rule_contribution_targets SET status = $2, last_push_at = $3, last_error = $4, updated_at = now() WHERE id = $1`, item.TargetID, item.Status, item.CreatedAt, item.Error)
+	return item, nil
+}
+
+func (s *PostgresStore) ListRuleContributionPushAttempts(ctx context.Context) ([]model.RuleContributionPushAttempt, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, target_id, target_name, package_id, package_version, checksum, status, remote_reference, error, actor, preview_only, created_at
+		FROM rule_contribution_push_attempts ORDER BY id DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleContributionPushAttempt
+	for rows.Next() {
+		var item model.RuleContributionPushAttempt
+		if err := rows.Scan(&item.ID, &item.TargetID, &item.TargetName, &item.PackageID, &item.PackageVersion, &item.Checksum, &item.Status, &item.RemoteReference, &item.Error, &item.Actor, &item.PreviewOnly, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) ListRuleReviewQueueItems(ctx context.Context) ([]model.RuleReviewQueueItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, item_type, package_id, package_version, current_version, source_identity, recommendation, risk_summary,
+			signature_status, compatibility_status, state, decision_reason, actor, created_at, updated_at
+		FROM rule_review_queue ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleReviewQueueItem
+	for rows.Next() {
+		item, err := scanRuleReviewQueueItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleReviewQueueItem(ctx context.Context, id int64) (model.RuleReviewQueueItem, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, item_type, package_id, package_version, current_version, source_identity, recommendation, risk_summary,
+			signature_status, compatibility_status, state, decision_reason, actor, created_at, updated_at
+		FROM rule_review_queue WHERE id = $1`, id)
+	item, err := scanRuleReviewQueueItem(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleReviewQueueItem{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleReviewQueueItem(ctx context.Context, item model.RuleReviewQueueItem) (model.RuleReviewQueueItem, error) {
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_review_queue (item_type, package_id, package_version, current_version, source_identity, recommendation, risk_summary, signature_status, compatibility_status, state, actor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, created_at, updated_at`,
+		item.ItemType, item.PackageID, item.PackageVersion, item.CurrentVersion, item.SourceIdentity, item.Recommendation, item.RiskSummary, item.SignatureStatus, item.CompatibilityStatus, item.State, item.Actor).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRuleReviewQueueItem(ctx context.Context, id int64, item model.RuleReviewQueueItem) (model.RuleReviewQueueItem, error) {
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE rule_review_queue
+		SET state = $2, decision_reason = $3, actor = $4, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`, id, item.State, item.DecisionReason, item.Actor).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleReviewQueueItem{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) ListRuleFeedback(ctx context.Context) ([]model.RuleFeedback, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, rule_id, package_id, package_rule_id, attack_log_id, reason, severity, status, redacted_sample, actor, created_at, updated_at FROM rule_feedback ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleFeedback
+	for rows.Next() {
+		item, err := scanRuleFeedback(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) CreateRuleFeedback(ctx context.Context, item model.RuleFeedback) (model.RuleFeedback, error) {
+	sample, _ := json.Marshal(item.RedactedSample)
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_feedback (rule_id, package_id, package_rule_id, attack_log_id, reason, severity, status, redacted_sample, actor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id, created_at, updated_at`,
+		item.RuleID, item.PackageID, item.PackageRuleID, item.AttackLogID, item.Reason, item.Severity, item.Status, string(sample), item.Actor).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) ListRuleFeedbackSuggestions(ctx context.Context) ([]model.RuleFeedbackSuggestion, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, feedback_id, rule_id, proposed_change, risk_warning, confidence, state, test_result, actor, created_at, updated_at FROM rule_feedback_suggestions ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.RuleFeedbackSuggestion
+	for rows.Next() {
+		item, err := scanRuleFeedbackSuggestion(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetRuleFeedbackSuggestion(ctx context.Context, id int64) (model.RuleFeedbackSuggestion, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, feedback_id, rule_id, proposed_change, risk_warning, confidence, state, test_result, actor, created_at, updated_at FROM rule_feedback_suggestions WHERE id = $1`, id)
+	item, err := scanRuleFeedbackSuggestion(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleFeedbackSuggestion{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateRuleFeedbackSuggestion(ctx context.Context, item model.RuleFeedbackSuggestion) (model.RuleFeedbackSuggestion, error) {
+	result, _ := json.Marshal(item.TestResult)
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO rule_feedback_suggestions (feedback_id, rule_id, proposed_change, risk_warning, confidence, state, test_result, actor)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, created_at, updated_at`,
+		item.FeedbackID, item.RuleID, item.ProposedChange, item.RiskWarning, item.Confidence, item.State, string(result), item.Actor).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) UpdateRuleFeedbackSuggestion(ctx context.Context, id int64, item model.RuleFeedbackSuggestion) (model.RuleFeedbackSuggestion, error) {
+	result, _ := json.Marshal(item.TestResult)
+	err := s.db.QueryRowContext(ctx, `
+		UPDATE rule_feedback_suggestions
+		SET state = $2, test_result = $3, actor = $4, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`, id, item.State, string(result), item.Actor).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.RuleFeedbackSuggestion{}, ErrNotFound
+	}
+	return item, err
+}
+
 type catalogPackageScanner interface {
 	Scan(dest ...any) error
+}
+
+type ruleCommunityAccountScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleCommunityAccountSource(row ruleCommunityAccountScanner) (model.RuleCommunityAccountSource, error) {
+	var item model.RuleCommunityAccountSource
+	var credentialExpires sql.NullTime
+	var credentialValidated sql.NullTime
+	var lastSync sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.Name, &item.ProviderType, &item.Endpoint, &item.Enabled, &item.TimeoutSec,
+		&item.Credential.Alias, &item.Credential.Fingerprint, &item.Credential.LastFour, &credentialExpires, &credentialValidated, &item.Credential.Status,
+		&item.SubscriptionStatus, &item.EntitlementSummary, &item.PackageCount, &item.Status, &lastSync, &item.LastError,
+		&item.RecommendationCount, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if credentialExpires.Valid {
+		item.Credential.ExpiresAt = credentialExpires.Time
+	}
+	if credentialValidated.Valid {
+		item.Credential.LastValidatedAt = credentialValidated.Time
+	}
+	if lastSync.Valid {
+		item.LastSyncAt = lastSync.Time
+	}
+	return item, err
+}
+
+type ruleContributionTargetScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleContributionTarget(row ruleContributionTargetScanner) (model.RuleContributionTarget, error) {
+	var item model.RuleContributionTarget
+	var credentialExpires sql.NullTime
+	var credentialValidated sql.NullTime
+	var lastPush sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.Name, &item.Provider, &item.Endpoint, &item.Channel, &item.Enabled,
+		&item.Credential.Alias, &item.Credential.Fingerprint, &item.Credential.LastFour, &credentialExpires, &credentialValidated, &item.Credential.Status,
+		&item.Status, &lastPush, &item.LastError, &item.CreatedAt, &item.UpdatedAt,
+	)
+	if credentialExpires.Valid {
+		item.Credential.ExpiresAt = credentialExpires.Time
+	}
+	if credentialValidated.Valid {
+		item.Credential.LastValidatedAt = credentialValidated.Time
+	}
+	if lastPush.Valid {
+		item.LastPushAt = lastPush.Time
+	}
+	return item, err
+}
+
+type ruleReviewQueueScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleReviewQueueItem(row ruleReviewQueueScanner) (model.RuleReviewQueueItem, error) {
+	var item model.RuleReviewQueueItem
+	err := row.Scan(
+		&item.ID, &item.ItemType, &item.PackageID, &item.PackageVersion, &item.CurrentVersion, &item.SourceIdentity, &item.Recommendation,
+		&item.RiskSummary, &item.SignatureStatus, &item.CompatibilityStatus, &item.State, &item.DecisionReason, &item.Actor, &item.CreatedAt, &item.UpdatedAt,
+	)
+	return item, err
+}
+
+type ruleFeedbackScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleFeedback(row ruleFeedbackScanner) (model.RuleFeedback, error) {
+	var item model.RuleFeedback
+	var sample string
+	err := row.Scan(&item.ID, &item.RuleID, &item.PackageID, &item.PackageRuleID, &item.AttackLogID, &item.Reason, &item.Severity, &item.Status, &sample, &item.Actor, &item.CreatedAt, &item.UpdatedAt)
+	if sample != "" {
+		_ = json.Unmarshal([]byte(sample), &item.RedactedSample)
+	}
+	return item, err
+}
+
+type ruleFeedbackSuggestionScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanRuleFeedbackSuggestion(row ruleFeedbackSuggestionScanner) (model.RuleFeedbackSuggestion, error) {
+	var item model.RuleFeedbackSuggestion
+	var result string
+	err := row.Scan(&item.ID, &item.FeedbackID, &item.RuleID, &item.ProposedChange, &item.RiskWarning, &item.Confidence, &item.State, &result, &item.Actor, &item.CreatedAt, &item.UpdatedAt)
+	if result != "" {
+		_ = json.Unmarshal([]byte(result), &item.TestResult)
+	}
+	return item, err
+}
+
+func postgresRedactCredential(meta model.RuleAccountCredential, secret string, now time.Time) model.RuleAccountCredential {
+	if meta.Alias == "" {
+		meta.Alias = "default"
+	}
+	if secret != "" {
+		meta.LastFour = lastFour(secret)
+		meta.Fingerprint = "sha256:" + stringLengthFingerprint(secret) + ":" + lastFour(secret)
+		meta.LastValidatedAt = now
+		meta.Status = "configured"
+	}
+	if meta.Status == "" {
+		meta.Status = "not-configured"
+	}
+	return meta
+}
+
+func stringLengthFingerprint(value string) string {
+	return strings.TrimSpace(time.Unix(int64(len(value)), 0).UTC().Format("150405"))
 }
 
 func scanRuleCatalogPackage(row catalogPackageScanner) (model.RuleCatalogPackage, error) {

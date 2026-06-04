@@ -102,6 +102,31 @@ type Store interface {
 	GetRuleTrustKey(context.Context, string) (model.RuleTrustKey, error)
 	CreateRuleTrustKey(context.Context, model.RuleTrustKey) (model.RuleTrustKey, error)
 	UpdateRuleTrustKey(context.Context, int64, model.RuleTrustKey) (model.RuleTrustKey, error)
+
+	ListRuleCommunityAccountSources(context.Context) ([]model.RuleCommunityAccountSource, error)
+	GetRuleCommunityAccountSource(context.Context, int64) (model.RuleCommunityAccountSource, error)
+	CreateRuleCommunityAccountSource(context.Context, model.RuleCommunityAccountSource, model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error)
+	UpdateRuleCommunityAccountSource(context.Context, int64, model.RuleCommunityAccountSource, model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error)
+	DeleteRuleCommunityAccountSource(context.Context, int64) error
+	RefreshRuleCommunityAccountSource(context.Context, int64, model.RuleCommunityAccountSource, []model.RuleReviewQueueItem) (model.RuleCommunityAccountSource, error)
+
+	ListRuleContributionTargets(context.Context) ([]model.RuleContributionTarget, error)
+	GetRuleContributionTarget(context.Context, int64) (model.RuleContributionTarget, error)
+	CreateRuleContributionTarget(context.Context, model.RuleContributionTarget, model.RuleCommunityAccountSecret) (model.RuleContributionTarget, error)
+	CreateRuleContributionPushAttempt(context.Context, model.RuleContributionPushAttempt) (model.RuleContributionPushAttempt, error)
+	ListRuleContributionPushAttempts(context.Context) ([]model.RuleContributionPushAttempt, error)
+
+	ListRuleReviewQueueItems(context.Context) ([]model.RuleReviewQueueItem, error)
+	GetRuleReviewQueueItem(context.Context, int64) (model.RuleReviewQueueItem, error)
+	CreateRuleReviewQueueItem(context.Context, model.RuleReviewQueueItem) (model.RuleReviewQueueItem, error)
+	UpdateRuleReviewQueueItem(context.Context, int64, model.RuleReviewQueueItem) (model.RuleReviewQueueItem, error)
+
+	ListRuleFeedback(context.Context) ([]model.RuleFeedback, error)
+	CreateRuleFeedback(context.Context, model.RuleFeedback) (model.RuleFeedback, error)
+	ListRuleFeedbackSuggestions(context.Context) ([]model.RuleFeedbackSuggestion, error)
+	GetRuleFeedbackSuggestion(context.Context, int64) (model.RuleFeedbackSuggestion, error)
+	CreateRuleFeedbackSuggestion(context.Context, model.RuleFeedbackSuggestion) (model.RuleFeedbackSuggestion, error)
+	UpdateRuleFeedbackSuggestion(context.Context, int64, model.RuleFeedbackSuggestion) (model.RuleFeedbackSuggestion, error)
 }
 
 func OpenPostgres(ctx context.Context, databaseURL string) (*PostgresStore, error) {

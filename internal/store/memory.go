@@ -31,6 +31,12 @@ type MemoryStore struct {
 	nextCatalogID        int64
 	nextCatalogPackageID int64
 	nextTrustKeyID       int64
+	nextAccountSourceID  int64
+	nextContributionID   int64
+	nextPushAttemptID    int64
+	nextReviewQueueID    int64
+	nextFeedbackID       int64
+	nextSuggestionID     int64
 	nextAccessLogID      int64
 	nextWAFEventID       int64
 	sites                map[int64]model.Site
@@ -48,6 +54,14 @@ type MemoryStore struct {
 	catalogSources       map[int64]model.RuleCatalogSource
 	catalogPackages      map[int64]model.RuleCatalogPackage
 	trustKeys            map[int64]model.RuleTrustKey
+	accountSources       map[int64]model.RuleCommunityAccountSource
+	accountSecrets       map[int64]string
+	contributionTargets  map[int64]model.RuleContributionTarget
+	contributionSecrets  map[int64]string
+	pushAttempts         map[int64]model.RuleContributionPushAttempt
+	reviewQueue          map[int64]model.RuleReviewQueueItem
+	feedback             map[int64]model.RuleFeedback
+	feedbackSuggestions  map[int64]model.RuleFeedbackSuggestion
 	accessLogs           map[int64]model.AccessLog
 	wafEvents            map[int64]model.WAFEvent
 }
@@ -69,6 +83,12 @@ func NewMemoryStore() *MemoryStore {
 		nextCatalogID:        1,
 		nextCatalogPackageID: 1,
 		nextTrustKeyID:       1,
+		nextAccountSourceID:  1,
+		nextContributionID:   1,
+		nextPushAttemptID:    1,
+		nextReviewQueueID:    1,
+		nextFeedbackID:       1,
+		nextSuggestionID:     1,
 		nextAccessLogID:      1,
 		nextWAFEventID:       1,
 		sites:                map[int64]model.Site{},
@@ -86,6 +106,14 @@ func NewMemoryStore() *MemoryStore {
 		catalogSources:       map[int64]model.RuleCatalogSource{},
 		catalogPackages:      map[int64]model.RuleCatalogPackage{},
 		trustKeys:            map[int64]model.RuleTrustKey{},
+		accountSources:       map[int64]model.RuleCommunityAccountSource{},
+		accountSecrets:       map[int64]string{},
+		contributionTargets:  map[int64]model.RuleContributionTarget{},
+		contributionSecrets:  map[int64]string{},
+		pushAttempts:         map[int64]model.RuleContributionPushAttempt{},
+		reviewQueue:          map[int64]model.RuleReviewQueueItem{},
+		feedback:             map[int64]model.RuleFeedback{},
+		feedbackSuggestions:  map[int64]model.RuleFeedbackSuggestion{},
 		accessLogs:           map[int64]model.AccessLog{},
 		wafEvents:            map[int64]model.WAFEvent{},
 	}
@@ -1152,6 +1180,318 @@ func (s *MemoryStore) catalogPackageCountLocked(catalogID int64) int {
 		}
 	}
 	return count
+}
+
+func (s *MemoryStore) ListRuleCommunityAccountSources(context.Context) ([]model.RuleCommunityAccountSource, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleCommunityAccountSource, 0, len(s.accountSources))
+	for _, item := range s.accountSources {
+		item.RecommendationCount = s.recommendationCountLocked(item.ID)
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleCommunityAccountSource(_ context.Context, id int64) (model.RuleCommunityAccountSource, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.accountSources[id]
+	if !ok {
+		return model.RuleCommunityAccountSource{}, ErrNotFound
+	}
+	item.RecommendationCount = s.recommendationCountLocked(id)
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleCommunityAccountSource(_ context.Context, item model.RuleCommunityAccountSource, secret model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextAccountSourceID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item.Credential = redactCredential(item.Credential, secret.Secret, now)
+	s.accountSources[item.ID] = item
+	if secret.Secret != "" {
+		s.accountSecrets[item.ID] = secret.Secret
+	}
+	s.nextAccountSourceID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRuleCommunityAccountSource(_ context.Context, id int64, item model.RuleCommunityAccountSource, secret model.RuleCommunityAccountSecret) (model.RuleCommunityAccountSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.accountSources[id]
+	if !ok {
+		return model.RuleCommunityAccountSource{}, ErrNotFound
+	}
+	now := time.Now().UTC()
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = now
+	if secret.Secret == "" {
+		item.Credential = existing.Credential
+	} else {
+		item.Credential = redactCredential(item.Credential, secret.Secret, now)
+		s.accountSecrets[id] = secret.Secret
+	}
+	item.LastSyncAt = existing.LastSyncAt
+	item.LastError = existing.LastError
+	s.accountSources[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) DeleteRuleCommunityAccountSource(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.accountSources[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.accountSources, id)
+	delete(s.accountSecrets, id)
+	return nil
+}
+
+func (s *MemoryStore) RefreshRuleCommunityAccountSource(_ context.Context, id int64, item model.RuleCommunityAccountSource, queue []model.RuleReviewQueueItem) (model.RuleCommunityAccountSource, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.accountSources[id]
+	if !ok {
+		return model.RuleCommunityAccountSource{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	item.Credential = existing.Credential
+	s.accountSources[id] = item
+	for _, queueItem := range queue {
+		queueItem.ID = s.nextReviewQueueID
+		queueItem.CreatedAt = item.UpdatedAt
+		queueItem.UpdatedAt = item.UpdatedAt
+		s.reviewQueue[queueItem.ID] = queueItem
+		s.nextReviewQueueID++
+	}
+	item.RecommendationCount = s.recommendationCountLocked(id)
+	return item, nil
+}
+
+func (s *MemoryStore) ListRuleContributionTargets(context.Context) ([]model.RuleContributionTarget, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleContributionTarget, 0, len(s.contributionTargets))
+	for _, item := range s.contributionTargets {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleContributionTarget(_ context.Context, id int64) (model.RuleContributionTarget, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.contributionTargets[id]
+	if !ok {
+		return model.RuleContributionTarget{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleContributionTarget(_ context.Context, item model.RuleContributionTarget, secret model.RuleCommunityAccountSecret) (model.RuleContributionTarget, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextContributionID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	item.Credential = redactCredential(item.Credential, secret.Secret, now)
+	s.contributionTargets[item.ID] = item
+	if secret.Secret != "" {
+		s.contributionSecrets[item.ID] = secret.Secret
+	}
+	s.nextContributionID++
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleContributionPushAttempt(_ context.Context, item model.RuleContributionPushAttempt) (model.RuleContributionPushAttempt, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item.ID = s.nextPushAttemptID
+	item.CreatedAt = time.Now().UTC()
+	s.pushAttempts[item.ID] = item
+	target := s.contributionTargets[item.TargetID]
+	target.LastPushAt = item.CreatedAt
+	target.LastError = item.Error
+	target.Status = item.Status
+	target.UpdatedAt = item.CreatedAt
+	s.contributionTargets[item.TargetID] = target
+	s.nextPushAttemptID++
+	return item, nil
+}
+
+func (s *MemoryStore) ListRuleContributionPushAttempts(context.Context) ([]model.RuleContributionPushAttempt, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleContributionPushAttempt, 0, len(s.pushAttempts))
+	for _, item := range s.pushAttempts {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) ListRuleReviewQueueItems(context.Context) ([]model.RuleReviewQueueItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleReviewQueueItem, 0, len(s.reviewQueue))
+	for _, item := range s.reviewQueue {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleReviewQueueItem(_ context.Context, id int64) (model.RuleReviewQueueItem, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.reviewQueue[id]
+	if !ok {
+		return model.RuleReviewQueueItem{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleReviewQueueItem(_ context.Context, item model.RuleReviewQueueItem) (model.RuleReviewQueueItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextReviewQueueID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	s.reviewQueue[item.ID] = item
+	s.nextReviewQueueID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRuleReviewQueueItem(_ context.Context, id int64, item model.RuleReviewQueueItem) (model.RuleReviewQueueItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.reviewQueue[id]
+	if !ok {
+		return model.RuleReviewQueueItem{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	s.reviewQueue[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) ListRuleFeedback(context.Context) ([]model.RuleFeedback, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleFeedback, 0, len(s.feedback))
+	for _, item := range s.feedback {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) CreateRuleFeedback(_ context.Context, item model.RuleFeedback) (model.RuleFeedback, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextFeedbackID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	s.feedback[item.ID] = item
+	s.nextFeedbackID++
+	return item, nil
+}
+
+func (s *MemoryStore) ListRuleFeedbackSuggestions(context.Context) ([]model.RuleFeedbackSuggestion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.RuleFeedbackSuggestion, 0, len(s.feedbackSuggestions))
+	for _, item := range s.feedbackSuggestions {
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetRuleFeedbackSuggestion(_ context.Context, id int64) (model.RuleFeedbackSuggestion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.feedbackSuggestions[id]
+	if !ok {
+		return model.RuleFeedbackSuggestion{}, ErrNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) CreateRuleFeedbackSuggestion(_ context.Context, item model.RuleFeedbackSuggestion) (model.RuleFeedbackSuggestion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item.ID = s.nextSuggestionID
+	item.CreatedAt = now
+	item.UpdatedAt = now
+	s.feedbackSuggestions[item.ID] = item
+	s.nextSuggestionID++
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateRuleFeedbackSuggestion(_ context.Context, id int64, item model.RuleFeedbackSuggestion) (model.RuleFeedbackSuggestion, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.feedbackSuggestions[id]
+	if !ok {
+		return model.RuleFeedbackSuggestion{}, ErrNotFound
+	}
+	item.ID = id
+	item.CreatedAt = existing.CreatedAt
+	item.UpdatedAt = time.Now().UTC()
+	s.feedbackSuggestions[id] = item
+	return item, nil
+}
+
+func (s *MemoryStore) recommendationCountLocked(sourceID int64) int {
+	count := 0
+	needle := "account:" + strconv.FormatInt(sourceID, 10)
+	for _, item := range s.reviewQueue {
+		if item.SourceIdentity == needle && item.State == "queued" {
+			count++
+		}
+	}
+	return count
+}
+
+func redactCredential(meta model.RuleAccountCredential, secret string, now time.Time) model.RuleAccountCredential {
+	if meta.Alias == "" {
+		meta.Alias = "default"
+	}
+	if secret != "" {
+		meta.LastFour = lastFour(secret)
+		meta.Fingerprint = "sha256:" + strconv.FormatInt(int64(len(secret)), 10) + ":" + lastFour(secret)
+		meta.LastValidatedAt = now
+		meta.Status = "configured"
+	}
+	if meta.Status == "" {
+		meta.Status = "not-configured"
+	}
+	return meta
+}
+
+func lastFour(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 4 {
+		return value
+	}
+	return value[len(value)-4:]
 }
 
 func auditMatches(item model.AuditLog, filter model.AuditLogFilter) bool {

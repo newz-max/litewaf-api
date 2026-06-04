@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strconv"
 	"testing"
 
 	"litewaf-api/internal/model"
@@ -528,5 +529,62 @@ func TestGenerateKeepsPackageOriginMetadataGatewayCompatible(t *testing.T) {
 	}
 	if bytes.Contains(payload, []byte("remote_catalog_id")) || bytes.Contains(payload, []byte("signature_status")) || bytes.Contains(payload, []byte("export_eligible")) {
 		t.Fatalf("gateway payload leaked control-plane community metadata: %s", string(payload))
+	}
+}
+
+func TestGenerateDoesNotLeakRuleCommunityPhaseTwoControlPlaneState(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	site, err := dataStore.CreateSite(ctx, model.Site{Name: "app", Host: "phase2.example.com", Upstream: "http://127.0.0.1:9000", Mode: "protect", Enabled: true})
+	if err != nil {
+		t.Fatalf("create site: %v", err)
+	}
+	rule, err := dataStore.CreateRule(ctx, model.Rule{
+		Name: "Community SQLi", Type: "sqli", Target: "args", Action: "block", Expression: "(?i)union\\s+select", Score: 80, Enabled: true,
+		Module: "attack-protection", Category: "managed", AttackType: "sqli", Group: "SQL 注入防护", Priority: 100,
+		PackageID: "paid-pack", PackageVersion: "v1", PackageRuleID: "sqli-query", SourceChecksum: "checksum", ReviewStatus: "approved",
+	})
+	if err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if _, err := dataStore.CreatePolicy(ctx, model.Policy{Name: "default", SiteIDs: []int64{site.ID}, RuleIDs: []int64{rule.ID}, Enabled: true}); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	account, err := dataStore.CreateRuleCommunityAccountSource(ctx, model.RuleCommunityAccountSource{
+		Name: "Paid source", ProviderType: "https-catalog", Endpoint: "https://rules.example.com/catalog.json", Enabled: true, TimeoutSec: 5, SubscriptionStatus: "authorized", Status: "authorized",
+	}, model.RuleCommunityAccountSecret{Secret: "secret-token"})
+	if err != nil {
+		t.Fatalf("create account source: %v", err)
+	}
+	if _, err := dataStore.CreateRuleReviewQueueItem(ctx, model.RuleReviewQueueItem{ItemType: "package-update", PackageID: "paid-pack", PackageVersion: "v2", SourceIdentity: "account:" + strconv.FormatInt(account.ID, 10), State: "queued"}); err != nil {
+		t.Fatalf("create queue item: %v", err)
+	}
+	if _, err := dataStore.CreateRuleFeedback(ctx, model.RuleFeedback{RuleID: rule.ID, Reason: "false positive", Severity: "medium", Status: "open", RedactedSample: map[string]string{"path": "/search"}}); err != nil {
+		t.Fatalf("create feedback: %v", err)
+	}
+	target, err := dataStore.CreateRuleContributionTarget(ctx, model.RuleContributionTarget{Name: "Push", Provider: "https", Endpoint: "https://community.example.com/push", Enabled: true}, model.RuleCommunityAccountSecret{Secret: "push-secret"})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := dataStore.CreateRuleContributionPushAttempt(ctx, model.RuleContributionPushAttempt{TargetID: target.ID, TargetName: target.Name, PackageID: "paid-pack", PackageVersion: "v1", Checksum: "abc", Status: "delivered", Actor: "admin"}); err != nil {
+		t.Fatalf("create push attempt: %v", err)
+	}
+
+	_, payload, _, err := GenerateExtended(ctx, dataStore, "ruleset-phase2")
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	for _, forbidden := range [][]byte{
+		[]byte("rule_community_account"),
+		[]byte("subscription_status"),
+		[]byte("credential"),
+		[]byte("secret-token"),
+		[]byte("review_queue"),
+		[]byte("feedback"),
+		[]byte("contribution"),
+	} {
+		if bytes.Contains(payload, forbidden) {
+			t.Fatalf("gateway payload leaked %s: %s", string(forbidden), string(payload))
+		}
 	}
 }

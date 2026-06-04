@@ -457,6 +457,113 @@ CREATE TABLE IF NOT EXISTS rule_trust_keys (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS rule_community_account_sources (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	provider_type TEXT NOT NULL,
+	endpoint TEXT NOT NULL,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	timeout_sec INTEGER NOT NULL DEFAULT 5,
+	credential_alias TEXT NOT NULL DEFAULT '',
+	credential_fingerprint TEXT NOT NULL DEFAULT '',
+	credential_last_four TEXT NOT NULL DEFAULT '',
+	credential_expires_at TIMESTAMPTZ,
+	credential_last_validated_at TIMESTAMPTZ,
+	credential_status TEXT NOT NULL DEFAULT 'not-configured',
+	credential_secret TEXT NOT NULL DEFAULT '',
+	subscription_status TEXT NOT NULL DEFAULT 'unknown',
+	entitlement_summary TEXT NOT NULL DEFAULT '',
+	package_count INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'never-synced',
+	last_sync_at TIMESTAMPTZ,
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_contribution_targets (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	provider TEXT NOT NULL,
+	endpoint TEXT NOT NULL,
+	channel TEXT NOT NULL DEFAULT '',
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	credential_alias TEXT NOT NULL DEFAULT '',
+	credential_fingerprint TEXT NOT NULL DEFAULT '',
+	credential_last_four TEXT NOT NULL DEFAULT '',
+	credential_expires_at TIMESTAMPTZ,
+	credential_last_validated_at TIMESTAMPTZ,
+	credential_status TEXT NOT NULL DEFAULT 'not-configured',
+	credential_secret TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'ready',
+	last_push_at TIMESTAMPTZ,
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_contribution_push_attempts (
+	id BIGSERIAL PRIMARY KEY,
+	target_id BIGINT NOT NULL DEFAULT 0,
+	target_name TEXT NOT NULL DEFAULT '',
+	package_id TEXT NOT NULL DEFAULT '',
+	package_version TEXT NOT NULL DEFAULT '',
+	checksum TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT '',
+	remote_reference TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	actor TEXT NOT NULL DEFAULT '',
+	preview_only BOOLEAN NOT NULL DEFAULT false,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_review_queue (
+	id BIGSERIAL PRIMARY KEY,
+	item_type TEXT NOT NULL,
+	package_id TEXT NOT NULL DEFAULT '',
+	package_version TEXT NOT NULL DEFAULT '',
+	current_version TEXT NOT NULL DEFAULT '',
+	source_identity TEXT NOT NULL DEFAULT '',
+	recommendation TEXT NOT NULL DEFAULT '',
+	risk_summary TEXT NOT NULL DEFAULT '',
+	signature_status TEXT NOT NULL DEFAULT '',
+	compatibility_status TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'queued',
+	decision_reason TEXT NOT NULL DEFAULT '',
+	actor TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_feedback (
+	id BIGSERIAL PRIMARY KEY,
+	rule_id BIGINT NOT NULL DEFAULT 0,
+	package_id TEXT NOT NULL DEFAULT '',
+	package_rule_id TEXT NOT NULL DEFAULT '',
+	attack_log_id BIGINT NOT NULL DEFAULT 0,
+	reason TEXT NOT NULL DEFAULT '',
+	severity TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT '',
+	redacted_sample TEXT NOT NULL DEFAULT '',
+	actor TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rule_feedback_suggestions (
+	id BIGSERIAL PRIMARY KEY,
+	feedback_id BIGINT NOT NULL DEFAULT 0,
+	rule_id BIGINT NOT NULL DEFAULT 0,
+	proposed_change TEXT NOT NULL DEFAULT '',
+	risk_warning TEXT NOT NULL DEFAULT '',
+	confidence TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT '',
+	test_result TEXT NOT NULL DEFAULT '',
+	actor TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 INSERT INTO rules (name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority)
 SELECT 'LiteWaf SQLi baseline', 'sqli', 'args', 'block', '(?i)(union\s+select|or\s+1=1|sleep\s*\(|benchmark\s*\()', 80, true, 'attack-protection', 'managed', 'sqli', 'SQL 注入防护', 100
 WHERE NOT EXISTS (SELECT 1 FROM rules WHERE name = 'LiteWaf SQLi baseline');

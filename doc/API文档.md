@@ -685,6 +685,49 @@ CC 防护接口以通用 `protection_rules` 表作为主存储，对外以 `modu
 
 导出请求字段：`package_id`、`name`、`version`、`author`、`license`、`compatibility`、`rule_ids`、`signing_key_id`。导出产物包含规则包 JSON、checksum、规则数和贡献提示，不包含私钥、API Token、Authorization/Cookie、原始流量样本、数据库连接串或部署密钥。
 
+### 规则社区二期
+
+规则社区二期接口用于账号化/订阅化规则源、贡献推送、自动导入建议队列和误报反馈闭环。所有写接口都需要写权限；只读角色只能查看状态。`credential_secret` 是写入字段，响应不会返回原始密钥。
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/api/v1/rule-community/account-sources` | 读 | 查询账号规则源 |
+| POST | `/api/v1/rule-community/account-sources` | 写 | 创建账号规则源 |
+| GET | `/api/v1/rule-community/account-sources/{id}` | 读 | 查询账号规则源详情 |
+| PUT | `/api/v1/rule-community/account-sources/{id}` | 写 | 更新账号规则源 |
+| DELETE | `/api/v1/rule-community/account-sources/{id}` | 写 | 删除账号规则源 |
+| POST | `/api/v1/rule-community/account-sources/{id}/refresh` | 写 | 刷新订阅状态并生成待审建议 |
+| GET | `/api/v1/rule-community/contribution-targets` | 读 | 查询贡献推送目标 |
+| POST | `/api/v1/rule-community/contribution-targets` | 写 | 创建贡献推送目标 |
+| GET | `/api/v1/rule-community/contribution-pushes` | 读 | 查询贡献推送记录 |
+| POST | `/api/v1/rule-community/contribution-pushes/preview` | 写 | 预览贡献推送 |
+| POST | `/api/v1/rule-community/contribution-pushes` | 写 | 执行贡献推送 |
+| GET | `/api/v1/rule-community/review-queue` | 读 | 查询自动导入建议队列 |
+| PUT | `/api/v1/rule-community/review-queue/{id}` | 写 | 批准、忽略或标记建议失败 |
+| GET | `/api/v1/rule-community/feedback` | 读 | 查询误报反馈 |
+| POST | `/api/v1/rule-community/feedback` | 写 | 创建误报反馈并生成候选建议 |
+| GET | `/api/v1/rule-community/feedback-suggestions` | 读 | 查询误报候选建议 |
+| POST | `/api/v1/rule-community/feedback-suggestions/{id}/test` | 写 | 测试候选建议 |
+| PUT | `/api/v1/rule-community/feedback-suggestions/{id}` | 写 | 批准或拒绝候选建议 |
+
+账号源创建示例：
+
+```json
+{
+  "name": "Paid community feed",
+  "provider_type": "https-catalog",
+  "endpoint": "https://rules.example.com/catalog.json",
+  "enabled": true,
+  "timeout_sec": 5,
+  "credential": {
+    "alias": "prod-feed"
+  },
+  "credential_secret": "write-only-token"
+}
+```
+
+订阅刷新、队列项创建、误报反馈和候选建议都不会自动启用、禁用、删除、发布或修改规则。网关发布 payload 不包含账号、订阅、队列、推送或反馈元数据。
+
 ## 日志和观测
 
 | 方法 | 路径 | 权限 | 说明 |

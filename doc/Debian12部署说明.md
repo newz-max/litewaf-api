@@ -44,6 +44,14 @@ Disk: 为日志、数据库和规则配置预留独立目录
 
 生产部署默认使用 `deploy/docker-compose.prod.yml`、`.env.example` 和 `litewafctl.sh`，并在目标服务器拉取预构建镜像。示例 upstream 只用于本地验证，不属于生产默认拓扑。镜像仓库未准备好时，不建议在生产宿主机现场构建；可在 CI 或可信构建机上先发布镜像。
 
+首次安装可以直接使用公开的一行入口：
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
+```
+
+`deploy/manager.sh` 只负责创建安装目录、下载生产 Compose 文件和 `litewafctl.sh`、生成 `.env` 并触发安装；后续运维仍使用安装目录中的 `litewafctl.sh`。
+
 可使用通用 PowerShell 脚本上传公开部署文件并触发远端安装：
 
 ```powershell

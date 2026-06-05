@@ -15,24 +15,7 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 ## 快速开始
 
 ```bash
-sudo mkdir -p /opt/litewaf
-cd /opt/litewaf
-
-BASE_URL="https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy"
-
-sudo curl -fsSLo docker-compose.prod.yml "$BASE_URL/docker-compose.prod.yml"
-sudo curl -fsSLo .env.example "$BASE_URL/.env.example"
-sudo curl -fsSLo litewafctl.sh "$BASE_URL/litewafctl.sh"
-
-sudo chmod +x litewafctl.sh
-sudo cp -n .env.example .env
-sudo sed -i \
-  -e 's|^LITEWAF_IMAGE_PREFIX=.*|LITEWAF_IMAGE_PREFIX=mmxiaozhi|' \
-  -e 's|^LITEWAF_IMAGE_TAG=.*|LITEWAF_IMAGE_TAG=latest|' \
-  .env
-
-sudo ./litewafctl.sh install
-sudo ./litewafctl.sh health
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
 ```
 
 默认入口：

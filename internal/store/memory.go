@@ -481,7 +481,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	limit := normalizeSummaryLimit(filter.Limit)
-	summary := model.ObservabilitySummary{}
+	summary := emptyObservabilitySummary()
 	ipCounts := map[string]int64{}
 	uriCounts := map[string]int64{}
 	ruleCounts := map[string]int64{}

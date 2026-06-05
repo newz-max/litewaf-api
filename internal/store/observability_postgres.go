@@ -144,7 +144,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 }
 
 func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error) {
-	summary := model.ObservabilitySummary{}
+	summary := emptyObservabilitySummary()
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT count(*),
 			count(*) FILTER (WHERE disposition IN ('blocked', 'rejected')),

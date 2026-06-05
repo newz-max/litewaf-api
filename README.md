@@ -44,6 +44,7 @@ litewaf-gateway      配套网关仓库
 
 - 后端与项目文档：[litewaf-api](https://github.com/newz-max/litewaf-api)
 - 前端管理台：[litewaf-dashboard](https://github.com/newz-max/litewaf-dashboard)
+- OpenResty 数据面网关：[litewaf-gateway](https://github.com/newz-max/litewaf-gateway)
 
 ## 文档入口
 

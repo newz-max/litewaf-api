@@ -1166,6 +1166,9 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	if ccModule.CompatibilitySource != "rate_limits" || ccModule.Enabled != 1 || len(ccModule.Warnings) == 0 {
 		t.Fatalf("unexpected cc overview: %+v", ccModule)
 	}
+	if len(ccModule.RiskDetails) == 0 || ccModule.RiskDetails[0].Scope == "" || ccModule.RiskDetails[0].Impact == "" || ccModule.RiskDetails[0].Recommendation == "" {
+		t.Fatalf("cc overview missing structured risk details: %+v", ccModule)
+	}
 	if accessModule.CompatibilitySource != "access_lists" || accessModule.Allow != 1 || len(accessModule.Warnings) == 0 {
 		t.Fatalf("unexpected access overview: %+v", accessModule)
 	}
@@ -1186,6 +1189,14 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	summary := preview["summary"]
 	if summary["module_matrix"] == nil || summary["risk_warnings"] == nil {
 		t.Fatalf("preview missing module matrix or risks: %+v", summary)
+	}
+	risks, ok := summary["risk_warnings"].([]any)
+	if !ok || len(risks) == 0 {
+		t.Fatalf("preview missing structured risks: %+v", summary)
+	}
+	firstRisk, ok := risks[0].(map[string]any)
+	if !ok || firstRisk["scope"] == "" || firstRisk["impact"] == "" || firstRisk["recommendation"] == "" {
+		t.Fatalf("preview risk missing actionable context: %+v", risks[0])
 	}
 	if int(summary["rate_limits"].(float64)) != 1 || int(summary["access_lists"].(float64)) != 1 {
 		t.Fatalf("preview lost compatibility counts: %+v", summary)
@@ -1229,6 +1240,14 @@ func TestPublishPreviewSummarizesAdvancedCCRisk(t *testing.T) {
 	warnings, ok := cc["warnings"].([]any)
 	if !ok || len(warnings) == 0 {
 		t.Fatalf("expected advanced cc warning: %+v", cc)
+	}
+	details, ok := cc["risk_details"].([]any)
+	if !ok || len(details) == 0 {
+		t.Fatalf("expected advanced cc risk details: %+v", cc)
+	}
+	firstDetail, ok := details[0].(map[string]any)
+	if !ok || firstDetail["rule_name"] == "" || firstDetail["scope"] == "" || firstDetail["action"] == "" {
+		t.Fatalf("advanced cc risk details missing context: %+v", details[0])
 	}
 }
 

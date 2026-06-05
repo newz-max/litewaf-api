@@ -153,18 +153,19 @@ type ccProtectionPreviewRequest struct {
 }
 
 type ccProtectionPreviewMatch struct {
-	RuleID      int64    `json:"rule_id"`
-	RuleName    string   `json:"rule_name"`
-	Matched     bool     `json:"matched"`
-	Enabled     bool     `json:"enabled"`
-	Counter     string   `json:"counter"`
-	CounterKey  string   `json:"counter_key"`
-	Threshold   int      `json:"threshold"`
-	WindowSec   int      `json:"window_sec"`
-	Action      string   `json:"action"`
-	Explanation string   `json:"explanation"`
-	Partial     bool     `json:"partial"`
-	Warnings    []string `json:"warnings"`
+	RuleID      int64                        `json:"rule_id"`
+	RuleName    string                       `json:"rule_name"`
+	Matched     bool                         `json:"matched"`
+	Enabled     bool                         `json:"enabled"`
+	Counter     string                       `json:"counter"`
+	CounterKey  string                       `json:"counter_key"`
+	Threshold   int                          `json:"threshold"`
+	WindowSec   int                          `json:"window_sec"`
+	Action      string                       `json:"action"`
+	Explanation string                       `json:"explanation"`
+	Partial     bool                         `json:"partial"`
+	Warnings    []string                     `json:"warnings"`
+	RiskDetails []model.ProtectionModuleRisk `json:"risk_details,omitempty"`
 }
 
 type ccProtectionPreviewResponse struct {
@@ -246,6 +247,7 @@ func previewCCRule(rule model.ProtectionRule, input ccProtectionPreviewRequest) 
 		Action:      rule.Action.Type,
 		Explanation: "rule matched supplied request facts",
 		Warnings:    ccRuleRiskWarnings(rule),
+		RiskDetails: ccRuleRiskDetails(rule),
 	}
 	if !ccPreviewMethodMatches(rule.Match.Methods, input.Method) {
 		return match
@@ -492,19 +494,28 @@ func ccGlobPathValid(value string) bool {
 }
 
 func ccRuleRiskWarnings(rule model.ProtectionRule) []string {
-	if !rule.Enabled {
-		return []string{}
-	}
 	warnings := []string{}
-	blocking := rule.Action.Type == "block" || rule.Action.Type == "ban" || rule.Action.Type == "rate-limit"
-	lowThreshold := rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec > 0 && rule.Limit.WindowSec <= 60
-	if blocking && lowThreshold && rule.Match.Path == "/" && (rule.Match.PathMatch == "prefix" || rule.Match.PathMatch == "glob") {
-		warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name))
-	}
-	if blocking && lowThreshold && rule.Match.PathMatch == "glob" && broadCCGlob(rule.Match.Path) {
-		warnings = append(warnings, fmt.Sprintf("规则 %s 使用较宽泛 glob 匹配和较低阈值", rule.Name))
+	for _, risk := range ccRuleRiskDetails(rule) {
+		warnings = append(warnings, risk.Message)
 	}
 	return warnings
+}
+
+func ccRuleRiskDetails(rule model.ProtectionRule) []model.ProtectionModuleRisk {
+	if !rule.Enabled {
+		return []model.ProtectionModuleRisk{}
+	}
+	risks := []model.ProtectionModuleRisk{}
+	blocking := rule.Action.Type == "block" || rule.Action.Type == "ban" || rule.Action.Type == "rate-limit"
+	lowThreshold := rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec > 0 && rule.Limit.WindowSec <= 60
+	scope := fmt.Sprintf("%s %s，方法 %s", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods))
+	if blocking && lowThreshold && rule.Match.Path == "/" && (rule.Match.PathMatch == "prefix" || rule.Match.PathMatch == "glob") {
+		risks = append(risks, protectionRiskDetail("cc-protection", "CC 防护", rule.Name, scope, rule.Action.Type, "全站低阈值可能限制正常用户访问", "先使用观察模式或提高阈值，确认业务峰值后再发布", fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name)))
+	}
+	if blocking && lowThreshold && rule.Match.PathMatch == "glob" && broadCCGlob(rule.Match.Path) {
+		risks = append(risks, protectionRiskDetail("cc-protection", "CC 防护", rule.Name, scope, rule.Action.Type, "宽泛 glob 与低阈值组合可能覆盖非预期接口", "收窄 glob 范围或先通过 CC 模拟预览验证命中", fmt.Sprintf("规则 %s 使用较宽泛 glob 匹配和较低阈值", rule.Name)))
+	}
+	return risks
 }
 
 func broadCCGlob(value string) bool {

@@ -249,25 +249,31 @@ type ProtectionOverview struct {
 }
 
 type ProtectionModuleOverview struct {
-	Key                 string         `json:"key"`
-	Label               string         `json:"label"`
-	Category            string         `json:"category"`
-	Route               string         `json:"route"`
-	LogModule           string         `json:"log_module,omitempty"`
-	Rules               int            `json:"rules"`
-	Enabled             int            `json:"enabled"`
-	Observe             int            `json:"observe"`
-	Block               int            `json:"block"`
-	Allow               int            `json:"allow,omitempty"`
-	CompatibilitySource string         `json:"compatibility_source,omitempty"`
-	Warnings            []string       `json:"warnings"`
-	Evidence            []SummaryCount `json:"evidence"`
+	Key                 string                 `json:"key"`
+	Label               string                 `json:"label"`
+	Category            string                 `json:"category"`
+	Route               string                 `json:"route"`
+	LogModule           string                 `json:"log_module,omitempty"`
+	Rules               int                    `json:"rules"`
+	Enabled             int                    `json:"enabled"`
+	Observe             int                    `json:"observe"`
+	Block               int                    `json:"block"`
+	Allow               int                    `json:"allow,omitempty"`
+	CompatibilitySource string                 `json:"compatibility_source,omitempty"`
+	Warnings            []string               `json:"warnings"`
+	RiskDetails         []ProtectionModuleRisk `json:"risk_details,omitempty"`
+	Evidence            []SummaryCount         `json:"evidence"`
 }
 
 type ProtectionModuleRisk struct {
-	Module  string `json:"module"`
-	Label   string `json:"label"`
-	Message string `json:"message"`
+	Module         string `json:"module"`
+	Label          string `json:"label"`
+	RuleName       string `json:"rule_name,omitempty"`
+	Scope          string `json:"scope,omitempty"`
+	Action         string `json:"action,omitempty"`
+	Impact         string `json:"impact,omitempty"`
+	Recommendation string `json:"recommendation,omitempty"`
+	Message        string `json:"message"`
 }
 
 type ProtectionRuleMigrationHealth struct {

@@ -613,6 +613,7 @@ func moduleOverview(key, label, category, route, logModule string, data envelope
 		Allow:               envelopeInt(data, "allow"),
 		CompatibilitySource: compatibilitySource(key),
 		Warnings:            envelopeStrings(data, "warnings"),
+		RiskDetails:         envelopeRiskDetails(data),
 		Evidence:            evidence,
 	}
 }
@@ -736,6 +737,18 @@ func summaryCountTotal(items []model.SummaryCount, prefix string) []model.Summar
 func protectionRisks(modules []model.ProtectionModuleOverview) []model.ProtectionModuleRisk {
 	risks := []model.ProtectionModuleRisk{}
 	for _, module := range modules {
+		if len(module.RiskDetails) > 0 {
+			for _, risk := range module.RiskDetails {
+				if risk.Module == "" {
+					risk.Module = module.Key
+				}
+				if risk.Label == "" {
+					risk.Label = module.Label
+				}
+				risks = append(risks, risk)
+			}
+			continue
+		}
 		for _, warning := range module.Warnings {
 			risks = append(risks, model.ProtectionModuleRisk{
 				Module:  module.Key,
@@ -745,6 +758,16 @@ func protectionRisks(modules []model.ProtectionModuleOverview) []model.Protectio
 		}
 	}
 	return risks
+}
+
+func envelopeRiskDetails(data envelope) []model.ProtectionModuleRisk {
+	values, ok := data["risk_details"].([]model.ProtectionModuleRisk)
+	if !ok || values == nil {
+		return []model.ProtectionModuleRisk{}
+	}
+	out := make([]model.ProtectionModuleRisk, len(values))
+	copy(out, values)
+	return out
 }
 
 func compatibilitySource(key string) string {
@@ -780,6 +803,95 @@ func envelopeStrings(data envelope, key string) []string {
 	out := make([]string, len(values))
 	copy(out, values)
 	return out
+}
+
+func protectionRiskDetail(module, label, ruleName, scope, action, impact, recommendation, message string) model.ProtectionModuleRisk {
+	return model.ProtectionModuleRisk{
+		Module:         module,
+		Label:          label,
+		RuleName:       ruleName,
+		Scope:          scope,
+		Action:         action,
+		Impact:         impact,
+		Recommendation: recommendation,
+		Message:        message,
+	}
+}
+
+func riskMessages(risks []model.ProtectionModuleRisk) []string {
+	messages := make([]string, 0, len(risks))
+	for _, risk := range risks {
+		messages = append(messages, risk.Message)
+	}
+	return messages
+}
+
+func methodScope(methods []string) string {
+	if len(methods) == 0 {
+		return "全部方法"
+	}
+	return strings.Join(methods, ",")
+}
+
+func broadProtectionPath(match model.ProtectionRuleMatch) bool {
+	return match.Path == "/" && (match.PathMatch == "" || match.PathMatch == "prefix" || match.PathMatch == "glob")
+}
+
+func accessRuleScope(rule model.ProtectionRule) string {
+	switch rule.Match.Target {
+	case "ip", "cidr":
+		return fmt.Sprintf("%s %s，方法 %s", rule.Match.Target, rule.Match.Value, methodScope(rule.Match.Methods))
+	case "host":
+		host := rule.Match.Host
+		if host == "" {
+			host = rule.Match.Value
+		}
+		return fmt.Sprintf("Host %s %s，方法 %s", rule.Match.Operator, host, methodScope(rule.Match.Methods))
+	case "header":
+		return fmt.Sprintf("Header %s %s %s，方法 %s", rule.Match.HeaderName, rule.Match.Operator, rule.Match.Value, methodScope(rule.Match.Methods))
+	default:
+		return fmt.Sprintf("%s %s，方法 %s", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods))
+	}
+}
+
+func uploadRuleScope(rule model.ProtectionRule) string {
+	extensions := "全部扩展名"
+	maxBytes := "未限制大小"
+	if rule.Upload != nil {
+		if len(rule.Upload.Extensions) > 0 {
+			extensions = strings.Join(rule.Upload.Extensions, ",")
+		}
+		if rule.Upload.MaxBytes > 0 {
+			maxBytes = fmt.Sprintf("%d bytes", rule.Upload.MaxBytes)
+		}
+	}
+	return fmt.Sprintf("%s %s，方法 %s，扩展名 %s，大小 %s", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), extensions, maxBytes)
+}
+
+func botRuleScope(rule model.ProtectionRule) string {
+	mode := "js-challenge"
+	ttl := 0
+	if rule.Challenge != nil {
+		mode = rule.Challenge.Mode
+		ttl = rule.Challenge.VerifyTTL
+	}
+	return fmt.Sprintf("%s %s，方法 %s，模式 %s，TTL %d 秒", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), mode, ttl)
+}
+
+func dynamicRuleScope(rule model.ProtectionRule) string {
+	if rule.Dynamic == nil {
+		return fmt.Sprintf("%s %s，方法 %s，类别 %s", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), rule.Category)
+	}
+	switch rule.Category {
+	case "dynamic-token":
+		return fmt.Sprintf("%s %s，方法 %s，令牌位置 %s，TTL %d 秒", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), rule.Dynamic.TokenPlacement, rule.Dynamic.TokenTTL)
+	case "page-mutation":
+		return fmt.Sprintf("%s %s，方法 %s，插入点 %s，响应上限 %d bytes", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), rule.Dynamic.MutationMarker, rule.Dynamic.MutationMaxBytes)
+	case "waiting-room":
+		return fmt.Sprintf("%s %s，方法 %s，容量 %d，重试 %d 秒", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), rule.Dynamic.QueueCapacity, rule.Dynamic.RetryInterval)
+	default:
+		return fmt.Sprintf("%s %s，方法 %s，类别 %s", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods), rule.Category)
+	}
 }
 
 func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource, catalogPackages []model.RuleCatalogPackage, trustKeys []model.RuleTrustKey, providers []model.RuleProviderAdapter, providerPackages []model.RuleProviderPackage) envelope {
@@ -896,7 +1008,7 @@ func accessControlSummary(rules []model.ProtectionRule) envelope {
 	allow := 0
 	block := 0
 	logOnly := 0
-	warnings := []string{}
+	risks := []model.ProtectionModuleRisk{}
 	migration := migrationSummary(rules)
 	for _, rule := range rules {
 		if !rule.Enabled {
@@ -907,15 +1019,18 @@ func accessControlSummary(rules []model.ProtectionRule) envelope {
 		case "allow":
 			allow++
 			if rule.Match.Target == "ip" && (rule.Match.Value == "0.0.0.0" || rule.Match.Value == "::") {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 使用较宽泛的来源放行", rule.Name))
+				risks = append(risks, protectionRiskDetail("access-control", "访问控制", rule.Name, accessRuleScope(rule), rule.Action.Type, "宽泛来源放行可能绕过后续防护模块", "确认来源范围是否可信，必要时改为 CIDR 白名单并提高优先级可见性", fmt.Sprintf("规则 %s 使用较宽泛的来源放行", rule.Name)))
 			}
 			if rule.Match.Target == "path" && rule.Match.Path == "/" && rule.Match.PathMatch == "prefix" {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用放行动作", rule.Name))
+				risks = append(risks, protectionRiskDetail("access-control", "访问控制", rule.Name, accessRuleScope(rule), rule.Action.Type, "全站放行可能成为终止性允许决策", "确认该规则只用于可信来源，并优先使用更窄路径或 Host 条件", fmt.Sprintf("规则 %s 对全站路径使用放行动作", rule.Name)))
 			}
 		case "log-only":
 			logOnly++
 		case "block":
 			block++
+			if broadProtectionPath(rule.Match) && len(rule.Match.Methods) == 0 {
+				risks = append(risks, protectionRiskDetail("access-control", "访问控制", rule.Name, accessRuleScope(rule), rule.Action.Type, "全站阻断可能导致站点不可用", "先使用观察模式验证命中，再收窄来源、Host 或路径范围", fmt.Sprintf("规则 %s 对宽泛范围使用阻断动作", rule.Name)))
+			}
 		}
 	}
 	return envelope{
@@ -924,7 +1039,8 @@ func accessControlSummary(rules []model.ProtectionRule) envelope {
 		"allow":           allow,
 		"block":           block,
 		"log_only":        logOnly,
-		"warnings":        warnings,
+		"warnings":        riskMessages(risks),
+		"risk_details":    risks,
 		"migrated":        migration.Migrated,
 		"legacy_fallback": migration.LegacyFallback,
 		"disabled":        migration.Disabled,
@@ -937,7 +1053,7 @@ func ccProtectionSummary(rules []model.ProtectionRule) envelope {
 	logOnly := 0
 	advancedCounters := 0
 	globRules := 0
-	warnings := []string{}
+	risks := []model.ProtectionModuleRisk{}
 	migration := migrationSummary(rules)
 	for _, rule := range rules {
 		if rule.Enabled {
@@ -955,18 +1071,18 @@ func ccProtectionSummary(rules []model.ProtectionRule) envelope {
 			case "not_found_frequency", "attack_frequency", "session", "device":
 				advancedCounters++
 			}
-			warnings = append(warnings, ccRuleRiskWarnings(rule)...)
+			risks = append(risks, ccRuleRiskDetails(rule)...)
 			if rule.Match.Path == "/" && rule.Match.PathMatch == "prefix" && rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec <= 60 {
 				found := false
 				message := fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name)
-				for _, existing := range warnings {
-					if existing == message {
+				for _, existing := range risks {
+					if existing.Message == message {
 						found = true
 						break
 					}
 				}
 				if !found {
-					warnings = append(warnings, message)
+					risks = append(risks, protectionRiskDetail("cc-protection", "CC 防护", rule.Name, fmt.Sprintf("%s %s，方法 %s", rule.Match.PathMatch, rule.Match.Path, methodScope(rule.Match.Methods)), rule.Action.Type, "全站低阈值可能限制正常用户访问", "先使用观察模式或提高阈值，确认业务峰值后再发布", message))
 				}
 			}
 		}
@@ -978,7 +1094,8 @@ func ccProtectionSummary(rules []model.ProtectionRule) envelope {
 		"log_only":          logOnly,
 		"advanced_counters": advancedCounters,
 		"glob_rules":        globRules,
-		"warnings":          warnings,
+		"warnings":          riskMessages(risks),
+		"risk_details":      risks,
 		"migrated":          migration.Migrated,
 		"legacy_fallback":   migration.LegacyFallback,
 		"disabled":          migration.Disabled,
@@ -1018,7 +1135,7 @@ func uploadProtectionSummary(rules []model.ProtectionRule) envelope {
 	sizeRules := 0
 	block := 0
 	logOnly := 0
-	warnings := []string{}
+	risks := []model.ProtectionModuleRisk{}
 	migration := migrationSummary(rules)
 	for _, item := range rules {
 		if !item.Enabled {
@@ -1030,8 +1147,8 @@ func uploadProtectionSummary(rules []model.ProtectionRule) envelope {
 		}
 		if item.Upload != nil && item.Upload.MaxBytes > 0 {
 			sizeRules++
-			if item.Upload.MaxBytes < 1024*1024 {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 使用较小上传大小限制", item.Name))
+			if item.Action.Type == "block" && item.Upload.MaxBytes < 1024*1024 {
+				risks = append(risks, protectionRiskDetail("upload-protection", "上传防护", item.Name, uploadRuleScope(item), item.Action.Type, "较小上传大小限制可能影响头像、附件或业务文件上传", "确认业务文件大小基线，必要时先使用观察模式或收窄路径", fmt.Sprintf("规则 %s 使用较小上传大小限制", item.Name)))
 			}
 		}
 		switch item.Action.Type {
@@ -1039,8 +1156,8 @@ func uploadProtectionSummary(rules []model.ProtectionRule) envelope {
 			logOnly++
 		case "block":
 			block++
-			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站上传使用阻断动作", item.Name))
+			if broadProtectionPath(item.Match) || (item.Upload != nil && len(item.Upload.Extensions) == 0 && item.Upload.MaxBytes == 0) {
+				risks = append(risks, protectionRiskDetail("upload-protection", "上传防护", item.Name, uploadRuleScope(item), item.Action.Type, "宽泛上传阻断可能影响所有上传入口", "限定上传路径、方法或扩展名，并先验证真实业务上传流量", fmt.Sprintf("规则 %s 对宽泛上传范围使用阻断动作", item.Name)))
 			}
 		}
 	}
@@ -1051,7 +1168,8 @@ func uploadProtectionSummary(rules []model.ProtectionRule) envelope {
 		"size_rules":      sizeRules,
 		"block":           block,
 		"log_only":        logOnly,
-		"warnings":        warnings,
+		"warnings":        riskMessages(risks),
+		"risk_details":    risks,
 		"migrated":        migration.Migrated,
 		"legacy_fallback": migration.LegacyFallback,
 		"disabled":        migration.Disabled,
@@ -1067,7 +1185,7 @@ func botProtectionSummary(rules []model.ProtectionRule) envelope {
 	searchEngineBypass := 0
 	block := 0
 	logOnly := 0
-	warnings := []string{}
+	risks := []model.ProtectionModuleRisk{}
 	migration := migrationSummary(rules)
 	for _, item := range rules {
 		if !item.Enabled {
@@ -1100,11 +1218,14 @@ func botProtectionSummary(rules []model.ProtectionRule) envelope {
 			logOnly++
 		case "block":
 			block++
-			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用 Bot Challenge 阻断", item.Name))
+			if broadProtectionPath(item.Match) {
+				risks = append(risks, protectionRiskDetail("bot-protection", "Bot / 人机验证", item.Name, botRuleScope(item), failureAction, "全站挑战阻断可能影响正常用户、爬虫和回调请求", "先限定高风险路径或使用观察模式，确认挑战通过率后再扩大范围", fmt.Sprintf("规则 %s 对全站路径启用 Bot Challenge 阻断", item.Name)))
 			}
 			if len(item.Match.Methods) == 0 {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用 Bot Challenge 阻断", item.Name))
+				risks = append(risks, protectionRiskDetail("bot-protection", "Bot / 人机验证", item.Name, botRuleScope(item), failureAction, "全部方法挑战可能影响 POST、回调或 API 请求", "优先限制 GET/登录等目标方法，并为 API 保留绕过策略", fmt.Sprintf("规则 %s 对全部方法启用 Bot Challenge 阻断", item.Name)))
+			}
+			if item.Challenge != nil && (item.Challenge.BehaviorEnabled || item.Challenge.DeviceBinding || item.Challenge.Mode == "captcha") && (broadProtectionPath(item.Match) || len(item.Match.Methods) == 0) {
+				risks = append(risks, protectionRiskDetail("bot-protection", "Bot / 人机验证", item.Name, botRuleScope(item), failureAction, "严格挑战增强可能造成兼容性或误拦截问题", "确认 captcha、行为评分或设备信号对目标客户端兼容，再发布到宽泛范围", fmt.Sprintf("规则 %s 使用严格 Bot 增强并覆盖宽泛范围", item.Name)))
 			}
 		}
 	}
@@ -1118,7 +1239,8 @@ func botProtectionSummary(rules []model.ProtectionRule) envelope {
 		"search_engine_bypass": searchEngineBypass,
 		"block":                block,
 		"log_only":             logOnly,
-		"warnings":             warnings,
+		"warnings":             riskMessages(risks),
+		"risk_details":         risks,
 		"migrated":             migration.Migrated,
 		"legacy_fallback":      migration.LegacyFallback,
 		"disabled":             migration.Disabled,
@@ -1133,7 +1255,7 @@ func dynamicProtectionSummary(rules []model.ProtectionRule) envelope {
 	block := 0
 	logOnly := 0
 	waitingRoomAction := 0
-	warnings := []string{}
+	risks := []model.ProtectionModuleRisk{}
 	migration := migrationSummary(rules)
 	for _, item := range rules {
 		if !item.Enabled {
@@ -1150,11 +1272,11 @@ func dynamicProtectionSummary(rules []model.ProtectionRule) envelope {
 			switch failureAction {
 			case "block":
 				block++
-				if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
-					warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用动态令牌阻断", item.Name))
+				if broadProtectionPath(item.Match) {
+					risks = append(risks, protectionRiskDetail("dynamic-protection", "动态防护 / 等候室", item.Name, dynamicRuleScope(item), failureAction, "全站动态令牌阻断可能影响无状态客户端或未注入令牌的入口", "确认 token 发放路径覆盖目标页面，并先从关键路径小范围发布", fmt.Sprintf("规则 %s 对全站路径启用动态令牌阻断", item.Name)))
 				}
 				if len(item.Match.Methods) == 0 {
-					warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用动态令牌阻断", item.Name))
+					risks = append(risks, protectionRiskDetail("dynamic-protection", "动态防护 / 等候室", item.Name, dynamicRuleScope(item), failureAction, "全部方法动态令牌可能影响 API、回调或静态资源请求", "限定需要浏览器令牌的路径和方法，保留 API 兼容入口", fmt.Sprintf("规则 %s 对全部方法启用动态令牌阻断", item.Name)))
 				}
 			case "log-only":
 				logOnly++
@@ -1162,8 +1284,12 @@ func dynamicProtectionSummary(rules []model.ProtectionRule) envelope {
 		case "page-mutation":
 			pageMutations++
 			logOnly++
-			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站 HTML 响应启用页面动态化", item.Name))
+			mutationMaxBytes := 0
+			if item.Dynamic != nil {
+				mutationMaxBytes = item.Dynamic.MutationMaxBytes
+			}
+			if broadProtectionPath(item.Match) || mutationMaxBytes > 1024*1024 {
+				risks = append(risks, protectionRiskDetail("dynamic-protection", "动态防护 / 等候室", item.Name, dynamicRuleScope(item), "page-mutation", "宽泛页面动态化可能影响前端兼容或缓存命中", "先限制 HTML 页面路径并确认响应大小边界，再扩大覆盖", fmt.Sprintf("规则 %s 对宽泛 HTML 响应启用页面动态化", item.Name)))
 			}
 		case "waiting-room":
 			waitingRooms++
@@ -1176,11 +1302,14 @@ func dynamicProtectionSummary(rules []model.ProtectionRule) envelope {
 			switch overflowAction {
 			case "waiting-room":
 				waitingRoomAction++
-				if item.Match.Path == "/" && item.Match.PathMatch == "prefix" && queueCapacity < 50 {
-					warnings = append(warnings, fmt.Sprintf("规则 %s 对全站使用较低等候室容量", item.Name))
+				if broadProtectionPath(item.Match) && queueCapacity < 50 {
+					risks = append(risks, protectionRiskDetail("dynamic-protection", "动态防护 / 等候室", item.Name, dynamicRuleScope(item), overflowAction, "低容量全站等候室可能让正常用户排队或收到过载响应", "根据真实并发设置容量，先对活动入口小范围启用", fmt.Sprintf("规则 %s 对全站使用较低等候室容量", item.Name)))
 				}
 			case "block":
 				block++
+				if broadProtectionPath(item.Match) {
+					risks = append(risks, protectionRiskDetail("dynamic-protection", "动态防护 / 等候室", item.Name, dynamicRuleScope(item), overflowAction, "等候室溢出阻断可能在流量峰值时直接拒绝正常用户", "优先使用 waiting-room 动作并设置合理容量，再考虑阻断溢出", fmt.Sprintf("规则 %s 对宽泛等候室范围使用阻断溢出动作", item.Name)))
+				}
 			case "log-only":
 				logOnly++
 			}
@@ -1195,7 +1324,8 @@ func dynamicProtectionSummary(rules []model.ProtectionRule) envelope {
 		"block":               block,
 		"log_only":            logOnly,
 		"waiting_room_action": waitingRoomAction,
-		"warnings":            warnings,
+		"warnings":            riskMessages(risks),
+		"risk_details":        risks,
 		"migrated":            migration.Migrated,
 		"legacy_fallback":     migration.LegacyFallback,
 		"disabled":            migration.Disabled,

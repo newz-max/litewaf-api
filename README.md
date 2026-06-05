@@ -18,7 +18,7 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 sudo mkdir -p /opt/litewaf
 cd /opt/litewaf
 
-BASE_URL="https://gitee.com/old_records/litewaf-api/raw/master/deploy"
+BASE_URL="https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy"
 
 sudo curl -fsSLo docker-compose.prod.yml "$BASE_URL/docker-compose.prod.yml"
 sudo curl -fsSLo .env.example "$BASE_URL/.env.example"

@@ -505,6 +505,7 @@ CC 防护接口以通用 `protection_rules` 表作为主存储，对外以 `modu
 | --- | --- | --- | --- |
 | GET | `/api/v1/cc-protection/rules` | 读 | 查询 CC 防护规则 |
 | POST | `/api/v1/cc-protection/rules` | 写 | 创建 CC 防护规则 |
+| POST | `/api/v1/cc-protection/preview` | 读 | 使用样本请求事实模拟预览 CC 规则命中 |
 | GET | `/api/v1/cc-protection/rules/{id}` | 读 | 查询 CC 防护规则 |
 | PUT | `/api/v1/cc-protection/rules/{id}` | 写 | 更新 CC 防护规则 |
 | DELETE | `/api/v1/cc-protection/rules/{id}` | 写 | 删除 CC 防护规则 |
@@ -537,6 +538,8 @@ CC 防护接口以通用 `protection_rules` 表作为主存储，对外以 `modu
   }
 }
 ```
+
+高级 CC 能力支持 `path_match=glob`，以及 `not_found_frequency`、`attack_frequency`、`session`、`device` 计数维度。`session` 计数可通过 `limit.session_source` 和 `limit.session_name` 指定 Cookie 或 Header；`device` 当前使用 `device_strategy=coarse`。`POST /api/v1/cc-protection/preview` 只返回匹配、计数键说明、风险和 partial 解释，不修改规则、发布记录或网关计数。
 
 支持字段：
 

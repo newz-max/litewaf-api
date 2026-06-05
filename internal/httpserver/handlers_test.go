@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"litewaf-api/internal/app"
@@ -1054,6 +1055,73 @@ func TestCCProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	}
 }
 
+func TestCCProtectionAdvancedCountersAndPreview(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Session API glob","site_id":3,"match":{"path":"/api/*/login","path_match":"glob","methods":["POST"]},"limit":{"counter":"session","session_source":"cookie","session_name":"sid","threshold":5,"window_sec":60,"ban_duration_sec":120},"action":{"type":"block"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/rules", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create advanced cc status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.ProtectionRule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode advanced cc: %v", err)
+	}
+	if createResponse.Item.Match.PathMatch != "glob" || createResponse.Item.Limit.Counter != "session" || createResponse.Item.Limit.SessionName != "sid" {
+		t.Fatalf("advanced cc fields not preserved: %+v", createResponse.Item)
+	}
+
+	previewBody := bytes.NewBufferString(`{"site_id":3,"path":"/api/v1/login","method":"POST","client_ip":"198.51.100.8"}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/preview", previewBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var previewResponse struct {
+		Item ccProtectionPreviewResponse `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&previewResponse); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if len(previewResponse.Item.Matches) != 1 || !previewResponse.Item.Matches[0].Partial {
+		t.Fatalf("expected one partial session match, got %+v", previewResponse.Item.Matches)
+	}
+	if !strings.Contains(previewResponse.Item.Matches[0].CounterKey, "missing-session") {
+		t.Fatalf("expected missing session explanation in counter key, got %+v", previewResponse.Item.Matches[0])
+	}
+
+	previewBody = bytes.NewBufferString(`{"site_id":3,"path":"/static/app.js","method":"GET"}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/preview", previewBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no-match preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&previewResponse); err != nil {
+		t.Fatalf("decode no-match preview: %v", err)
+	}
+	if len(previewResponse.Item.Matches) != 0 {
+		t.Fatalf("expected no fabricated preview matches, got %+v", previewResponse.Item.Matches)
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/preview", bytes.NewBufferString(`{"site_id":3,"path":"/api/v1/login","method":"POST","session_id":"abc"}`)), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readonly preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
@@ -1124,6 +1192,43 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	}
 	if summary["compatibility_diagnostics"] == nil {
 		t.Fatalf("preview missing compatibility diagnostics: %+v", summary)
+	}
+}
+
+func TestPublishPreviewSummarizesAdvancedCCRisk(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	body := bytes.NewBufferString(`{"name":"Broad glob low threshold","site_id":1,"match":{"path":"/*","path_match":"glob","methods":[]},"limit":{"counter":"device","device_strategy":"coarse","threshold":10,"window_sec":60,"ban_duration_sec":300},"action":{"type":"rate-limit"}}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/rules", body), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create advanced risk rule status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/releases/preview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Summary map[string]any `json:"summary"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode publish preview: %v", err)
+	}
+	cc, ok := response.Summary["cc_protection"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing cc protection summary: %+v", response.Summary)
+	}
+	if int(cc["advanced_counters"].(float64)) != 1 || int(cc["glob_rules"].(float64)) != 1 || int(cc["block"].(float64)) != 1 {
+		t.Fatalf("advanced cc counts missing: %+v", cc)
+	}
+	warnings, ok := cc["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatalf("expected advanced cc warning: %+v", cc)
 	}
 }
 
@@ -1226,8 +1331,11 @@ func TestCCProtectionWriteValidationAndAuthorization(t *testing.T) {
 	invalidBodies := []string{
 		`{"name":"bad","match":{"path":"api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/api","path_match":"regex"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api/**","path_match":"glob"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/api","path_match":"exact","methods":["TRACE"]},"limit":{"counter":"client_ip","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"cookie","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"session","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"device","device_strategy":"raw","threshold":1,"window_sec":1},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":0,"window_sec":1},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":0},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/api","path_match":"exact"},"limit":{"counter":"client_ip","threshold":1,"window_sec":1,"ban_duration_sec":-1},"action":{"type":"block"}}`,

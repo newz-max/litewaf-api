@@ -118,6 +118,7 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 
 	mux.HandleFunc("GET /api/v1/cc-protection/rules", handlers.require(permissionRead, handlers.listCCProtectionRules))
 	mux.HandleFunc("POST /api/v1/cc-protection/rules", handlers.require(permissionWrite, handlers.createCCProtectionRule))
+	mux.HandleFunc("POST /api/v1/cc-protection/preview", handlers.require(permissionRead, handlers.previewCCProtection))
 	mux.HandleFunc("GET /api/v1/cc-protection/rules/{id}", handlers.require(permissionRead, handlers.getCCProtectionRule))
 	mux.HandleFunc("PUT /api/v1/cc-protection/rules/{id}", handlers.require(permissionWrite, handlers.updateCCProtectionRule))
 	mux.HandleFunc("DELETE /api/v1/cc-protection/rules/{id}", handlers.require(permissionWrite, handlers.deleteCCProtectionRule))

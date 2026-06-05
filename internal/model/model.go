@@ -460,6 +460,9 @@ type ProtectionRuleLimit struct {
 	Threshold      int    `json:"threshold"`
 	WindowSec      int    `json:"window_sec"`
 	BanDurationSec int    `json:"ban_duration_sec"`
+	SessionSource  string `json:"session_source,omitempty"`
+	SessionName    string `json:"session_name,omitempty"`
+	DeviceStrategy string `json:"device_strategy,omitempty"`
 }
 
 type ProtectionRuleUpload struct {

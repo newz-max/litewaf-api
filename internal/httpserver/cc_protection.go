@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -137,6 +139,214 @@ func (h handlers) deleteCCProtectionRule(w http.ResponseWriter, r *http.Request)
 	h.writeNoContent(w, err)
 }
 
+type ccProtectionPreviewRequest struct {
+	SiteID          int64   `json:"site_id"`
+	Path            string  `json:"path"`
+	Method          string  `json:"method"`
+	ClientIP        string  `json:"client_ip"`
+	SessionID       string  `json:"session_id"`
+	DeviceID        string  `json:"device_id"`
+	Status          int     `json:"status"`
+	AttackMatched   bool    `json:"attack_matched"`
+	RuleIDs         []int64 `json:"rule_ids"`
+	IncludeDisabled bool    `json:"include_disabled"`
+}
+
+type ccProtectionPreviewMatch struct {
+	RuleID      int64    `json:"rule_id"`
+	RuleName    string   `json:"rule_name"`
+	Matched     bool     `json:"matched"`
+	Enabled     bool     `json:"enabled"`
+	Counter     string   `json:"counter"`
+	CounterKey  string   `json:"counter_key"`
+	Threshold   int      `json:"threshold"`
+	WindowSec   int      `json:"window_sec"`
+	Action      string   `json:"action"`
+	Explanation string   `json:"explanation"`
+	Partial     bool     `json:"partial"`
+	Warnings    []string `json:"warnings"`
+}
+
+type ccProtectionPreviewResponse struct {
+	Matches []ccProtectionPreviewMatch `json:"matches"`
+}
+
+func (h handlers) previewCCProtection(w http.ResponseWriter, r *http.Request) {
+	var input ccProtectionPreviewRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.normalize()
+	rules, err := h.listPreviewCCRules(r, input)
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	matches := []ccProtectionPreviewMatch{}
+	for _, rule := range rules {
+		match := previewCCRule(rule, input)
+		if match.Matched {
+			matches = append(matches, match)
+		}
+	}
+	writeJSON(w, http.StatusOK, envelope{"item": ccProtectionPreviewResponse{Matches: matches}})
+}
+
+func (r *ccProtectionPreviewRequest) normalize() {
+	r.Path = strings.TrimSpace(r.Path)
+	r.Method = strings.ToUpper(strings.TrimSpace(r.Method))
+	r.ClientIP = strings.TrimSpace(r.ClientIP)
+	r.SessionID = strings.TrimSpace(r.SessionID)
+	r.DeviceID = strings.TrimSpace(r.DeviceID)
+}
+
+func (h handlers) listPreviewCCRules(r *http.Request, input ccProtectionPreviewRequest) ([]model.ProtectionRule, error) {
+	protectionRules, err := h.app.Store.ListProtectionRules(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	rateLimits, err := h.app.Store.ListRateLimitRules(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	rules := mergedCCProtectionRules(protectionRules, rateLimits)
+	selected := map[int64]bool{}
+	for _, id := range input.RuleIDs {
+		if id > 0 {
+			selected[id] = true
+		}
+	}
+	out := []model.ProtectionRule{}
+	for _, rule := range rules {
+		if rule.Module != ccProtectionModule || rule.Category != rateLimitCategory {
+			continue
+		}
+		if input.SiteID > 0 && rule.SiteID > 0 && rule.SiteID != input.SiteID {
+			continue
+		}
+		if len(selected) > 0 && !selected[rule.ID] {
+			continue
+		}
+		if !rule.Enabled && !input.IncludeDisabled {
+			continue
+		}
+		out = append(out, rule)
+	}
+	return out, nil
+}
+
+func previewCCRule(rule model.ProtectionRule, input ccProtectionPreviewRequest) ccProtectionPreviewMatch {
+	match := ccProtectionPreviewMatch{
+		RuleID:      rule.ID,
+		RuleName:    rule.Name,
+		Enabled:     rule.Enabled,
+		Counter:     rule.Limit.Counter,
+		Threshold:   rule.Limit.Threshold,
+		WindowSec:   rule.Limit.WindowSec,
+		Action:      rule.Action.Type,
+		Explanation: "rule matched supplied request facts",
+		Warnings:    ccRuleRiskWarnings(rule),
+	}
+	if !ccPreviewMethodMatches(rule.Match.Methods, input.Method) {
+		return match
+	}
+	if !ccPreviewPathMatches(rule.Match, input.Path) {
+		return match
+	}
+	match.Matched = true
+	match.CounterKey, match.Partial = ccPreviewCounterKey(rule, input)
+	return match
+}
+
+func ccPreviewMethodMatches(methods []string, method string) bool {
+	if len(methods) == 0 {
+		return true
+	}
+	for _, item := range methods {
+		if item == method {
+			return true
+		}
+	}
+	return false
+}
+
+func ccPreviewPathMatches(match model.ProtectionRuleMatch, requestPath string) bool {
+	if requestPath == "" {
+		requestPath = "/"
+	}
+	rulePath := match.Path
+	if rulePath == "" {
+		rulePath = "/"
+	}
+	switch match.PathMatch {
+	case "prefix":
+		return pathPrefixMatches(rulePath, requestPath)
+	case "glob":
+		ok, err := path.Match(rulePath, requestPath)
+		return err == nil && ok
+	default:
+		return requestPath == rulePath
+	}
+}
+
+func pathPrefixMatches(prefix, requestPath string) bool {
+	if prefix == "" {
+		return false
+	}
+	if prefix == "/" {
+		return true
+	}
+	if strings.HasSuffix(prefix, "/") {
+		base := strings.TrimSuffix(prefix, "/")
+		return requestPath == base || requestPath == prefix || strings.HasPrefix(requestPath, prefix)
+	}
+	return requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/")
+}
+
+func ccPreviewCounterKey(rule model.ProtectionRule, input ccProtectionPreviewRequest) (string, bool) {
+	site := fmt.Sprintf("site:%d", rule.SiteID)
+	if input.SiteID > 0 {
+		site = fmt.Sprintf("site:%d", input.SiteID)
+	}
+	switch rule.Limit.Counter {
+	case "client_ip_path":
+		if input.ClientIP == "" {
+			return site + ":client_ip_path:<missing-client-ip>:" + input.Path, true
+		}
+		return site + ":client_ip_path:" + input.ClientIP + ":" + input.Path, false
+	case "global":
+		return site + ":global", false
+	case "session":
+		if input.SessionID == "" {
+			return site + ":session:<missing-session>", true
+		}
+		return site + ":session:" + input.SessionID, false
+	case "device":
+		if input.DeviceID == "" {
+			return site + ":device:<missing-device>", true
+		}
+		return site + ":device:" + input.DeviceID, false
+	case "not_found_frequency":
+		if input.Status == 0 {
+			return site + ":not_found:<missing-status>", true
+		}
+		if input.Status != http.StatusNotFound {
+			return site + ":not_found:status-" + strconv.Itoa(input.Status), false
+		}
+		return site + ":not_found:404", false
+	case "attack_frequency":
+		if !input.AttackMatched {
+			return site + ":attack:not-matched", true
+		}
+		return site + ":attack:matched", false
+	default:
+		if input.ClientIP == "" {
+			return site + ":client_ip:<missing-client-ip>", true
+		}
+		return site + ":client_ip:" + input.ClientIP, false
+	}
+}
+
 type ccProtectionRequest struct {
 	Name     string                     `json:"name"`
 	SiteID   int64                      `json:"site_id"`
@@ -184,6 +394,9 @@ func (r *ccProtectionRequest) normalize() {
 	r.Match.PathMatch = strings.ToLower(strings.TrimSpace(r.Match.PathMatch))
 	r.Match.Methods = normalizeHTTPMethods(r.Match.Methods)
 	r.Limit.Counter = strings.ToLower(strings.TrimSpace(r.Limit.Counter))
+	r.Limit.SessionSource = strings.ToLower(strings.TrimSpace(r.Limit.SessionSource))
+	r.Limit.SessionName = strings.TrimSpace(r.Limit.SessionName)
+	r.Limit.DeviceStrategy = strings.ToLower(strings.TrimSpace(r.Limit.DeviceStrategy))
 	r.Action.Type = strings.ToLower(strings.TrimSpace(r.Action.Type))
 	if r.Module == "" {
 		r.Module = ccProtectionModule
@@ -193,6 +406,15 @@ func (r *ccProtectionRequest) normalize() {
 	}
 	if r.Match.PathMatch == "" {
 		r.Match.PathMatch = "exact"
+	}
+	if r.Limit.Counter == "" {
+		r.Limit.Counter = "client_ip"
+	}
+	if r.Limit.Counter == "session" && r.Limit.SessionSource == "" {
+		r.Limit.SessionSource = "cookie"
+	}
+	if r.Limit.Counter == "device" && r.Limit.DeviceStrategy == "" {
+		r.Limit.DeviceStrategy = "coarse"
 	}
 	if r.Action.Type == "" {
 		r.Action.Type = "rate-limit"
@@ -212,16 +434,36 @@ func (r ccProtectionRequest) validate() error {
 	if !strings.HasPrefix(r.Match.Path, "/") {
 		return errors.New("cc protection path must start with /")
 	}
-	if !oneOf(r.Match.PathMatch, "exact", "prefix") {
-		return errors.New("cc protection path_match must be exact or prefix")
+	if !protectionrules.IsCCPathMatch(r.Match.PathMatch) {
+		return errors.New("cc protection path_match must be exact, prefix, or glob")
+	}
+	if r.Match.PathMatch == "glob" && !ccGlobPathValid(r.Match.Path) {
+		return errors.New("cc protection glob path is invalid")
 	}
 	for _, method := range r.Match.Methods {
 		if !oneOf(method, "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") {
 			return errors.New("cc protection method is unsupported")
 		}
 	}
-	if !oneOf(r.Limit.Counter, "client_ip", "client_ip_path", "global") {
+	if !protectionrules.IsCCCounter(r.Limit.Counter) {
 		return errors.New("cc protection counter is unsupported")
+	}
+	if r.Limit.Counter == "session" {
+		if !oneOf(r.Limit.SessionSource, "cookie", "header") {
+			return errors.New("cc protection session_source is unsupported")
+		}
+		if r.Limit.SessionName == "" || len(r.Limit.SessionName) > 64 || strings.ContainsAny(r.Limit.SessionName, "\r\n:;") {
+			return errors.New("cc protection session_name is invalid")
+		}
+	} else if r.Limit.SessionSource != "" || r.Limit.SessionName != "" {
+		return errors.New("cc protection session options require session counter")
+	}
+	if r.Limit.Counter == "device" {
+		if !oneOf(r.Limit.DeviceStrategy, "coarse") {
+			return errors.New("cc protection device_strategy is unsupported")
+		}
+	} else if r.Limit.DeviceStrategy != "" {
+		return errors.New("cc protection device options require device counter")
 	}
 	if r.Limit.Threshold <= 0 {
 		return errors.New("cc protection threshold must be positive")
@@ -236,6 +478,37 @@ func (r ccProtectionRequest) validate() error {
 		return errors.New("cc protection action is unsupported")
 	}
 	return nil
+}
+
+func ccGlobPathValid(value string) bool {
+	if value == "" || !strings.HasPrefix(value, "/") {
+		return false
+	}
+	if strings.Contains(value, "**") || strings.Contains(value, "\\") || strings.ContainsAny(value, "[]{}") {
+		return false
+	}
+	_, err := path.Match(value, value)
+	return err == nil
+}
+
+func ccRuleRiskWarnings(rule model.ProtectionRule) []string {
+	if !rule.Enabled {
+		return []string{}
+	}
+	warnings := []string{}
+	blocking := rule.Action.Type == "block" || rule.Action.Type == "ban" || rule.Action.Type == "rate-limit"
+	lowThreshold := rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec > 0 && rule.Limit.WindowSec <= 60
+	if blocking && lowThreshold && rule.Match.Path == "/" && (rule.Match.PathMatch == "prefix" || rule.Match.PathMatch == "glob") {
+		warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name))
+	}
+	if blocking && lowThreshold && rule.Match.PathMatch == "glob" && broadCCGlob(rule.Match.Path) {
+		warnings = append(warnings, fmt.Sprintf("规则 %s 使用较宽泛 glob 匹配和较低阈值", rule.Name))
+	}
+	return warnings
+}
+
+func broadCCGlob(value string) bool {
+	return value == "/*" || value == "/*/" || value == "/**" || strings.HasPrefix(value, "/*")
 }
 
 func parseCCProtectionFilter(w http.ResponseWriter, r *http.Request) (ccProtectionFilter, bool) {

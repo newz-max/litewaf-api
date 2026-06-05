@@ -28,6 +28,32 @@ const (
 	CategoryManaged   = "managed"
 )
 
+const (
+	CounterClientIP          = "client_ip"
+	CounterClientIPPath      = "client_ip_path"
+	CounterGlobal            = "global"
+	CounterNotFoundFrequency = "not_found_frequency"
+	CounterAttackFrequency   = "attack_frequency"
+	CounterSession           = "session"
+	CounterDevice            = "device"
+)
+
+func IsCCCounter(value string) bool {
+	return oneOf(value,
+		CounterClientIP,
+		CounterClientIPPath,
+		CounterGlobal,
+		CounterNotFoundFrequency,
+		CounterAttackFrequency,
+		CounterSession,
+		CounterDevice,
+	)
+}
+
+func IsCCPathMatch(value string) bool {
+	return oneOf(value, "exact", "prefix", "glob")
+}
+
 func LegacyRef(kind string, id int64) string {
 	return fmt.Sprintf("%s:%d", kind, id)
 }
@@ -45,6 +71,9 @@ func Normalize(rule model.ProtectionRule) model.ProtectionRule {
 	rule.Match.Host = strings.ToLower(strings.TrimSpace(rule.Match.Host))
 	rule.Match.Methods = normalizeHTTPMethods(rule.Match.Methods)
 	rule.Limit.Counter = strings.ToLower(strings.TrimSpace(rule.Limit.Counter))
+	rule.Limit.SessionSource = strings.ToLower(strings.TrimSpace(rule.Limit.SessionSource))
+	rule.Limit.SessionName = strings.TrimSpace(rule.Limit.SessionName)
+	rule.Limit.DeviceStrategy = strings.ToLower(strings.TrimSpace(rule.Limit.DeviceStrategy))
 	if rule.Upload != nil {
 		rule.Upload.Extensions = normalizeExtensions(rule.Upload.Extensions)
 	}
@@ -500,14 +529,39 @@ func validateCC(rule model.ProtectionRule) error {
 	if !strings.HasPrefix(rule.Match.Path, "/") {
 		return fmt.Errorf("cc protection path must start with /")
 	}
-	if !oneOf(rule.Match.PathMatch, "exact", "prefix") {
-		return fmt.Errorf("cc protection path_match must be exact or prefix")
+	if !IsCCPathMatch(rule.Match.PathMatch) {
+		return fmt.Errorf("cc protection path_match must be exact, prefix, or glob")
+	}
+	if rule.Match.PathMatch == "glob" && !validCCGlobPath(rule.Match.Path) {
+		return fmt.Errorf("cc protection glob path is invalid")
 	}
 	if err := validateMethods(rule.Match.Methods); err != nil {
 		return fmt.Errorf("cc protection %w", err)
 	}
-	if !oneOf(rule.Limit.Counter, "client_ip", "client_ip_path", "global") {
+	if !IsCCCounter(rule.Limit.Counter) {
 		return fmt.Errorf("cc protection counter is unsupported")
+	}
+	if rule.Limit.Counter == CounterSession {
+		if !oneOf(rule.Limit.SessionSource, "", "cookie", "header") {
+			return fmt.Errorf("cc protection session_source is unsupported")
+		}
+		if rule.Limit.SessionName == "" {
+			return fmt.Errorf("cc protection session_name is required for session counter")
+		}
+		if len(rule.Limit.SessionName) > 64 || strings.ContainsAny(rule.Limit.SessionName, "\r\n:;") {
+			return fmt.Errorf("cc protection session_name is invalid")
+		}
+	}
+	if rule.Limit.Counter != CounterSession && (rule.Limit.SessionSource != "" || rule.Limit.SessionName != "") {
+		return fmt.Errorf("cc protection session options require session counter")
+	}
+	if rule.Limit.Counter == CounterDevice {
+		if !oneOf(rule.Limit.DeviceStrategy, "", "coarse") {
+			return fmt.Errorf("cc protection device_strategy is unsupported")
+		}
+	}
+	if rule.Limit.Counter != CounterDevice && rule.Limit.DeviceStrategy != "" {
+		return fmt.Errorf("cc protection device options require device counter")
 	}
 	if rule.Limit.Threshold <= 0 {
 		return fmt.Errorf("cc protection threshold must be positive")
@@ -522,6 +576,16 @@ func validateCC(rule model.ProtectionRule) error {
 		return fmt.Errorf("cc protection action is unsupported")
 	}
 	return nil
+}
+
+func validCCGlobPath(path string) bool {
+	if path == "" || !strings.HasPrefix(path, "/") {
+		return false
+	}
+	if strings.Contains(path, "**") || strings.Contains(path, "\\") || strings.ContainsAny(path, "[]{}") {
+		return false
+	}
+	return true
 }
 
 func validateAccess(rule model.ProtectionRule) error {

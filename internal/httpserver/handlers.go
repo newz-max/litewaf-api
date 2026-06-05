@@ -933,23 +933,55 @@ func accessControlSummary(rules []model.ProtectionRule) envelope {
 
 func ccProtectionSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
+	block := 0
+	logOnly := 0
+	advancedCounters := 0
+	globRules := 0
 	warnings := []string{}
 	migration := migrationSummary(rules)
 	for _, rule := range rules {
 		if rule.Enabled {
 			enabled++
+			switch rule.Action.Type {
+			case "log-only":
+				logOnly++
+			case "block", "ban", "rate-limit":
+				block++
+			}
+			if rule.Match.PathMatch == "glob" {
+				globRules++
+			}
+			switch rule.Limit.Counter {
+			case "not_found_frequency", "attack_frequency", "session", "device":
+				advancedCounters++
+			}
+			warnings = append(warnings, ccRuleRiskWarnings(rule)...)
 			if rule.Match.Path == "/" && rule.Match.PathMatch == "prefix" && rule.Limit.Threshold > 0 && rule.Limit.Threshold < 60 && rule.Limit.WindowSec <= 60 {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name))
+				found := false
+				message := fmt.Sprintf("规则 %s 对全站路径使用较低阈值", rule.Name)
+				for _, existing := range warnings {
+					if existing == message {
+						found = true
+						break
+					}
+				}
+				if !found {
+					warnings = append(warnings, message)
+				}
 			}
 		}
 	}
 	return envelope{
-		"rules":           len(rules),
-		"enabled":         enabled,
-		"warnings":        warnings,
-		"migrated":        migration.Migrated,
-		"legacy_fallback": migration.LegacyFallback,
-		"disabled":        migration.Disabled,
+		"rules":             len(rules),
+		"enabled":           enabled,
+		"block":             block,
+		"log_only":          logOnly,
+		"advanced_counters": advancedCounters,
+		"glob_rules":        globRules,
+		"warnings":          warnings,
+		"migrated":          migration.Migrated,
+		"legacy_fallback":   migration.LegacyFallback,
+		"disabled":          migration.Disabled,
 	}
 }
 

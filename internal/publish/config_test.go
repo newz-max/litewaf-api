@@ -268,6 +268,65 @@ func TestGenerateExtendedGatewayConfigPrefersMigratedProtectionRules(t *testing.
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesAdvancedCCProtectionRules(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name:     "Session glob limit",
+		Module:   "cc-protection",
+		Category: "rate-limit",
+		SiteID:   3,
+		Enabled:  true,
+		Priority: 60,
+		Match: model.ProtectionRuleMatch{
+			Path: "/api/*/login", PathMatch: "glob", Methods: []string{"POST"},
+		},
+		Limit: model.ProtectionRuleLimit{
+			Counter: "session", SessionSource: "cookie", SessionName: "sid",
+			Threshold: 5, WindowSec: 60, BanDurationSec: 120,
+		},
+		Action: model.ProtectionRuleAction{Type: "block"},
+	})
+	if err != nil {
+		t.Fatalf("create advanced cc protection rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-advanced-cc")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected advanced cc protection rule output, got %+v", config.ProtectionRules)
+	}
+	rule := config.ProtectionRules[0]
+	if rule.Match.PathMatch != "glob" || rule.Limit.Counter != "session" || rule.Limit.SessionName != "sid" || rule.Limit.SessionSource != "cookie" {
+		t.Fatalf("advanced cc fields lost in publish output: %+v", rule)
+	}
+	if len(config.RateLimits) != 0 {
+		t.Fatalf("native advanced cc rule should not fabricate legacy rate_limits output: %+v", config.RateLimits)
+	}
+}
+
+func TestStoreRejectsInvalidAdvancedCCProtectionRuleBeforePublish(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name:     "Invalid glob",
+		Module:   "cc-protection",
+		Category: "rate-limit",
+		Enabled:  true,
+		Match: model.ProtectionRuleMatch{
+			Path: "/api/**", PathMatch: "glob",
+		},
+		Limit: model.ProtectionRuleLimit{
+			Counter: "client_ip", Threshold: 1, WindowSec: 1,
+		},
+		Action: model.ProtectionRuleAction{Type: "block"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid advanced cc rule to be rejected before publish")
+	}
+}
+
 func TestGenerateExtendedGatewayConfigIncludesUploadProtectionRules(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()

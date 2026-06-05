@@ -15,7 +15,7 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 ## 快速开始
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
+bash -c "$(curl -fSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
 ```
 
 默认入口：

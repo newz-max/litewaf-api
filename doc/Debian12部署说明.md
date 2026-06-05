@@ -47,7 +47,7 @@ Disk: 为日志、数据库和规则配置预留独立目录
 首次安装可以直接使用公开的一行入口：
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
+bash -c "$(curl -fSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
 ```
 
 `deploy/manager.sh` 只负责创建安装目录、下载生产 Compose 文件和 `litewafctl.sh`、生成 `.env` 并触发安装；后续运维仍使用安装目录中的 `litewafctl.sh`。

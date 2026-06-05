@@ -8,18 +8,32 @@ INSTALL_DIR="${LITEWAF_INSTALL_DIR:-/opt/litewaf}"
 IMAGE_PREFIX="${LITEWAF_IMAGE_PREFIX:-mmxiaozhi}"
 IMAGE_TAG="${LITEWAF_IMAGE_TAG:-latest}"
 PROJECT_NAME="${PROJECT_NAME:-litewaf}"
+CONNECT_TIMEOUT_SECONDS="${LITEWAF_CONNECT_TIMEOUT_SECONDS:-15}"
+DOWNLOAD_RETRIES="${LITEWAF_DOWNLOAD_RETRIES:-2}"
+HEARTBEAT_SECONDS="${LITEWAF_HEARTBEAT_SECONDS:-15}"
+TOTAL_STEPS=7
+CURRENT_STEP=0
+
+timestamp() {
+  date '+%Y-%m-%d %H:%M:%S'
+}
 
 info() {
-  printf '==> %s\n' "$*"
+  printf '[%s] ==> %s\n' "$(timestamp)" "$*"
 }
 
 warn() {
-  printf 'warning: %s\n' "$*" >&2
+  printf '[%s] warning: %s\n' "$(timestamp)" "$*" >&2
 }
 
 die() {
-  printf 'error: %s\n' "$*" >&2
+  printf '[%s] error: %s\n' "$(timestamp)" "$*" >&2
   exit 1
+}
+
+step() {
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+  info "[$CURRENT_STEP/$TOTAL_STEPS] $*"
 }
 
 need_cmd() {
@@ -50,9 +64,9 @@ download() {
   url="$1"
   dest="$2"
   if [ "$FETCH_CMD" = "curl" ]; then
-    curl -fsSL -o "$dest" "$url"
+    curl -fL --connect-timeout "$CONNECT_TIMEOUT_SECONDS" --retry "$DOWNLOAD_RETRIES" --retry-delay 2 -o "$dest" "$url"
   else
-    wget -qO "$dest" "$url"
+    wget -O "$dest" "$url"
   fi
 }
 
@@ -80,6 +94,46 @@ set_env_key() {
   fi
 }
 
+run_with_heartbeat() {
+  label="$1"
+  shift
+  start_ts="$(date +%s)"
+  info "$label started"
+  "$@" &
+  pid="$!"
+  (
+    while :; do
+      sleep "$HEARTBEAT_SECONDS"
+      kill -0 "$pid" 2>/dev/null || exit 0
+      now_ts="$(date +%s)"
+      info "$label still running for $((now_ts - start_ts))s"
+    done
+  ) &
+  heartbeat_pid="$!"
+  if wait "$pid"; then
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+    end_ts="$(date +%s)"
+    info "$label finished in $((end_ts - start_ts))s"
+  else
+    status="$?"
+    kill "$heartbeat_pid" 2>/dev/null || true
+    wait "$heartbeat_pid" 2>/dev/null || true
+    end_ts="$(date +%s)"
+    die "$label failed after $((end_ts - start_ts))s with exit code $status"
+  fi
+}
+
+run_litewafctl() {
+  command_name="$1"
+  label="$2"
+  if [ -n "$SUDO" ]; then
+    run_with_heartbeat "$label" "$SUDO" env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh "$command_name"
+  else
+    run_with_heartbeat "$label" env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh "$command_name"
+  fi
+}
+
 need_cmd id
 need_cmd mktemp
 
@@ -92,18 +146,28 @@ fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
 
-info "installing LiteWaf into $INSTALL_DIR"
+step "Preparing LiteWaf installer"
+info "install directory: $INSTALL_DIR"
+info "project name: $PROJECT_NAME"
+info "image: $IMAGE_PREFIX:$IMAGE_TAG"
+info "download source candidates: $BASE_URLS"
+info "heartbeat interval: ${HEARTBEAT_SECONDS}s"
+
+step "Downloading deployment files"
 download_deploy_file docker-compose.prod.yml
 download_deploy_file .env.example
 download_deploy_file litewafctl.sh
 
+step "Installing deployment files"
 $SUDO mkdir -p "$INSTALL_DIR"
 $SUDO cp "$TMP_DIR/docker-compose.prod.yml" "$INSTALL_DIR/docker-compose.prod.yml"
 $SUDO cp "$TMP_DIR/.env.example" "$INSTALL_DIR/.env.example"
 $SUDO cp "$TMP_DIR/litewafctl.sh" "$INSTALL_DIR/litewafctl.sh"
 $SUDO chmod 644 "$INSTALL_DIR/docker-compose.prod.yml" "$INSTALL_DIR/.env.example"
 $SUDO chmod 755 "$INSTALL_DIR/litewafctl.sh"
+info "installed docker-compose.prod.yml, .env.example, and litewafctl.sh"
 
+step "Preparing environment file"
 if [ ! -f "$INSTALL_DIR/.env" ]; then
   $SUDO cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
   $SUDO chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
@@ -122,13 +186,19 @@ else
   info "preserving existing $INSTALL_DIR/.env"
 fi
 
-info "starting LiteWaf"
+step "Running production install"
 (
   cd "$INSTALL_DIR"
-  $SUDO env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh install
-  $SUDO env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh health
+  run_litewafctl install "litewafctl install"
 )
 
+step "Checking service health"
+(
+  cd "$INSTALL_DIR"
+  run_litewafctl health "litewafctl health"
+)
+
+step "Printing access information"
 info "LiteWaf installation complete"
 printf 'Dashboard: http://SERVER_IP:%s\n' "$($SUDO grep '^DASHBOARD_PORT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
 printf 'Gateway:   http://SERVER_IP:%s\n' "$($SUDO grep '^GATEWAY_PORT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"

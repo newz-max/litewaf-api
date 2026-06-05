@@ -28,7 +28,7 @@ sudo chmod +x litewafctl.sh
 sudo cp -n .env.example .env
 sudo sed -i \
   -e 's|^LITEWAF_IMAGE_PREFIX=.*|LITEWAF_IMAGE_PREFIX=mmxiaozhi|' \
-  -e 's|^LITEWAF_IMAGE_TAG=.*|LITEWAF_IMAGE_TAG=0.1.0|' \
+  -e 's|^LITEWAF_IMAGE_TAG=.*|LITEWAF_IMAGE_TAG=latest|' \
   .env
 
 sudo ./litewafctl.sh install
@@ -40,6 +40,14 @@ sudo ./litewafctl.sh health
 - Dashboard: `http://服务器IP:18080`
 - Gateway: `http://服务器IP:18081`
 - API: Dashboard 反代 `/api/`，容器内地址为 `waf-api:8080`
+
+## 升级
+
+```bash
+cd /opt/litewaf
+sudo ./litewafctl.sh upgrade latest
+sudo ./litewafctl.sh health
+```
 
 更完整的首次验证流程见 [快速开始](doc/快速开始.md)。
 

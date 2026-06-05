@@ -5,6 +5,7 @@ import "litewaf-api/internal/model"
 func emptyObservabilitySummary() model.ObservabilitySummary {
 	return model.ObservabilitySummary{
 		AccessControl:     []model.SummaryCount{},
+		IPAccessList:      []model.SummaryCount{},
 		TopIPs:            []model.SummaryCount{},
 		TopURIs:           []model.SummaryCount{},
 		TopRules:          []model.SummaryCount{},

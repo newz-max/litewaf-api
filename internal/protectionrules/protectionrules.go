@@ -183,60 +183,6 @@ func ToRateLimit(rule model.ProtectionRule) model.RateLimitRule {
 	}
 }
 
-func FromAccessList(item model.AccessListEntry) model.ProtectionRule {
-	return Normalize(model.ProtectionRule{
-		ID:              item.ID,
-		Name:            item.Name,
-		Module:          ModuleAccess,
-		Category:        CategoryAccess,
-		SiteID:          item.SiteID,
-		Enabled:         item.Enabled,
-		Priority:        priority(item.Priority),
-		Source:          SourceLegacy,
-		MigrationStatus: StatusLegacyOnly,
-		LegacyRef:       LegacyRef("access_lists", item.ID),
-		Match:           accessControlMatch(item),
-		Action:          model.ProtectionRuleAction{Type: accessControlAction(item)},
-		CreatedAt:       item.CreatedAt,
-		UpdatedAt:       item.UpdatedAt,
-	})
-}
-
-func ToAccessList(rule model.ProtectionRule) model.AccessListEntry {
-	rule = Normalize(rule)
-	target := rule.Match.Target
-	value := rule.Match.Value
-	headerName := rule.Match.HeaderName
-	operator := rule.Match.Operator
-	switch target {
-	case "path":
-		target = "uri"
-		value = rule.Match.Path
-		operator = rule.Match.PathMatch
-	case "host":
-		value = rule.Match.Host
-	}
-	kind := "blacklist"
-	if rule.Action.Type == "allow" {
-		kind = "whitelist"
-	}
-	return model.AccessListEntry{
-		ID:            rule.ID,
-		Name:          rule.Name,
-		Kind:          kind,
-		Target:        target,
-		Value:         value,
-		MatchOperator: operator,
-		HeaderName:    headerName,
-		Action:        accessControlActionFromRule(rule.Action.Type),
-		SiteID:        rule.SiteID,
-		Enabled:       rule.Enabled,
-		Priority:      priority(rule.Priority),
-		CreatedAt:     rule.CreatedAt,
-		UpdatedAt:     rule.UpdatedAt,
-	}
-}
-
 func FromUpload(item model.UploadProtectionRule) model.ProtectionRule {
 	path := item.Path
 	if path == "" {
@@ -775,67 +721,6 @@ func validateMethods(methods []string) error {
 		}
 	}
 	return nil
-}
-
-func accessControlMatch(item model.AccessListEntry) model.ProtectionRuleMatch {
-	operator := item.MatchOperator
-	if operator == "" {
-		operator = defaultAccessControlOperator(item.Target)
-	}
-	match := model.ProtectionRuleMatch{
-		Target:     accessControlTarget(item.Target),
-		Value:      item.Value,
-		Operator:   operator,
-		HeaderName: item.HeaderName,
-		Methods:    []string{},
-	}
-	switch item.Target {
-	case "uri":
-		match.Target = "path"
-		match.Path = item.Value
-		match.PathMatch = operator
-	case "host":
-		match.Target = "host"
-		match.Host = item.Value
-	}
-	return match
-}
-
-func accessControlTarget(target string) string {
-	if target == "uri" {
-		return "path"
-	}
-	return target
-}
-
-func defaultAccessControlOperator(target string) string {
-	switch target {
-	case "uri", "header", "host":
-		return "exact"
-	default:
-		return ""
-	}
-}
-
-func accessControlAction(item model.AccessListEntry) string {
-	if item.Action == "allow" || item.Kind == "whitelist" {
-		return "allow"
-	}
-	if item.Action == "log-only" {
-		return "log-only"
-	}
-	return "block"
-}
-
-func accessControlActionFromRule(action string) string {
-	switch action {
-	case "allow":
-		return "allow"
-	case "log-only":
-		return "log-only"
-	default:
-		return "block"
-	}
 }
 
 func ccProtectionPath(item model.RateLimitRule) (string, string) {

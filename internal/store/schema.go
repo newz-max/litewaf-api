@@ -194,7 +194,6 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	method TEXT NOT NULL DEFAULT '',
 	uri TEXT NOT NULL DEFAULT '',
 	summary TEXT NOT NULL DEFAULT '',
-	access_list_id BIGINT NOT NULL DEFAULT 0,
 	rate_limit_id BIGINT NOT NULL DEFAULT 0,
 	module TEXT NOT NULL DEFAULT '',
 	category TEXT NOT NULL DEFAULT '',
@@ -210,6 +209,9 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	matched_rule_ids TEXT NOT NULL DEFAULT '',
 	body_metadata TEXT NOT NULL DEFAULT '',
 	upload_metadata TEXT NOT NULL DEFAULT '',
+	ip_access_list_id BIGINT NOT NULL DEFAULT 0,
+	ip_list_kind TEXT NOT NULL DEFAULT '',
+	ip_list_target TEXT NOT NULL DEFAULT '',
 	ban_reason TEXT NOT NULL DEFAULT '',
 	ban_duration_sec INTEGER NOT NULL DEFAULT 0,
 	ban_remaining_sec INTEGER NOT NULL DEFAULT 0,
@@ -239,6 +241,9 @@ ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS threshold INTEGER NOT NULL DEFAU
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS matched_rule_ids TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS body_metadata TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS upload_metadata TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ip_access_list_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ip_list_kind TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ip_list_target TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_duration_sec INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS ban_remaining_sec INTEGER NOT NULL DEFAULT 0;
@@ -258,6 +263,8 @@ CREATE INDEX IF NOT EXISTS idx_waf_events_rule_id ON waf_events (rule_id);
 CREATE INDEX IF NOT EXISTS idx_waf_events_action ON waf_events (action);
 CREATE INDEX IF NOT EXISTS idx_waf_events_disposition ON waf_events (disposition);
 CREATE INDEX IF NOT EXISTS idx_waf_events_event_type ON waf_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_waf_events_module ON waf_events (module);
+CREATE INDEX IF NOT EXISTS idx_waf_events_ip_access_list_id ON waf_events (ip_access_list_id);
 
 CREATE SEQUENCE IF NOT EXISTS dynamic_ban_clear_revision_seq;
 
@@ -309,25 +316,28 @@ ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DE
 CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_revision ON dynamic_ban_clears (revision);
 CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_site_ip ON dynamic_ban_clears (site_id, client_ip);
 
-CREATE TABLE IF NOT EXISTS access_list_entries (
+CREATE TABLE IF NOT EXISTS ip_access_list_entries (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,
 	kind TEXT NOT NULL,
 	target TEXT NOT NULL,
 	value TEXT NOT NULL,
-	match_operator TEXT NOT NULL DEFAULT '',
-	header_name TEXT NOT NULL DEFAULT '',
-	action TEXT NOT NULL,
+	normalized_value TEXT NOT NULL,
+	ip_family TEXT NOT NULL,
+	prefix_length INTEGER NOT NULL DEFAULT 0,
 	site_id BIGINT NOT NULL DEFAULT 0,
 	enabled BOOLEAN NOT NULL DEFAULT true,
 	priority INTEGER NOT NULL DEFAULT 100,
+	conflict_key TEXT NOT NULL DEFAULT '',
+	description TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE access_list_entries ADD COLUMN IF NOT EXISTS match_operator TEXT NOT NULL DEFAULT '';
-ALTER TABLE access_list_entries ADD COLUMN IF NOT EXISTS header_name TEXT NOT NULL DEFAULT '';
-ALTER TABLE access_list_entries ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
+CREATE INDEX IF NOT EXISTS idx_ip_access_list_scope ON ip_access_list_entries (site_id, kind, target, enabled);
+CREATE INDEX IF NOT EXISTS idx_ip_access_list_exact ON ip_access_list_entries (site_id, kind, ip_family, normalized_value) WHERE target = 'ip' AND enabled = true;
+CREATE INDEX IF NOT EXISTS idx_ip_access_list_cidr ON ip_access_list_entries (site_id, kind, ip_family, prefix_length, normalized_value) WHERE target = 'cidr' AND enabled = true;
+CREATE INDEX IF NOT EXISTS idx_ip_access_list_conflict ON ip_access_list_entries (conflict_key);
 
 CREATE TABLE IF NOT EXISTS rate_limit_rules (
 	id BIGSERIAL PRIMARY KEY,

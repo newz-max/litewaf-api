@@ -59,19 +59,6 @@ func (h handlers) legacyProtectionCandidates(ctx context.Context) ([]legacyProte
 			Rule:     publish.CCProtectionFromRateLimit(item),
 		})
 	}
-	accessLists, err := h.app.Store.ListAccessListEntries(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, item := range accessLists {
-		candidates = append(candidates, legacyProtectionCandidate{
-			Store:    "access_lists",
-			Module:   protectionrules.ModuleAccess,
-			Category: protectionrules.CategoryAccess,
-			Ref:      protectionrules.LegacyRef("access_lists", item.ID),
-			Rule:     publish.AccessControlFromAccessList(item),
-		})
-	}
 	uploadRules, err := h.app.Store.ListUploadProtectionRules(ctx)
 	if err != nil {
 		return nil, err
@@ -337,11 +324,10 @@ func emptyKey(value string) string {
 	return value
 }
 
-func buildPublishCompatibilityDiagnostics(protectionRules []model.ProtectionRule, accessLists []model.AccessListEntry, rateLimits []model.RateLimitRule, uploadRules []model.UploadProtectionRule, botRules []model.BotProtectionRule, dynamicRules []model.DynamicProtectionRule) model.PublishCompatibilityDiagnostics {
+func buildPublishCompatibilityDiagnostics(protectionRules []model.ProtectionRule, rateLimits []model.RateLimitRule, uploadRules []model.UploadProtectionRule, botRules []model.BotProtectionRule, dynamicRules []model.DynamicProtectionRule) model.PublishCompatibilityDiagnostics {
 	diagnostics := model.PublishCompatibilityDiagnostics{
 		ProtectionRules: len(protectionRules),
 		RateLimits:      len(rateLimits),
-		AccessLists:     len(accessLists),
 		LegacyModules: map[string]int{
 			"upload_protection_rules":  len(uploadRules),
 			"bot_protection_rules":     len(botRules),
@@ -380,11 +366,10 @@ func buildPublishCompatibilityDiagnostics(protectionRules []model.ProtectionRule
 		diagnostics.ByModule[module] = counts
 	}
 	addLegacy(protectionrules.ModuleCC, len(rateLimits), legacyRefs("rate_limits", rateLimitIDs(rateLimits)))
-	addLegacy(protectionrules.ModuleAccess, len(accessLists), legacyRefs("access_lists", accessListIDs(accessLists)))
 	addLegacy(protectionrules.ModuleUpload, len(uploadRules), legacyRefs("upload_protection_rules", uploadRuleIDs(uploadRules)))
 	addLegacy(protectionrules.ModuleBot, len(botRules), legacyRefs("bot_protection_rules", botRuleIDs(botRules)))
 	addLegacy(protectionrules.ModuleDynamic, len(dynamicRules), legacyRefs("dynamic_protection_rules", dynamicRuleIDs(dynamicRules)))
-	if diagnostics.RateLimits > 0 || diagnostics.AccessLists > 0 || len(uploadRules)+len(botRules)+len(dynamicRules) > 0 {
+	if diagnostics.RateLimits > 0 || len(uploadRules)+len(botRules)+len(dynamicRules) > 0 {
 		diagnostics.Warnings = append(diagnostics.Warnings, "发布仍保留旧字段和旧模块兼容输出，网关回滚与混合版本依赖这些字段。")
 	}
 	if diagnostics.Deduplicated > 0 {
@@ -402,14 +387,6 @@ func legacyRefs(kind string, ids []int64) []string {
 }
 
 func rateLimitIDs(items []model.RateLimitRule) []int64 {
-	out := make([]int64, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.ID)
-	}
-	return out
-}
-
-func accessListIDs(items []model.AccessListEntry) []int64 {
 	out := make([]int64, 0, len(items))
 	for _, item := range items {
 		out = append(out, item.ID)

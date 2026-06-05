@@ -101,11 +101,11 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 
 	mux.HandleFunc("GET /api/v1/audit-logs", handlers.require(permissionAudit, handlers.listAuditLogs))
 
-	mux.HandleFunc("GET /api/v1/access-lists", handlers.require(permissionRead, handlers.listAccessLists))
-	mux.HandleFunc("POST /api/v1/access-lists", handlers.require(permissionWrite, handlers.createAccessList))
-	mux.HandleFunc("GET /api/v1/access-lists/{id}", handlers.require(permissionRead, handlers.getAccessList))
-	mux.HandleFunc("PUT /api/v1/access-lists/{id}", handlers.require(permissionWrite, handlers.updateAccessList))
-	mux.HandleFunc("DELETE /api/v1/access-lists/{id}", handlers.require(permissionWrite, handlers.deleteAccessList))
+	mux.HandleFunc("GET /api/v1/ip-access-lists", handlers.require(permissionRead, handlers.listIPAccessLists))
+	mux.HandleFunc("POST /api/v1/ip-access-lists", handlers.require(permissionWrite, handlers.createIPAccessList))
+	mux.HandleFunc("GET /api/v1/ip-access-lists/{id}", handlers.require(permissionRead, handlers.getIPAccessList))
+	mux.HandleFunc("PUT /api/v1/ip-access-lists/{id}", handlers.require(permissionWrite, handlers.updateIPAccessList))
+	mux.HandleFunc("DELETE /api/v1/ip-access-lists/{id}", handlers.require(permissionWrite, handlers.deleteIPAccessList))
 
 	mux.HandleFunc("GET /api/v1/access-control/rules", handlers.require(permissionRead, handlers.listAccessControlRules))
 	mux.HandleFunc("POST /api/v1/access-control/rules", handlers.require(permissionWrite, handlers.createAccessControlRule))

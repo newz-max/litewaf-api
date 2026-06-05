@@ -163,6 +163,8 @@ func normalizeWAFEvent(item *model.WAFEvent) {
 	item.MatchedRuleIDs = strings.TrimSpace(item.MatchedRuleIDs)
 	item.BodyMetadata = boundedSummary(strings.TrimSpace(item.BodyMetadata), 1024)
 	item.UploadMetadata = boundedSummary(strings.TrimSpace(item.UploadMetadata), 1024)
+	item.IPListKind = strings.ToLower(strings.TrimSpace(item.IPListKind))
+	item.IPListTarget = strings.ToLower(strings.TrimSpace(item.IPListTarget))
 	item.BanReason = strings.TrimSpace(item.BanReason)
 	item.ChallengeMode = strings.ToLower(strings.TrimSpace(item.ChallengeMode))
 	item.ChallengeResult = strings.ToLower(strings.TrimSpace(item.ChallengeResult))
@@ -186,6 +188,17 @@ func validateWAFEvent(item model.WAFEvent) error {
 	}
 	if item.Disposition == "" {
 		return errors.New("disposition is required")
+	}
+	if item.Module == "ip-access-list" {
+		if item.IPAccessListID <= 0 {
+			return errors.New("ip_access_list_id is required for ip-access-list events")
+		}
+		if item.IPListKind != "" && item.IPListKind != "allow" && item.IPListKind != "block" {
+			return errors.New("ip_list_kind is unsupported")
+		}
+		if item.IPListTarget != "" && item.IPListTarget != "ip" && item.IPListTarget != "cidr" {
+			return errors.New("ip_list_target is unsupported")
+		}
 	}
 	return nil
 }

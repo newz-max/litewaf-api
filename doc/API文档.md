@@ -90,11 +90,26 @@ Authorization: Bearer <token>
 
 发布会生成网关配置并写入 `GATEWAY_CONFIG_PATH`。
 
-发布配置会保留旧 `rate_limits` 和 `access_lists` 字段，并优先从通用 `protection_rules` 表输出 CC 防护、访问控制、上传防护、Bot / 人机验证和动态防护子集；尚未迁移的旧表记录会作为兼容 fallback 输出，发布时按 `legacy_ref` 去重，避免同一有效规则重复进入网关 `protection_rules`。托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
+发布配置会保留旧 `rate_limits` 限流兼容字段，并输出独立 `ip_access_index` 作为 IP 黑白名单运行时索引；旧 `access_lists` 字段、接口和网关 fallback 已移除。`protection_rules` 表继续输出 CC 防护、访问控制、上传防护、Bot / 人机验证和动态防护子集。托管攻击防护规则继续位于站点 `rules` 数组中，同时带有网关可识别的 `module=attack-protection`、`category=managed`、`attack_type`、`group` 和 `priority` 元数据：
 
 ```json
 {
   "rate_limits": [],
+  "ip_access_index": {
+    "entries": {},
+    "exact": {
+      "allow": {},
+      "block": {}
+    },
+    "cidr": {
+      "allow": {},
+      "block": {}
+    },
+    "cidr_prefix_lengths": {
+      "allow": {},
+      "block": {}
+    }
+  },
   "protection_rules": [
     {
       "module": "cc-protection",
@@ -189,27 +204,27 @@ Authorization: Bearer <token>
 }
 ```
 
-发布预览的 `summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。`summary.dynamic_protection` 包含动态防护规则总数、启用数量、动态令牌数量、页面动态化数量、等候室数量、阻断数量、观察数量、等候室动作数量和宽泛路径提示。模块摘要还包含 `migrated`、`legacy_fallback` 和 `disabled` 计数，用于区分通用表原生/已迁移记录、旧表兼容记录和停用记录。
+发布预览的 `summary.ip_access_list` 包含 IP 黑白名单总数、启用数量、白名单/黑名单数量、Exact IP 数量、CIDR 数量、全局和站点作用域数量。`summary.cc_protection` 包含 CC 规则总数、启用数量和高风险配置提示。`summary.attack_protection` 包含攻击防护组数量、启用数量、观察数量、阻断数量和受影响攻击类型。`summary.access_control` 包含访问控制规则总数、启用数量、允许/观察/阻断数量和宽泛允许类风险提示。`summary.upload_protection` 包含上传防护规则总数、启用数量、扩展名规则数、大小规则数、观察/阻断数量和高风险上传限制提示。`summary.bot_protection` 包含 Bot 规则总数、启用数量、JS challenge 数量、阻断数量、观察数量和宽泛 challenge 提示。`summary.dynamic_protection` 包含动态防护规则总数、启用数量、动态令牌数量、页面动态化数量、等候室数量、阻断数量、观察数量、等候室动作数量和宽泛路径提示。
 
-发布预览还会返回 `summary.module_matrix` 和 `summary.risk_warnings`。`module_matrix` 按防护模块汇总规则总数、启用数、观察数、阻断数、兼容来源和高风险提示，前端应优先展示模块语义，再展示 `rate_limits`、`access_lists` 等兼容上下文。`risk_warnings` 是跨模块风险摘要，不参与网关执行；实际发布配置仍只依赖原有可执行规则字段和 `protection_rules`。
+发布预览还会返回 `summary.module_matrix` 和 `summary.risk_warnings`。`module_matrix` 按防护模块汇总规则总数、启用数、观察数、阻断数、兼容来源和高风险提示，前端应优先展示模块语义；旧 `access_lists` 兼容计数不再返回。`risk_warnings` 是跨模块风险摘要，不参与网关执行；实际发布配置仍只依赖可执行规则字段、`protection_rules` 和 `ip_access_index`。
 
-## 黑白名单
+## IP 黑白名单
 
-黑白名单接口作为旧入口继续保留，用于兼容既有客户端和发布字段。后台新建 IP/CIDR、路径、Header 和 Host 访问规则时，推荐使用“访问控制”模块；访问控制会以 `module=access-control`、`category=access-control` 呈现同类规则。
+IP 黑白名单是独立模块，不再复用旧 `access_lists` 或访问控制写入路径。旧 `/api/v1/access-lists` 接口已移除；来源 IP/CIDR 的白名单和黑名单应通过 `/api/v1/ip-access-lists` 管理。Exact IP 会在发布时预处理成按站点作用域、名单类型和规范化 IP 键组织的哈希索引，网关热路径查询为 O(1)；CIDR 会按 IP 族和前缀长度分组，运行时只遍历已发布的前缀长度集合。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/api/v1/access-lists` | 读 | 查询名单 |
-| POST | `/api/v1/access-lists` | 写 | 创建名单 |
-| GET | `/api/v1/access-lists/{id}` | 读 | 查询名单 |
-| PUT | `/api/v1/access-lists/{id}` | 写 | 更新名单 |
-| DELETE | `/api/v1/access-lists/{id}` | 写 | 删除名单 |
+| GET | `/api/v1/ip-access-lists` | 读 | 查询 IP 黑白名单 |
+| POST | `/api/v1/ip-access-lists` | 写 | 创建 IP 黑白名单 |
+| GET | `/api/v1/ip-access-lists/{id}` | 读 | 查询 IP 黑白名单 |
+| PUT | `/api/v1/ip-access-lists/{id}` | 写 | 更新 IP 黑白名单 |
+| DELETE | `/api/v1/ip-access-lists/{id}` | 写 | 删除 IP 黑白名单 |
 
-支持目标：`ip`、`cidr`、`uri`、`ua`。支持类型：`blacklist`、`whitelist`。
+支持目标：`ip`、`cidr`。支持类型：`allow`、`block`。API 会规范化 IPv4、IPv6 和 CIDR，持久化 `normalized_value`、`ip_family`、`prefix_length` 和 `conflict_key`。管理员可以创建、更新、启停和删除；readonly 和 auditor 用户只能读取。写操作会记录 `resource_type=ip_access_list` 的审计日志。
 
 ## 访问控制
 
-访问控制接口以通用 `protection_rules` 表作为主存储，对外以 `module=access-control`、`category=access-control` 的防护规则模型呈现。当前覆盖 IP/CIDR、路径、Header 和 Host 条件，支持 `allow`、`log-only` 和 `block` 动作；旧 `/api/v1/access-lists` 接口和发布字段继续保留用于兼容，未迁移旧记录仍会作为 `legacy-only` 规则出现在访问控制列表中。
+访问控制接口以通用 `protection_rules` 表作为主存储，对外以 `module=access-control`、`category=access-control` 的防护规则模型呈现。当前覆盖路径、Header 和 Host 条件，支持 `allow`、`log-only` 和 `block` 动作；来源 IP/CIDR 黑白名单不再通过访问控制创建、展示或 fallback。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -247,8 +262,8 @@ Authorization: Bearer <token>
 支持字段：
 
 - `module` 固定为 `access-control`，`category` 固定为 `access-control`；创建和更新时可省略，API 会填充默认值。
-- `match.target` 支持 `ip`、`cidr`、`path`、`header`、`host`。
-- `match.value` 用于 IP、CIDR 和 Header 值；`match.path` 用于路径条件；`match.host` 用于 Host 条件。
+- `match.target` 支持 `path`、`header`、`host`。提交 `ip` 或 `cidr` 会被拒绝，来源 IP/CIDR 请使用 IP 黑白名单接口。
+- `match.value` 用于 Header 值；`match.path` 用于路径条件；`match.host` 用于 Host 条件。
 - `match.path` 必须以 `/` 开头，`match.path_match` 支持 `exact`、`prefix`；prefix 匹配按路径段边界处理，`/admin` 不匹配 `/admin2`。
 - `match.header_name` 为 Header 条件必填，Header `operator` 支持 `exact`、`contains`。
 - Host `operator` 支持 `exact`、`suffix`。
@@ -803,17 +818,20 @@ Provider 包预览返回普通规则包预览字段，并额外包含 `provider_
 
 ```text
 GET /api/v1/attack-logs?module=attack-protection&attack_type=sqli
+GET /api/v1/attack-logs?module=ip-access-list&action=block
 GET /api/v1/attack-logs?module=access-control&action=block
 GET /api/v1/attack-logs?module=upload-protection&action=block
 GET /api/v1/attack-logs?module=bot-protection&challenge_result=failed
 GET /api/v1/attack-logs?module=dynamic-protection&dynamic_result=token-failed
 ```
 
-`/api/v1/protection/overview` 返回模块化防护概览，包含 `modules` 和 `risks`。`modules` 固定覆盖已实现模块：CC 防护、攻击防护、访问控制、上传防护、Bot / 人机验证、动态防护和高级规则生态；每个模块包含 `key`、`label`、`category`、`route`、`log_module`、`rules`、`enabled`、`observe`、`block`、`allow`、`compatibility_source`、`warnings` 和 `evidence`。计数来自真实规则、日志和发布预览数据；没有数据时返回零值或空数组，不返回 mock 行。`risks` 从各模块真实高风险提示派生，用于后台跨模块风险摘要。
+`/api/v1/protection/overview` 返回模块化防护概览，包含 `modules` 和 `risks`。`modules` 固定覆盖已实现模块：CC 防护、攻击防护、IP 黑白名单、访问控制、上传防护、Bot / 人机验证、动态防护和高级规则生态；每个模块包含 `key`、`label`、`category`、`route`、`log_module`、`rules`、`enabled`、`observe`、`block`、`allow`、`compatibility_source`、`warnings` 和 `evidence`。计数来自真实规则、日志和发布预览数据；没有数据时返回零值或空数组，不返回 mock 行。`risks` 从各模块真实高风险提示派生，用于后台跨模块风险摘要。
 
 攻击防护事件字段包括 `module`、`category`、`attack_type`、`group_name`、`rule_name`、`rule_id`、`target`、`action`、`score`、`summary` 和 `disposition`。观测汇总中的 `attack_protection` 按 `attack_type|action|disposition` 维度统计。
 
 访问控制事件字段包括 `module=access-control`、`category=access-control`、`rule_name`、`rule_id`、`target`、`action` 和 `disposition`。观测汇总中的 `access_control` 按 `action|disposition` 维度统计，例如 `block|blocked`、`log-only|observed` 或 `allow|allowed`。
+
+IP 黑白名单事件字段包括 `module=ip-access-list`、`category=ip-access-list`、`ip_access_list_id`、`ip_list_kind`、`ip_list_target`、`client_ip`、`action` 和 `disposition`。观测汇总中的 `ip_access_list` 按 `kind|target|action|disposition` 维度统计，例如 `block|ip|block|blocked` 或 `allow|cidr|allow|allowed`。
 
 上传防护事件字段包括 `module=upload-protection`、`category=upload`、`rule_name`、`rule_id`、`target`、`action`、`disposition`、`threshold` 和 `upload_metadata`。观测汇总中的 `upload_protection` 按 `action|disposition` 维度统计，例如 `block|blocked` 或 `log-only|observed`。
 

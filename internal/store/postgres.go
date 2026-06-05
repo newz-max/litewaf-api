@@ -513,19 +513,19 @@ func (s *PostgresStore) CreateAuditLog(ctx context.Context, item model.AuditLog)
 	return item, err
 }
 
-func (s *PostgresStore) ListAccessListEntries(ctx context.Context) ([]model.AccessListEntry, error) {
+func (s *PostgresStore) ListIPAccessListEntries(ctx context.Context) ([]model.IPAccessListEntry, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, kind, target, value, match_operator, header_name, action, site_id, enabled, priority, created_at, updated_at
-		FROM access_list_entries
-		ORDER BY id`)
+		SELECT id, name, kind, target, value, normalized_value, ip_family, prefix_length, site_id, enabled, priority, conflict_key, description, created_at, updated_at
+		FROM ip_access_list_entries
+		ORDER BY priority, id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []model.AccessListEntry
+	var items []model.IPAccessListEntry
 	for rows.Next() {
-		var item model.AccessListEntry
-		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.MatchOperator, &item.HeaderName, &item.Action, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var item model.IPAccessListEntry
+		if err := rows.Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.NormalizedValue, &item.IPFamily, &item.PrefixLength, &item.SiteID, &item.Enabled, &item.Priority, &item.ConflictKey, &item.Description, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -533,45 +533,45 @@ func (s *PostgresStore) ListAccessListEntries(ctx context.Context) ([]model.Acce
 	return items, rows.Err()
 }
 
-func (s *PostgresStore) GetAccessListEntry(ctx context.Context, id int64) (model.AccessListEntry, error) {
-	var item model.AccessListEntry
+func (s *PostgresStore) GetIPAccessListEntry(ctx context.Context, id int64) (model.IPAccessListEntry, error) {
+	var item model.IPAccessListEntry
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, kind, target, value, match_operator, header_name, action, site_id, enabled, priority, created_at, updated_at
-		FROM access_list_entries
+		SELECT id, name, kind, target, value, normalized_value, ip_family, prefix_length, site_id, enabled, priority, conflict_key, description, created_at, updated_at
+		FROM ip_access_list_entries
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.MatchOperator, &item.HeaderName, &item.Action, &item.SiteID, &item.Enabled, &item.Priority, &item.CreatedAt, &item.UpdatedAt)
+		Scan(&item.ID, &item.Name, &item.Kind, &item.Target, &item.Value, &item.NormalizedValue, &item.IPFamily, &item.PrefixLength, &item.SiteID, &item.Enabled, &item.Priority, &item.ConflictKey, &item.Description, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return model.AccessListEntry{}, ErrNotFound
+		return model.IPAccessListEntry{}, ErrNotFound
 	}
 	return item, err
 }
 
-func (s *PostgresStore) CreateAccessListEntry(ctx context.Context, item model.AccessListEntry) (model.AccessListEntry, error) {
+func (s *PostgresStore) CreateIPAccessListEntry(ctx context.Context, item model.IPAccessListEntry) (model.IPAccessListEntry, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO access_list_entries (name, kind, target, value, match_operator, header_name, action, site_id, enabled, priority)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO ip_access_list_entries (name, kind, target, value, normalized_value, ip_family, prefix_length, site_id, enabled, priority, conflict_key, description)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.Kind, item.Target, item.Value, item.MatchOperator, item.HeaderName, item.Action, item.SiteID, item.Enabled, item.Priority).
+		item.Name, item.Kind, item.Target, item.Value, item.NormalizedValue, item.IPFamily, item.PrefixLength, item.SiteID, item.Enabled, item.Priority, item.ConflictKey, item.Description).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	return item, err
 }
 
-func (s *PostgresStore) UpdateAccessListEntry(ctx context.Context, id int64, item model.AccessListEntry) (model.AccessListEntry, error) {
+func (s *PostgresStore) UpdateIPAccessListEntry(ctx context.Context, id int64, item model.IPAccessListEntry) (model.IPAccessListEntry, error) {
 	err := s.db.QueryRowContext(ctx, `
-		UPDATE access_list_entries
-		SET name = $2, kind = $3, target = $4, value = $5, match_operator = $6, header_name = $7, action = $8, site_id = $9, enabled = $10, priority = $11, updated_at = now()
+		UPDATE ip_access_list_entries
+		SET name = $2, kind = $3, target = $4, value = $5, normalized_value = $6, ip_family = $7, prefix_length = $8, site_id = $9, enabled = $10, priority = $11, conflict_key = $12, description = $13, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.Kind, item.Target, item.Value, item.MatchOperator, item.HeaderName, item.Action, item.SiteID, item.Enabled, item.Priority).
+		id, item.Name, item.Kind, item.Target, item.Value, item.NormalizedValue, item.IPFamily, item.PrefixLength, item.SiteID, item.Enabled, item.Priority, item.ConflictKey, item.Description).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return model.AccessListEntry{}, ErrNotFound
+		return model.IPAccessListEntry{}, ErrNotFound
 	}
 	return item, err
 }
 
-func (s *PostgresStore) DeleteAccessListEntry(ctx context.Context, id int64) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM access_list_entries WHERE id = $1`, id)
+func (s *PostgresStore) DeleteIPAccessListEntry(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM ip_access_list_entries WHERE id = $1`, id)
 	return checkRowsAffected(result, err)
 }
 
@@ -997,13 +997,6 @@ func (s *PostgresStore) BackfillProtectionRules(ctx context.Context) (int, error
 	}
 	for _, item := range rateLimits {
 		candidates = append(candidates, protectionrules.FromRateLimit(item))
-	}
-	accessLists, err := s.ListAccessListEntries(ctx)
-	if err != nil {
-		return 0, err
-	}
-	for _, item := range accessLists {
-		candidates = append(candidates, protectionrules.FromAccessList(item))
 	}
 	uploadRules, err := s.ListUploadProtectionRules(ctx)
 	if err != nil {

@@ -173,7 +173,6 @@ type WAFEvent struct {
 	Method          string    `json:"method"`
 	URI             string    `json:"uri"`
 	Summary         string    `json:"summary"`
-	AccessListID    int64     `json:"access_list_id"`
 	RateLimitID     int64     `json:"rate_limit_id"`
 	Module          string    `json:"module"`
 	Category        string    `json:"category"`
@@ -189,6 +188,9 @@ type WAFEvent struct {
 	MatchedRuleIDs  string    `json:"matched_rule_ids"`
 	BodyMetadata    string    `json:"body_metadata"`
 	UploadMetadata  string    `json:"upload_metadata"`
+	IPAccessListID  int64     `json:"ip_access_list_id"`
+	IPListKind      string    `json:"ip_list_kind"`
+	IPListTarget    string    `json:"ip_list_target"`
 	BanReason       string    `json:"ban_reason"`
 	BanDurationSec  int       `json:"ban_duration_sec"`
 	BanRemainingSec int       `json:"ban_remaining_sec"`
@@ -274,6 +276,7 @@ type ObservabilitySummary struct {
 	UploadDetections  int64          `json:"upload_detections"`
 	DynamicBans       int64          `json:"dynamic_bans"`
 	AccessControl     []SummaryCount `json:"access_control"`
+	IPAccessList      []SummaryCount `json:"ip_access_list"`
 	TopIPs            []SummaryCount `json:"top_ips"`
 	TopURIs           []SummaryCount `json:"top_uris"`
 	TopRules          []SummaryCount `json:"top_rules"`
@@ -377,7 +380,6 @@ type BackfillHealthState struct {
 type PublishCompatibilityDiagnostics struct {
 	ProtectionRules int                            `json:"protection_rules"`
 	RateLimits      int                            `json:"rate_limits"`
-	AccessLists     int                            `json:"access_lists"`
 	LegacyModules   map[string]int                 `json:"legacy_modules"`
 	ByModule        map[string]CompatibilityCounts `json:"by_module"`
 	Deduplicated    int                            `json:"deduplicated"`
@@ -434,20 +436,22 @@ type ObservabilitySummaryFilter struct {
 	Limit int
 }
 
-type AccessListEntry struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	Kind          string    `json:"kind"`
-	Target        string    `json:"target"`
-	Value         string    `json:"value"`
-	MatchOperator string    `json:"match_operator"`
-	HeaderName    string    `json:"header_name"`
-	Action        string    `json:"action"`
-	SiteID        int64     `json:"site_id"`
-	Enabled       bool      `json:"enabled"`
-	Priority      int       `json:"priority"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+type IPAccessListEntry struct {
+	ID              int64     `json:"id"`
+	Name            string    `json:"name"`
+	Kind            string    `json:"kind"`
+	Target          string    `json:"target"`
+	Value           string    `json:"value"`
+	NormalizedValue string    `json:"normalized_value"`
+	IPFamily        string    `json:"ip_family"`
+	PrefixLength    int       `json:"prefix_length"`
+	SiteID          int64     `json:"site_id"`
+	Enabled         bool      `json:"enabled"`
+	Priority        int       `json:"priority"`
+	ConflictKey     string    `json:"conflict_key"`
+	Description     string    `json:"description"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type RateLimitRule struct {

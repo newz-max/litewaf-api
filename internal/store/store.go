@@ -55,11 +55,11 @@ type Store interface {
 	ClearDynamicBan(context.Context, model.DynamicBanClearRequest) (model.DynamicBanClearResult, error)
 	ListDynamicBanClears(context.Context, model.DynamicBanFilter) ([]model.DynamicBanClearResult, error)
 
-	ListAccessListEntries(context.Context) ([]model.AccessListEntry, error)
-	GetAccessListEntry(context.Context, int64) (model.AccessListEntry, error)
-	CreateAccessListEntry(context.Context, model.AccessListEntry) (model.AccessListEntry, error)
-	UpdateAccessListEntry(context.Context, int64, model.AccessListEntry) (model.AccessListEntry, error)
-	DeleteAccessListEntry(context.Context, int64) error
+	ListIPAccessListEntries(context.Context) ([]model.IPAccessListEntry, error)
+	GetIPAccessListEntry(context.Context, int64) (model.IPAccessListEntry, error)
+	CreateIPAccessListEntry(context.Context, model.IPAccessListEntry) (model.IPAccessListEntry, error)
+	UpdateIPAccessListEntry(context.Context, int64, model.IPAccessListEntry) (model.IPAccessListEntry, error)
+	DeleteIPAccessListEntry(context.Context, int64) error
 
 	ListRateLimitRules(context.Context) ([]model.RateLimitRule, error)
 	GetRateLimitRule(context.Context, int64) (model.RateLimitRule, error)

@@ -404,8 +404,11 @@ func TestObservabilityEmptyQueryAndSummary(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&overviewResponse); err != nil {
 		t.Fatalf("decode overview: %v", err)
 	}
-	if len(overviewResponse.Item.Modules) != 7 {
+	if len(overviewResponse.Item.Modules) != 8 {
 		t.Fatalf("expected implemented module rows, got %+v", overviewResponse.Item.Modules)
+	}
+	if !moduleExists(overviewResponse.Item.Modules, "ip-access-list") {
+		t.Fatalf("overview missing ip access-list module: %+v", overviewResponse.Item.Modules)
 	}
 	if len(overviewResponse.Item.Risks) != 0 {
 		t.Fatalf("empty overview fabricated risks: %+v", overviewResponse.Item.Risks)
@@ -863,16 +866,56 @@ func TestUploadProtectionWriteValidationAndAuthorization(t *testing.T) {
 	}
 }
 
-func TestAccessControlRulesMapAccessLists(t *testing.T) {
+func TestIPAccessListCRUDAndAccessControlDecoupling(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Admin block","kind":"blacklist","target":"uri","value":"/admin","match_operator":"prefix","action":"block","site_id":7,"priority":80}`)
-	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-lists", body), token)
+	body := bytes.NewBufferString(`{"name":"Office allow","kind":"allow","target":"ip","value":"203.0.113.10","site_id":7,"priority":80}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/ip-access-lists", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("create access list status = %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("create ip access list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.IPAccessListEntry `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode ip access list create: %v", err)
+	}
+	if createResponse.Item.NormalizedValue != "203.0.113.10" || createResponse.Item.IPFamily != "ipv4" || createResponse.Item.PrefixLength != 32 {
+		t.Fatalf("unexpected normalized ip entry: %+v", createResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/ip-access-lists", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list ip access list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var ipListResponse struct {
+		Items []model.IPAccessListEntry `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&ipListResponse); err != nil {
+		t.Fatalf("decode ip access list: %v", err)
+	}
+	if len(ipListResponse.Items) != 1 {
+		t.Fatalf("expected 1 ip access-list entry, got %+v", ipListResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-lists", bytes.NewBufferString(`{"name":"old"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("legacy access-lists route status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	accessBody := bytes.NewBufferString(`{"name":"Source block","match":{"target":"ip","value":"203.0.113.10"},"action":{"type":"block"}}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-control/rules", accessBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("access control source ip status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-control/rules?site_id=7&enabled=true", nil), token)
@@ -881,28 +924,14 @@ func TestAccessControlRulesMapAccessLists(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list access control status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	var listResponse struct {
+	var accessControlResponse struct {
 		Items []model.ProtectionRule `json:"items"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+	if err := json.NewDecoder(rec.Body).Decode(&accessControlResponse); err != nil {
 		t.Fatalf("decode access control list: %v", err)
 	}
-	if len(listResponse.Items) != 1 {
-		t.Fatalf("expected 1 access control rule, got %+v", listResponse.Items)
-	}
-	item := listResponse.Items[0]
-	if item.Module != "access-control" || item.Category != "access-control" || item.Action.Type != "block" {
-		t.Fatalf("unexpected access control identity: %+v", item)
-	}
-	if item.Match.Target != "path" || item.Match.Path != "/admin" || item.Match.PathMatch != "prefix" || item.Priority != 80 {
-		t.Fatalf("unexpected access control match: %+v", item)
-	}
-
-	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-control/rules/"+strconv.FormatInt(item.ID, 10), nil), token)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("get access control status = %d body=%s", rec.Code, rec.Body.String())
+	if len(accessControlResponse.Items) != 0 {
+		t.Fatalf("ip access-list entries must not be returned by access control, got %+v", accessControlResponse.Items)
 	}
 }
 
@@ -910,7 +939,7 @@ func TestAccessControlRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Trusted source","site_id":3,"priority":50,"match":{"target":"cidr","value":"10.0.0.0/8"},"action":{"type":"allow"}}`)
+	body := bytes.NewBufferString(`{"name":"Admin path","site_id":3,"priority":50,"match":{"target":"path","path":"/admin","path_match":"prefix"},"action":{"type":"block"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-control/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -923,7 +952,7 @@ func TestAccessControlRuleWriteLifecycleAndAudit(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
 		t.Fatalf("decode create access control: %v", err)
 	}
-	if createResponse.Item.Match.Target != "cidr" || createResponse.Item.Action.Type != "allow" || createResponse.Item.Priority != 50 {
+	if createResponse.Item.Match.Target != "path" || createResponse.Item.Match.Path != "/admin" || createResponse.Item.Action.Type != "block" || createResponse.Item.Priority != 50 {
 		t.Fatalf("unexpected created access control: %+v", createResponse.Item)
 	}
 
@@ -1242,12 +1271,12 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 		t.Fatalf("create rate limit status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	accessBody := bytes.NewBufferString(`{"name":"全站放行","kind":"whitelist","target":"uri","value":"/","match_operator":"prefix","action":"allow","site_id":1,"enabled":true,"priority":10}`)
-	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-lists", accessBody), token)
+	ipBody := bytes.NewBufferString(`{"name":"办公出口放行","kind":"allow","target":"ip","value":"203.0.113.10","site_id":1,"enabled":true,"priority":10}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/ip-access-lists", ipBody), token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("create access list status = %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("create ip access list status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
 	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/protection/overview", nil), token)
@@ -1262,11 +1291,13 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&overviewResponse); err != nil {
 		t.Fatalf("decode overview: %v", err)
 	}
-	var ccModule, accessModule model.ProtectionModuleOverview
+	var ccModule, ipModule, accessModule model.ProtectionModuleOverview
 	for _, module := range overviewResponse.Item.Modules {
 		switch module.Key {
 		case "cc-protection":
 			ccModule = module
+		case "ip-access-list":
+			ipModule = module
 		case "access-control":
 			accessModule = module
 		}
@@ -1277,10 +1308,13 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	if len(ccModule.RiskDetails) == 0 || ccModule.RiskDetails[0].Scope == "" || ccModule.RiskDetails[0].Impact == "" || ccModule.RiskDetails[0].Recommendation == "" {
 		t.Fatalf("cc overview missing structured risk details: %+v", ccModule)
 	}
-	if accessModule.CompatibilitySource != "access_lists" || accessModule.Allow != 1 || len(accessModule.Warnings) == 0 {
+	if ipModule.Route != "/ip-access-lists" || ipModule.Allow != 1 || ipModule.Enabled != 1 || ipModule.CompatibilitySource != "" {
+		t.Fatalf("unexpected ip access-list overview: %+v", ipModule)
+	}
+	if accessModule.CompatibilitySource != "" || accessModule.Allow != 0 || accessModule.Rules != 0 {
 		t.Fatalf("unexpected access overview: %+v", accessModule)
 	}
-	if len(overviewResponse.Item.Risks) < 2 {
+	if len(overviewResponse.Item.Risks) < 1 {
 		t.Fatalf("expected module risks, got %+v", overviewResponse.Item.Risks)
 	}
 
@@ -1306,8 +1340,15 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	if !ok || firstRisk["scope"] == "" || firstRisk["impact"] == "" || firstRisk["recommendation"] == "" {
 		t.Fatalf("preview risk missing actionable context: %+v", risks[0])
 	}
-	if int(summary["rate_limits"].(float64)) != 1 || int(summary["access_lists"].(float64)) != 1 {
-		t.Fatalf("preview lost compatibility counts: %+v", summary)
+	ipSummary, ok := summary["ip_access_list"].(map[string]any)
+	if !ok || int(ipSummary["enabled"].(float64)) != 1 || int(ipSummary["allow"].(float64)) != 1 {
+		t.Fatalf("preview lost ip access-list counts: %+v", summary)
+	}
+	if int(summary["rate_limits"].(float64)) != 1 {
+		t.Fatalf("preview lost rate limit count: %+v", summary)
+	}
+	if _, ok := summary["access_lists"]; ok {
+		t.Fatalf("preview must not expose legacy access_lists count: %+v", summary)
 	}
 	if summary["compatibility_diagnostics"] == nil {
 		t.Fatalf("preview missing compatibility diagnostics: %+v", summary)
@@ -2224,4 +2265,13 @@ func TestDynamicProtectionEventQueryAndSummary(t *testing.T) {
 	if len(summaryResponse.Item.DynamicProtection) != 1 || summaryResponse.Item.DynamicProtection[0].Key != "dynamic-token|token-failed|block|blocked" {
 		t.Fatalf("unexpected dynamic protection summary: %+v", summaryResponse.Item)
 	}
+}
+
+func moduleExists(items []model.ProtectionModuleOverview, key string) bool {
+	for _, item := range items {
+		if item.Key == key {
+			return true
+		}
+	}
+	return false
 }

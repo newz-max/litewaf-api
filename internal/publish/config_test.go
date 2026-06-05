@@ -188,37 +188,48 @@ func TestGenerateExtendedGatewayConfigIncludesAttackProtectionMetadata(t *testin
 	}
 }
 
-func TestGenerateExtendedGatewayConfigIncludesAccessControlProtectionRules(t *testing.T) {
+func TestGenerateExtendedGatewayConfigIncludesOptimizedIPAccessIndex(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
-	_, err := dataStore.CreateAccessListEntry(ctx, model.AccessListEntry{
-		Name: "Admin path block", Kind: "blacklist", Target: "uri", Value: "/admin", MatchOperator: "prefix", Action: "block", SiteID: 3, Enabled: true, Priority: 80,
+	exact, err := dataStore.CreateIPAccessListEntry(ctx, model.IPAccessListEntry{
+		Name: "Office allow", Kind: "allow", Target: "ip", Value: "203.0.113.10", SiteID: 3, Enabled: true, Priority: 80,
 	})
 	if err != nil {
-		t.Fatalf("create access control entry: %v", err)
+		t.Fatalf("create exact entry: %v", err)
 	}
-	_, err = dataStore.CreateAccessListEntry(ctx, model.AccessListEntry{
-		Name: "Disabled", Kind: "blacklist", Target: "ip", Value: "203.0.113.1", Action: "block", Enabled: false,
+	cidr, err := dataStore.CreateIPAccessListEntry(ctx, model.IPAccessListEntry{
+		Name: "Blocked range", Kind: "block", Target: "cidr", Value: "198.51.100.0/24", SiteID: 0, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create cidr entry: %v", err)
+	}
+	_, err = dataStore.CreateIPAccessListEntry(ctx, model.IPAccessListEntry{
+		Name: "Disabled", Kind: "block", Target: "ip", Value: "203.0.113.1", Enabled: false,
 	})
 	if err != nil {
 		t.Fatalf("create disabled entry: %v", err)
 	}
-	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-access-control")
+	config, payload, _, err := GenerateExtended(ctx, dataStore, "ruleset-ip-access")
 	if err != nil {
 		t.Fatalf("generate extended: %v", err)
 	}
-	if len(config.AccessLists) != 1 {
-		t.Fatalf("expected legacy access list compatibility output, got %+v", config.AccessLists)
+	exactID := strconv.FormatInt(exact.ID, 10)
+	if config.IPAccessIndex.Exact.Allow["site:3"]["203.0.113.10"] != exactID {
+		t.Fatalf("expected exact allow index to map to entry id, got %+v", config.IPAccessIndex.Exact.Allow)
 	}
-	if len(config.ProtectionRules) != 1 {
-		t.Fatalf("expected access control protection rule output, got %+v", config.ProtectionRules)
+	cidrID := strconv.FormatInt(cidr.ID, 10)
+	if config.IPAccessIndex.CIDR.Block["global"]["ipv4"]["24"]["198.51.100.0"] != cidrID {
+		t.Fatalf("expected cidr block index to map to entry id, got %+v", config.IPAccessIndex.CIDR.Block)
 	}
-	rule := config.ProtectionRules[0]
-	if rule.Module != "access-control" || rule.Category != "access-control" || rule.Action.Type != "block" {
-		t.Fatalf("unexpected access control identity/action: %+v", rule)
+	if len(config.IPAccessIndex.Entries) != 2 {
+		t.Fatalf("disabled entries must be omitted from runtime index, got %+v", config.IPAccessIndex.Entries)
 	}
-	if rule.Match.Target != "path" || rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || rule.Priority != 80 {
-		t.Fatalf("unexpected access control match/priority: %+v", rule)
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if _, ok := raw["access_lists"]; ok {
+		t.Fatalf("legacy access_lists field must be absent: %s", payload)
 	}
 }
 
@@ -482,17 +493,17 @@ func TestGenerateExtendedGatewayConfigIncludesDynamicProtectionRules(t *testing.
 	}
 }
 
-func TestValidateRejectsInvalidAccessControlRule(t *testing.T) {
+func TestValidateRejectsInvalidIPAccessList(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
-	_, err := dataStore.CreateAccessListEntry(ctx, model.AccessListEntry{
-		Name: "Bad path", Kind: "blacklist", Target: "uri", Value: "admin", MatchOperator: "prefix", Action: "block", Enabled: true,
+	_, err := dataStore.CreateIPAccessListEntry(ctx, model.IPAccessListEntry{
+		Name: "Bad CIDR", Kind: "block", Target: "cidr", Value: "198.51.100.0/99", Enabled: true,
 	})
 	if err != nil {
 		t.Fatalf("create invalid entry: %v", err)
 	}
-	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-access-control"); err == nil {
-		t.Fatal("expected invalid access control rule to block publish")
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-ip-access-list"); err == nil {
+		t.Fatal("expected invalid ip access-list entry to block publish")
 	}
 }
 

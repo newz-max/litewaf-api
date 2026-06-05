@@ -22,7 +22,7 @@ type MemoryStore struct {
 	nextPublishID          int64
 	nextUserID             int64
 	nextAuditID            int64
-	nextAccessID           int64
+	nextIPAccessListID     int64
 	nextRateID             int64
 	nextUploadID           int64
 	nextBotID              int64
@@ -49,7 +49,7 @@ type MemoryStore struct {
 	publishes              map[int64]model.PublishRecord
 	users                  map[int64]model.User
 	audits                 map[int64]model.AuditLog
-	accessLists            map[int64]model.AccessListEntry
+	ipAccessLists          map[int64]model.IPAccessListEntry
 	rateLimits             map[int64]model.RateLimitRule
 	uploadRules            map[int64]model.UploadProtectionRule
 	botRules               map[int64]model.BotProtectionRule
@@ -83,7 +83,7 @@ func NewMemoryStore() *MemoryStore {
 		nextPublishID:          1,
 		nextUserID:             1,
 		nextAuditID:            1,
-		nextAccessID:           1,
+		nextIPAccessListID:     1,
 		nextRateID:             1,
 		nextUploadID:           1,
 		nextBotID:              1,
@@ -110,7 +110,7 @@ func NewMemoryStore() *MemoryStore {
 		publishes:              map[int64]model.PublishRecord{},
 		users:                  map[int64]model.User{},
 		audits:                 map[int64]model.AuditLog{},
-		accessLists:            map[int64]model.AccessListEntry{},
+		ipAccessLists:          map[int64]model.IPAccessListEntry{},
 		rateLimits:             map[int64]model.RateLimitRule{},
 		uploadRules:            map[int64]model.UploadProtectionRule{},
 		botRules:               map[int64]model.BotProtectionRule{},
@@ -573,6 +573,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	typeCounts := map[string]int64{}
 	attackProtectionCounts := map[string]int64{}
 	accessControlCounts := map[string]int64{}
+	ipAccessListCounts := map[string]int64{}
 	uploadProtectionCounts := map[string]int64{}
 	botProtectionCounts := map[string]int64{}
 	dynamicProtectionCounts := map[string]int64{}
@@ -629,6 +630,13 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		if item.Module == "access-control" {
 			increment(accessControlCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
 		}
+		if item.Module == "ip-access-list" {
+			kind := item.IPListKind
+			if kind == "" {
+				kind = item.Action
+			}
+			increment(ipAccessListCounts, strings.Join([]string{kind, item.IPListTarget, item.Action, item.Disposition}, "|"))
+		}
 		if item.Module == "upload-protection" {
 			increment(uploadProtectionCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
 		}
@@ -648,6 +656,7 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	summary.TopRules = topCounts(ruleCounts, limit)
 	summary.AttackTypes = topCounts(typeCounts, limit)
 	summary.AccessControl = topCounts(accessControlCounts, limit)
+	summary.IPAccessList = topCounts(ipAccessListCounts, limit)
 	summary.AttackProtection = topCounts(attackProtectionCounts, limit)
 	summary.UploadProtection = topCounts(uploadProtectionCounts, limit)
 	summary.BotProtection = topCounts(botProtectionCounts, limit)
@@ -655,60 +664,65 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	return summary, nil
 }
 
-func (s *MemoryStore) ListAccessListEntries(context.Context) ([]model.AccessListEntry, error) {
+func (s *MemoryStore) ListIPAccessListEntries(context.Context) ([]model.IPAccessListEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	items := make([]model.AccessListEntry, 0, len(s.accessLists))
-	for _, item := range s.accessLists {
+	items := make([]model.IPAccessListEntry, 0, len(s.ipAccessLists))
+	for _, item := range s.ipAccessLists {
 		items = append(items, item)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Priority == items[j].Priority {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].Priority < items[j].Priority
+	})
 	return items, nil
 }
 
-func (s *MemoryStore) GetAccessListEntry(_ context.Context, id int64) (model.AccessListEntry, error) {
+func (s *MemoryStore) GetIPAccessListEntry(_ context.Context, id int64) (model.IPAccessListEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	item, ok := s.accessLists[id]
+	item, ok := s.ipAccessLists[id]
 	if !ok {
-		return model.AccessListEntry{}, ErrNotFound
+		return model.IPAccessListEntry{}, ErrNotFound
 	}
 	return item, nil
 }
 
-func (s *MemoryStore) CreateAccessListEntry(_ context.Context, item model.AccessListEntry) (model.AccessListEntry, error) {
+func (s *MemoryStore) CreateIPAccessListEntry(_ context.Context, item model.IPAccessListEntry) (model.IPAccessListEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
-	item.ID = s.nextAccessID
+	item.ID = s.nextIPAccessListID
 	item.CreatedAt = now
 	item.UpdatedAt = now
-	s.accessLists[item.ID] = item
-	s.nextAccessID++
+	s.ipAccessLists[item.ID] = item
+	s.nextIPAccessListID++
 	return item, nil
 }
 
-func (s *MemoryStore) UpdateAccessListEntry(_ context.Context, id int64, item model.AccessListEntry) (model.AccessListEntry, error) {
+func (s *MemoryStore) UpdateIPAccessListEntry(_ context.Context, id int64, item model.IPAccessListEntry) (model.IPAccessListEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	existing, ok := s.accessLists[id]
+	existing, ok := s.ipAccessLists[id]
 	if !ok {
-		return model.AccessListEntry{}, ErrNotFound
+		return model.IPAccessListEntry{}, ErrNotFound
 	}
 	item.ID = id
 	item.CreatedAt = existing.CreatedAt
 	item.UpdatedAt = time.Now().UTC()
-	s.accessLists[id] = item
+	s.ipAccessLists[id] = item
 	return item, nil
 }
 
-func (s *MemoryStore) DeleteAccessListEntry(_ context.Context, id int64) error {
+func (s *MemoryStore) DeleteIPAccessListEntry(_ context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.accessLists[id]; !ok {
+	if _, ok := s.ipAccessLists[id]; !ok {
 		return ErrNotFound
 	}
-	delete(s.accessLists, id)
+	delete(s.ipAccessLists, id)
 	return nil
 }
 
@@ -1053,11 +1067,6 @@ func (s *MemoryStore) BackfillProtectionRules(context.Context) (int, error) {
 	}
 	for _, item := range s.rateLimits {
 		if err := add(protectionrules.FromRateLimit(item)); err != nil {
-			return created, err
-		}
-	}
-	for _, item := range s.accessLists {
-		if err := add(protectionrules.FromAccessList(item)); err != nil {
 			return created, err
 		}
 	}

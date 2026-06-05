@@ -65,20 +65,22 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO waf_events (
 			request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
-			client_ip, method, uri, summary, access_list_id, rate_limit_id,
+			client_ip, method, uri, summary, rate_limit_id,
 			module, category, rule_name, attack_type, group_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
-			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
+			body_metadata, upload_metadata, ip_access_list_id, ip_list_kind, ip_list_target,
+			ban_reason, ban_duration_sec, ban_remaining_sec,
 			challenge_mode, challenge_result, bot_result, bot_reason, device_signal,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, COALESCE($37::timestamptz, now()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, COALESCE($39::timestamptz, now()))
 		RETURNING id, created_at`,
 		item.RequestID, item.SiteID, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition,
-		item.ClientIP, item.Method, item.URI, item.Summary, item.AccessListID, item.RateLimitID,
+		item.ClientIP, item.Method, item.URI, item.Summary, item.RateLimitID,
 		item.Module, item.Category, item.RuleName, item.AttackType, item.GroupName, item.Counter, item.WindowSec,
 		item.AdvancedTarget, item.NormalizedValue, item.Score, item.Threshold, item.MatchedRuleIDs,
-		item.BodyMetadata, item.UploadMetadata, item.BanReason, item.BanDurationSec, item.BanRemainingSec,
+		item.BodyMetadata, item.UploadMetadata, item.IPAccessListID, item.IPListKind, item.IPListTarget,
+		item.BanReason, item.BanDurationSec, item.BanRemainingSec,
 		item.ChallengeMode, item.ChallengeResult, item.BotResult, item.BotReason, item.DeviceSignal,
 		createdAt).
 		Scan(&item.ID, &item.CreatedAt)
@@ -100,10 +102,11 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
-			client_ip, method, uri, summary, access_list_id, rate_limit_id,
+			client_ip, method, uri, summary, rate_limit_id,
 			module, category, rule_name, attack_type, group_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
-			body_metadata, upload_metadata, ban_reason, ban_duration_sec, ban_remaining_sec,
+			body_metadata, upload_metadata, ip_access_list_id, ip_list_kind, ip_list_target,
+			ban_reason, ban_duration_sec, ban_remaining_sec,
 			challenge_mode, challenge_result, bot_result, bot_reason, device_signal,
 			created_at
 		FROM waf_events
@@ -135,10 +138,11 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 		var item model.WAFEvent
 		if err := rows.Scan(
 			&item.ID, &item.RequestID, &item.SiteID, &item.EventType, &item.RuleID, &item.RuleType, &item.Target, &item.Action, &item.Disposition,
-			&item.ClientIP, &item.Method, &item.URI, &item.Summary, &item.AccessListID, &item.RateLimitID,
+			&item.ClientIP, &item.Method, &item.URI, &item.Summary, &item.RateLimitID,
 			&item.Module, &item.Category, &item.RuleName, &item.AttackType, &item.GroupName, &item.Counter, &item.WindowSec,
 			&item.AdvancedTarget, &item.NormalizedValue, &item.Score, &item.Threshold, &item.MatchedRuleIDs,
-			&item.BodyMetadata, &item.UploadMetadata, &item.BanReason, &item.BanDurationSec, &item.BanRemainingSec,
+			&item.BodyMetadata, &item.UploadMetadata, &item.IPAccessListID, &item.IPListKind, &item.IPListTarget,
+			&item.BanReason, &item.BanDurationSec, &item.BanRemainingSec,
 			&item.ChallengeMode, &item.ChallengeResult, &item.BotResult, &item.BotReason, &item.DeviceSignal,
 			&item.CreatedAt,
 		); err != nil {
@@ -202,6 +206,10 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 		return summary, err
 	}
 	summary.AccessControl, err = s.accessControlSummaryCounts(ctx, filter, limit)
+	if err != nil {
+		return summary, err
+	}
+	summary.IPAccessList, err = s.ipAccessListSummaryCounts(ctx, filter, limit)
 	if err != nil {
 		return summary, err
 	}
@@ -397,6 +405,34 @@ func (s *PostgresStore) accessControlSummaryCounts(ctx context.Context, filter m
 		SELECT action || '|' || disposition AS key, count(*) AS count
 		FROM waf_events
 		WHERE module = 'access-control'
+			AND action <> ''
+			AND ($1::timestamptz IS NULL OR created_at >= $1)
+			AND ($2::timestamptz IS NULL OR created_at <= $2)
+		GROUP BY key
+		ORDER BY count DESC, key ASC
+		LIMIT $3`, nullableTime(filter.Since), nullableTime(filter.Until), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.SummaryCount
+	for rows.Next() {
+		var item model.SummaryCount
+		if err := rows.Scan(&item.Key, &item.Count); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(item.Key) != "" {
+			items = append(items, item)
+		}
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) ipAccessListSummaryCounts(ctx context.Context, filter model.ObservabilitySummaryFilter, limit int) ([]model.SummaryCount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT COALESCE(NULLIF(ip_list_kind, ''), action) || '|' || ip_list_target || '|' || action || '|' || disposition AS key, count(*) AS count
+		FROM waf_events
+		WHERE module = 'ip-access-list'
 			AND action <> ''
 			AND ($1::timestamptz IS NULL OR created_at >= $1)
 			AND ($2::timestamptz IS NULL OR created_at <= $2)

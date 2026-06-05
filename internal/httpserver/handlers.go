@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -18,6 +17,7 @@ import (
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/auth"
 	"litewaf-api/internal/defaults"
+	"litewaf-api/internal/ipaccess"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/publish"
@@ -467,7 +467,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	sites, _ := h.app.Store.ListSites(r.Context())
 	rules, _ := h.app.Store.ListRules(r.Context())
 	policies, _ := h.app.Store.ListPolicies(r.Context())
-	accessLists, _ := h.app.Store.ListAccessListEntries(r.Context())
+	ipAccessLists, _ := h.app.Store.ListIPAccessListEntries(r.Context())
 	rateLimits, _ := h.app.Store.ListRateLimitRules(r.Context())
 	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
 	botRules, _ := h.app.Store.ListBotProtectionRules(r.Context())
@@ -479,16 +479,19 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	providers, _ := h.app.Store.ListRuleProviderAdapters(r.Context())
 	providerPackages, _ := h.app.Store.ListRuleProviderPackages(r.Context(), 0)
 	ccSummary := ccProtectionSummary(mergedCCProtectionRules(protectionRules, rateLimits))
-	accessControlSummary := accessControlSummary(mergedAccessControlRules(protectionRules, accessLists))
+	accessRules, _ := filterProtectionRules(protectionRules, "access-control")
+	accessControlSummary := accessControlSummary(accessRules)
+	ipAccessSummary := ipAccessListSummary(ipAccessLists)
 	attackSummary := attackProtectionSummary(rules)
 	uploadSummary := uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules))
 	botSummary := botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules))
 	dynamicSummary := dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules))
 	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys, providers, providerPackages)
-	compatibilityDiagnostics := buildPublishCompatibilityDiagnostics(protectionRules, accessLists, rateLimits, uploadRules, botRules, dynamicRules)
+	compatibilityDiagnostics := buildPublishCompatibilityDiagnostics(protectionRules, rateLimits, uploadRules, botRules, dynamicRules)
 	modules := protectionModuleMatrix(
 		ccSummary,
 		attackSummary,
+		ipAccessSummary,
 		accessControlSummary,
 		uploadSummary,
 		botSummary,
@@ -501,7 +504,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"sites":                     len(sites),
 			"rules":                     len(rules),
 			"policies":                  len(policies),
-			"access_lists":              len(accessLists),
+			"ip_access_list":            ipAccessSummary,
 			"access_control":            accessControlSummary,
 			"rate_limits":               len(rateLimits),
 			"cc_protection":             ccSummary,
@@ -523,7 +526,7 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 	if err != nil {
 		return model.ProtectionOverview{}, err
 	}
-	accessLists, err := h.app.Store.ListAccessListEntries(ctx)
+	ipAccessLists, err := h.app.Store.ListIPAccessListEntries(ctx)
 	if err != nil {
 		return model.ProtectionOverview{}, err
 	}
@@ -574,7 +577,8 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 	modules := protectionModuleMatrix(
 		ccProtectionSummary(mergedCCProtectionRules(protectionRules, rateLimits)),
 		attackProtectionSummary(rules),
-		accessControlSummary(mergedAccessControlRules(protectionRules, accessLists)),
+		ipAccessListSummary(ipAccessLists),
+		accessControlSummary(mustFilterProtectionRules(protectionRules, "access-control")),
 		uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules)),
 		botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules)),
 		dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules)),
@@ -587,10 +591,11 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 	}, nil
 }
 
-func protectionModuleMatrix(cc, attack, access, upload, bot, dynamic, ecosystem envelope, summary model.ObservabilitySummary) []model.ProtectionModuleOverview {
+func protectionModuleMatrix(cc, attack, ipList, access, upload, bot, dynamic, ecosystem envelope, summary model.ObservabilitySummary) []model.ProtectionModuleOverview {
 	return []model.ProtectionModuleOverview{
 		moduleOverview("cc-protection", "CC 防护", "rate-limit", "/cc-protection", "cc-protection", cc, summaryCountTotal(summary.TopRules, "cc-protection")),
 		moduleOverview("attack-protection", "攻击防护", "managed", "/attack-protection", "attack-protection", attack, summary.AttackProtection),
+		moduleOverview("ip-access-list", "IP 黑白名单", "ip-access-list", "/ip-access-lists", "ip-access-list", ipList, summary.IPAccessList),
 		moduleOverview("access-control", "访问控制", "access-control", "/access-control", "access-control", access, summary.AccessControl),
 		moduleOverview("upload-protection", "上传防护", "upload", "/upload-protection", "upload-protection", upload, summary.UploadProtection),
 		moduleOverview("bot-protection", "Bot / 人机验证", "challenge", "/bot-protection", "bot-protection", bot, summary.BotProtection),
@@ -658,18 +663,6 @@ func mergedCCProtectionRules(protectionRules []model.ProtectionRule, rateLimits 
 	return items
 }
 
-func mergedAccessControlRules(protectionRules []model.ProtectionRule, accessLists []model.AccessListEntry) []model.ProtectionRule {
-	items, seen := filterProtectionRules(protectionRules, "access-control")
-	for _, item := range accessLists {
-		ref := protectionrules.LegacyRef("access_lists", item.ID)
-		if seen[ref] {
-			continue
-		}
-		items = append(items, publish.AccessControlFromAccessList(item))
-	}
-	return items
-}
-
 func mergedUploadProtectionRules(protectionRules []model.ProtectionRule, uploadRules []model.UploadProtectionRule) []model.ProtectionRule {
 	items, seen := filterProtectionRules(protectionRules, "upload-protection")
 	for _, item := range uploadRules {
@@ -719,6 +712,11 @@ func filterProtectionRules(rules []model.ProtectionRule, module string) ([]model
 		items = append(items, rule)
 	}
 	return items, seen
+}
+
+func mustFilterProtectionRules(rules []model.ProtectionRule, module string) []model.ProtectionRule {
+	items, _ := filterProtectionRules(rules, module)
+	return items
 }
 
 func summaryCountTotal(items []model.SummaryCount, prefix string) []model.SummaryCount {
@@ -774,8 +772,6 @@ func compatibilitySource(key string) string {
 	switch key {
 	case "cc-protection":
 		return "rate_limits"
-	case "access-control":
-		return "access_lists"
 	default:
 		return ""
 	}
@@ -1000,6 +996,54 @@ func ruleEcosystemSummary(rules []model.Rule, catalogs []model.RuleCatalogSource
 		"warnings":                 warnings,
 		"gateway_hot_path":         "published-rules-only",
 		"remote_sync_enabled":      len(catalogs) > 0 || len(providers) > 0,
+	}
+}
+
+func ipAccessListSummary(items []model.IPAccessListEntry) envelope {
+	enabled := 0
+	allow := 0
+	block := 0
+	exact := 0
+	cidr := 0
+	global := 0
+	siteScoped := 0
+	for _, item := range items {
+		normalized, err := ipaccess.Normalize(item)
+		if err == nil {
+			item = normalized
+		}
+		if item.SiteID > 0 {
+			siteScoped++
+		} else {
+			global++
+		}
+		if item.Target == ipaccess.TargetCIDR {
+			cidr++
+		} else {
+			exact++
+		}
+		if !item.Enabled {
+			continue
+		}
+		enabled++
+		switch item.Kind {
+		case ipaccess.KindAllow:
+			allow++
+		case ipaccess.KindBlock:
+			block++
+		}
+	}
+	return envelope{
+		"rules":       len(items),
+		"total":       len(items),
+		"enabled":     enabled,
+		"allow":       allow,
+		"block":       block,
+		"exact_ip":    exact,
+		"cidr":        cidr,
+		"global":      global,
+		"site_scoped": siteScoped,
+		"warnings":    []string{},
 	}
 }
 
@@ -1367,68 +1411,6 @@ func (h handlers) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 	h.writeList(w, items, err)
 }
 
-func (h handlers) listAccessLists(w http.ResponseWriter, r *http.Request) {
-	items, err := h.app.Store.ListAccessListEntries(r.Context())
-	h.writeList(w, items, err)
-}
-
-func (h handlers) getAccessList(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	item, err := h.app.Store.GetAccessListEntry(r.Context(), id)
-	h.writeItem(w, item, err)
-}
-
-func (h handlers) createAccessList(w http.ResponseWriter, r *http.Request) {
-	var req accessListRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-	item := req.toModel()
-	item.Enabled = boolValue(req.Enabled, true)
-	normalizeAccessList(&item)
-	if err := validateAccessList(item); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	created, err := h.app.Store.CreateAccessListEntry(r.Context(), item)
-	h.audit(r, "create", "access_list", created.ID, resultFromErr(err), err)
-	h.writeCreated(w, created, err)
-}
-
-func (h handlers) updateAccessList(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	var req accessListRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-	item := req.toModel()
-	item.Enabled = boolValue(req.Enabled, true)
-	normalizeAccessList(&item)
-	if err := validateAccessList(item); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	updated, err := h.app.Store.UpdateAccessListEntry(r.Context(), id, item)
-	h.audit(r, "update", "access_list", id, resultFromErr(err), err)
-	h.writeItem(w, updated, err)
-}
-
-func (h handlers) deleteAccessList(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(w, r)
-	if !ok {
-		return
-	}
-	err := h.app.Store.DeleteAccessListEntry(r.Context(), id)
-	h.audit(r, "delete", "access_list", id, resultFromErr(err), err)
-	h.writeNoContent(w, err)
-}
-
 func (h handlers) listRateLimits(w http.ResponseWriter, r *http.Request) {
 	items, err := h.app.Store.ListRateLimitRules(r.Context())
 	h.writeList(w, items, err)
@@ -1613,33 +1595,6 @@ func (r policyRequest) toModel() model.Policy {
 		DynamicBanWindowSec:        r.DynamicBanWindowSec,
 		SiteIDs:                    cloneIDs(r.SiteIDs),
 		RuleIDs:                    cloneIDs(r.RuleIDs),
-	}
-}
-
-type accessListRequest struct {
-	Name          string `json:"name"`
-	Kind          string `json:"kind"`
-	Target        string `json:"target"`
-	Value         string `json:"value"`
-	MatchOperator string `json:"match_operator"`
-	HeaderName    string `json:"header_name"`
-	Action        string `json:"action"`
-	SiteID        int64  `json:"site_id"`
-	Enabled       *bool  `json:"enabled"`
-	Priority      int    `json:"priority"`
-}
-
-func (r accessListRequest) toModel() model.AccessListEntry {
-	return model.AccessListEntry{
-		Name:          r.Name,
-		Kind:          r.Kind,
-		Target:        r.Target,
-		Value:         r.Value,
-		MatchOperator: r.MatchOperator,
-		HeaderName:    r.HeaderName,
-		Action:        r.Action,
-		SiteID:        r.SiteID,
-		Priority:      r.Priority,
 	}
 }
 
@@ -1947,65 +1902,6 @@ func validatePolicy(policy model.Policy) error {
 	}
 	if len(policy.RuleIDs) == 0 {
 		return errors.New("policy rule_ids is required")
-	}
-	return nil
-}
-
-func normalizeAccessList(item *model.AccessListEntry) {
-	item.Name = strings.TrimSpace(item.Name)
-	item.Kind = strings.ToLower(strings.TrimSpace(item.Kind))
-	item.Target = strings.ToLower(strings.TrimSpace(item.Target))
-	item.Value = strings.TrimSpace(item.Value)
-	item.MatchOperator = strings.ToLower(strings.TrimSpace(item.MatchOperator))
-	item.HeaderName = strings.TrimSpace(item.HeaderName)
-	item.Action = strings.ToLower(strings.TrimSpace(item.Action))
-	if item.Kind == "" {
-		item.Kind = "blacklist"
-	}
-	if item.Action == "" {
-		item.Action = "block"
-	}
-	if item.Priority == 0 {
-		item.Priority = 100
-	}
-}
-
-func validateAccessList(item model.AccessListEntry) error {
-	if item.Name == "" {
-		return errors.New("access list name is required")
-	}
-	if !oneOf(item.Kind, "blacklist", "whitelist") {
-		return errors.New("access list kind must be blacklist or whitelist")
-	}
-	if !oneOf(item.Target, "ip", "cidr", "uri", "ua", "header", "host") {
-		return errors.New("access list target must be ip, cidr, uri, ua, header, or host")
-	}
-	if item.Value == "" {
-		return errors.New("access list value is required")
-	}
-	if !oneOf(item.Action, "allow", "block", "log-only") {
-		return errors.New("access list action must be allow, block, or log-only")
-	}
-	switch item.Target {
-	case "ip":
-		if net.ParseIP(item.Value) == nil {
-			return errors.New("access list ip value is invalid")
-		}
-	case "cidr":
-		if _, _, err := net.ParseCIDR(item.Value); err != nil {
-			return errors.New("access list cidr value is invalid")
-		}
-	case "uri":
-		if !strings.HasPrefix(item.Value, "/") {
-			return errors.New("access list uri value must start with /")
-		}
-	case "header":
-		if item.HeaderName == "" {
-			return errors.New("access list header_name is required")
-		}
-	}
-	if item.Priority < 0 {
-		return errors.New("access list priority cannot be negative")
 	}
 	return nil
 }

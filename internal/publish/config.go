@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
 	"litewaf-api/internal/attackmeta"
+	"litewaf-api/internal/ipaccess"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/protectionrules"
 	"litewaf-api/internal/store"
@@ -52,19 +53,6 @@ type GatewayRule struct {
 	PackageID      string `json:"package_id,omitempty"`
 	PackageVersion string `json:"package_version,omitempty"`
 	PackageRuleID  string `json:"package_rule_id,omitempty"`
-}
-
-type GatewayAccessListEntry struct {
-	ID            int64  `json:"id"`
-	Name          string `json:"name"`
-	Kind          string `json:"kind"`
-	Target        string `json:"target"`
-	Value         string `json:"value"`
-	MatchOperator string `json:"match_operator,omitempty"`
-	HeaderName    string `json:"header_name,omitempty"`
-	Action        string `json:"action"`
-	SiteID        int64  `json:"site_id"`
-	Priority      int    `json:"priority"`
 }
 
 type GatewayRateLimitRule struct {
@@ -108,12 +96,46 @@ type GatewayPolicy struct {
 }
 
 type ExtendedGatewayConfig struct {
-	Version         string                   `json:"version"`
-	GeneratedAt     time.Time                `json:"generated_at"`
-	Sites           []GatewaySite            `json:"sites"`
-	AccessLists     []GatewayAccessListEntry `json:"access_lists"`
-	RateLimits      []GatewayRateLimitRule   `json:"rate_limits"`
-	ProtectionRules []model.ProtectionRule   `json:"protection_rules"`
+	Version         string                 `json:"version"`
+	GeneratedAt     time.Time              `json:"generated_at"`
+	Sites           []GatewaySite          `json:"sites"`
+	IPAccessIndex   GatewayIPAccessIndex   `json:"ip_access_index"`
+	RateLimits      []GatewayRateLimitRule `json:"rate_limits"`
+	ProtectionRules []model.ProtectionRule `json:"protection_rules"`
+}
+
+type GatewayIPAccessEntry struct {
+	ID              int64  `json:"id"`
+	Name            string `json:"name"`
+	Kind            string `json:"kind"`
+	Target          string `json:"target"`
+	NormalizedValue string `json:"normalized_value"`
+	IPFamily        string `json:"ip_family"`
+	PrefixLength    int    `json:"prefix_length"`
+	SiteID          int64  `json:"site_id"`
+	Priority        int    `json:"priority"`
+}
+
+type GatewayIPAccessIndex struct {
+	Entries           map[string]GatewayIPAccessEntry `json:"entries"`
+	Exact             GatewayIPAccessExact            `json:"exact"`
+	CIDR              GatewayIPAccessCIDR             `json:"cidr"`
+	CIDRPrefixLengths GatewayIPAccessPrefixLengths    `json:"cidr_prefix_lengths"`
+}
+
+type GatewayIPAccessExact struct {
+	Allow map[string]map[string]string `json:"allow"`
+	Block map[string]map[string]string `json:"block"`
+}
+
+type GatewayIPAccessCIDR struct {
+	Allow map[string]map[string]map[string]map[string]string `json:"allow"`
+	Block map[string]map[string]map[string]map[string]string `json:"block"`
+}
+
+type GatewayIPAccessPrefixLengths struct {
+	Allow map[string]map[string][]int `json:"allow"`
+	Block map[string]map[string][]int `json:"block"`
 }
 
 func Generate(ctx context.Context, dataStore store.Store, version string) (GatewayConfig, []byte, string, error) {
@@ -141,7 +163,7 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 	if err != nil {
 		return ExtendedGatewayConfig{}, nil, "", err
 	}
-	accessLists, err := dataStore.ListAccessListEntries(ctx)
+	ipAccessLists, err := dataStore.ListIPAccessListEntries(ctx)
 	if err != nil {
 		return ExtendedGatewayConfig{}, nil, "", err
 	}
@@ -198,7 +220,7 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 		Version:         version,
 		GeneratedAt:     time.Now().UTC(),
 		Sites:           []GatewaySite{},
-		AccessLists:     []GatewayAccessListEntry{},
+		IPAccessIndex:   emptyIPAccessIndex(),
 		RateLimits:      []GatewayRateLimitRule{},
 		ProtectionRules: []model.ProtectionRule{},
 	}
@@ -245,26 +267,11 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			seenLegacyProtectionRules[item.LegacyRef] = true
 		}
 	}
-	for _, item := range accessLists {
-		if !item.Enabled {
-			continue
-		}
-		config.AccessLists = append(config.AccessLists, GatewayAccessListEntry{
-			ID:            item.ID,
-			Name:          item.Name,
-			Kind:          item.Kind,
-			Target:        item.Target,
-			Value:         item.Value,
-			MatchOperator: item.MatchOperator,
-			HeaderName:    item.HeaderName,
-			Action:        item.Action,
-			SiteID:        item.SiteID,
-			Priority:      protectionPriority(item.Priority),
-		})
-		if !seenLegacyProtectionRules[protectionrules.LegacyRef("access_lists", item.ID)] {
-			config.ProtectionRules = append(config.ProtectionRules, AccessControlFromAccessList(item))
-		}
+	ipIndex, err := BuildIPAccessIndex(ipAccessLists)
+	if err != nil {
+		return ExtendedGatewayConfig{}, nil, "", err
 	}
+	config.IPAccessIndex = ipIndex
 	for _, item := range rateLimits {
 		if !item.Enabled {
 			continue
@@ -326,10 +333,6 @@ func CCProtectionFromRateLimit(item model.RateLimitRule) model.ProtectionRule {
 	return protectionrules.FromRateLimit(item)
 }
 
-func AccessControlFromAccessList(item model.AccessListEntry) model.ProtectionRule {
-	return protectionrules.FromAccessList(item)
-}
-
 func UploadProtectionFromRule(item model.UploadProtectionRule) model.ProtectionRule {
 	return protectionrules.FromUpload(item)
 }
@@ -362,6 +365,131 @@ func cloneStrings(values []string) []string {
 	return out
 }
 
+func emptyIPAccessIndex() GatewayIPAccessIndex {
+	return GatewayIPAccessIndex{
+		Entries: map[string]GatewayIPAccessEntry{},
+		Exact: GatewayIPAccessExact{
+			Allow: map[string]map[string]string{},
+			Block: map[string]map[string]string{},
+		},
+		CIDR: GatewayIPAccessCIDR{
+			Allow: map[string]map[string]map[string]map[string]string{},
+			Block: map[string]map[string]map[string]map[string]string{},
+		},
+		CIDRPrefixLengths: GatewayIPAccessPrefixLengths{
+			Allow: map[string]map[string][]int{},
+			Block: map[string]map[string][]int{},
+		},
+	}
+}
+
+func BuildIPAccessIndex(items []model.IPAccessListEntry) (GatewayIPAccessIndex, error) {
+	index := emptyIPAccessIndex()
+	prefixSets := map[string]map[string]map[string]map[int]bool{
+		ipaccess.KindAllow: {},
+		ipaccess.KindBlock: {},
+	}
+	for _, raw := range items {
+		if !raw.Enabled {
+			continue
+		}
+		item, err := ipaccess.Normalize(raw)
+		if err != nil {
+			return index, fmt.Errorf("ip access-list %d is invalid: %w", raw.ID, err)
+		}
+		if err := ipaccess.Validate(item); err != nil {
+			return index, fmt.Errorf("ip access-list %d is invalid: %w", raw.ID, err)
+		}
+		entryID := fmt.Sprintf("%d", item.ID)
+		scope := ipaccess.ScopeKey(item.SiteID)
+		index.Entries[entryID] = GatewayIPAccessEntry{
+			ID:              item.ID,
+			Name:            item.Name,
+			Kind:            item.Kind,
+			Target:          item.Target,
+			NormalizedValue: item.NormalizedValue,
+			IPFamily:        item.IPFamily,
+			PrefixLength:    item.PrefixLength,
+			SiteID:          item.SiteID,
+			Priority:        protectionPriority(item.Priority),
+		}
+		if item.Target == ipaccess.TargetIP {
+			exact := index.Exact.Block
+			if item.Kind == ipaccess.KindAllow {
+				exact = index.Exact.Allow
+			}
+			ensureStringMap(exact, scope)
+			if exact[scope][item.NormalizedValue] == "" {
+				exact[scope][item.NormalizedValue] = entryID
+			}
+			continue
+		}
+		cidr := index.CIDR.Block
+		if item.Kind == ipaccess.KindAllow {
+			cidr = index.CIDR.Allow
+		}
+		ensureCIDRMap(cidr, scope, item.IPFamily, item.PrefixLength)
+		prefixKey := fmt.Sprintf("%d", item.PrefixLength)
+		if cidr[scope][item.IPFamily][prefixKey][item.NormalizedValue] == "" {
+			cidr[scope][item.IPFamily][prefixKey][item.NormalizedValue] = entryID
+		}
+		ensurePrefixSet(prefixSets, item.Kind, scope, item.IPFamily)
+		prefixSets[item.Kind][scope][item.IPFamily][item.PrefixLength] = true
+	}
+	index.CIDRPrefixLengths.Allow = prefixLists(prefixSets[ipaccess.KindAllow])
+	index.CIDRPrefixLengths.Block = prefixLists(prefixSets[ipaccess.KindBlock])
+	return index, nil
+}
+
+func ensureStringMap(target map[string]map[string]string, scope string) {
+	if target[scope] == nil {
+		target[scope] = map[string]string{}
+	}
+}
+
+func ensureCIDRMap(target map[string]map[string]map[string]map[string]string, scope, family string, prefix int) {
+	if target[scope] == nil {
+		target[scope] = map[string]map[string]map[string]string{}
+	}
+	if target[scope][family] == nil {
+		target[scope][family] = map[string]map[string]string{}
+	}
+	prefixKey := fmt.Sprintf("%d", prefix)
+	if target[scope][family][prefixKey] == nil {
+		target[scope][family][prefixKey] = map[string]string{}
+	}
+}
+
+func ensurePrefixSet(target map[string]map[string]map[string]map[int]bool, kind, scope, family string) {
+	if target[kind] == nil {
+		target[kind] = map[string]map[string]map[int]bool{}
+	}
+	if target[kind][scope] == nil {
+		target[kind][scope] = map[string]map[int]bool{}
+	}
+	if target[kind][scope][family] == nil {
+		target[kind][scope][family] = map[int]bool{}
+	}
+}
+
+func prefixLists(values map[string]map[string]map[int]bool) map[string]map[string][]int {
+	out := map[string]map[string][]int{}
+	for scope, byFamily := range values {
+		if out[scope] == nil {
+			out[scope] = map[string][]int{}
+		}
+		for family, set := range byFamily {
+			list := make([]int, 0, len(set))
+			for prefix := range set {
+				list = append(list, prefix)
+			}
+			sort.Slice(list, func(i, j int) bool { return list[i] > list[j] })
+			out[scope][family] = list
+		}
+	}
+	return out
+}
+
 func Validate(ctx context.Context, dataStore store.Store) error {
 	sites, err := dataStore.ListSites(ctx)
 	if err != nil {
@@ -375,7 +503,7 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 	if err != nil {
 		return err
 	}
-	accessLists, err := dataStore.ListAccessListEntries(ctx)
+	ipAccessLists, err := dataStore.ListIPAccessListEntries(ctx)
 	if err != nil {
 		return err
 	}
@@ -455,10 +583,14 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 			}
 		}
 	}
-	for _, item := range accessLists {
+	for _, item := range ipAccessLists {
 		if item.Enabled {
-			if err := validateAccessControlEntry(item); err != nil {
-				return err
+			normalized, err := ipaccess.Normalize(item)
+			if err != nil {
+				return fmt.Errorf("ip access-list %d is invalid: %w", item.ID, err)
+			}
+			if err := ipaccess.Validate(normalized); err != nil {
+				return fmt.Errorf("ip access-list %d is invalid: %w", item.ID, err)
 			}
 		}
 	}
@@ -497,54 +629,6 @@ func Validate(ctx context.Context, dataStore store.Store) error {
 				return fmt.Errorf("protection rule %d is invalid: %w", item.ID, err)
 			}
 		}
-	}
-	return nil
-}
-
-func validateAccessControlEntry(item model.AccessListEntry) error {
-	if item.Value == "" || item.Kind == "" || item.Target == "" || item.Action == "" {
-		return fmt.Errorf("access list %d is incomplete", item.ID)
-	}
-	if item.Priority < 0 {
-		return fmt.Errorf("access control rule %d priority cannot be negative", item.ID)
-	}
-	if item.Kind != "blacklist" && item.Kind != "whitelist" {
-		return fmt.Errorf("access control rule %d kind is unsupported", item.ID)
-	}
-	if item.Action != "allow" && item.Action != "block" && item.Action != "log-only" {
-		return fmt.Errorf("access control rule %d action is unsupported", item.ID)
-	}
-	switch item.Target {
-	case "ip":
-		if net.ParseIP(item.Value) == nil {
-			return fmt.Errorf("access control rule %d ip value is invalid", item.ID)
-		}
-	case "cidr":
-		if _, _, err := net.ParseCIDR(item.Value); err != nil {
-			return fmt.Errorf("access control rule %d cidr value is invalid", item.ID)
-		}
-	case "uri":
-		if !strings.HasPrefix(item.Value, "/") {
-			return fmt.Errorf("access control rule %d path must start with /", item.ID)
-		}
-		if item.MatchOperator != "" && item.MatchOperator != "exact" && item.MatchOperator != "prefix" {
-			return fmt.Errorf("access control rule %d path operator is unsupported", item.ID)
-		}
-	case "header":
-		if item.HeaderName == "" {
-			return fmt.Errorf("access control rule %d header name is required", item.ID)
-		}
-		if item.MatchOperator != "" && item.MatchOperator != "exact" && item.MatchOperator != "contains" {
-			return fmt.Errorf("access control rule %d header operator is unsupported", item.ID)
-		}
-	case "host":
-		if item.MatchOperator != "" && item.MatchOperator != "exact" && item.MatchOperator != "suffix" {
-			return fmt.Errorf("access control rule %d host operator is unsupported", item.ID)
-		}
-	case "ua":
-		return nil
-	default:
-		return fmt.Errorf("access control rule %d target is unsupported", item.ID)
 	}
 	return nil
 }

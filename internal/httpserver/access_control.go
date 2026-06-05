@@ -2,14 +2,12 @@ package httpserver
 
 import (
 	"errors"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/protectionrules"
-	"litewaf-api/internal/publish"
 	"litewaf-api/internal/store"
 )
 
@@ -35,26 +33,10 @@ func (h handlers) listAccessControlRules(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	items := make([]model.ProtectionRule, 0, len(protectionRules))
-	seenLegacy := map[string]bool{}
 	for _, rule := range protectionRules {
 		if rule.Module != accessControlModule {
 			continue
 		}
-		seenLegacy[rule.LegacyRef] = true
-		if accessControlMatches(rule, filter) {
-			items = append(items, rule)
-		}
-	}
-	entries, err := h.app.Store.ListAccessListEntries(r.Context())
-	if err != nil {
-		h.writeServerError(w, err)
-		return
-	}
-	for _, entry := range entries {
-		if seenLegacy[protectionrules.LegacyRef("access_lists", entry.ID)] {
-			continue
-		}
-		rule := accessControlFromAccessList(entry)
 		if accessControlMatches(rule, filter) {
 			items = append(items, rule)
 		}
@@ -69,12 +51,7 @@ func (h handlers) getAccessControlRule(w http.ResponseWriter, r *http.Request) {
 	}
 	item, err := h.app.Store.GetProtectionRule(r.Context(), id)
 	if err != nil {
-		entry, legacyErr := h.app.Store.GetAccessListEntry(r.Context(), id)
-		if legacyErr != nil {
-			h.writeKnownError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, envelope{"item": accessControlFromAccessList(entry)})
+		h.writeKnownError(w, err)
 		return
 	}
 	if item.Module != accessControlModule {
@@ -114,13 +91,6 @@ func (h handlers) updateAccessControlRule(w http.ResponseWriter, r *http.Request
 		return
 	}
 	updated, err := h.app.Store.UpdateProtectionRule(r.Context(), id, item)
-	if errors.Is(err, store.ErrNotFound) {
-		legacy, legacyErr := h.app.Store.UpdateAccessListEntry(r.Context(), id, protectionrules.ToAccessList(item))
-		if legacyErr == nil {
-			updated = accessControlFromAccessList(legacy)
-		}
-		err = legacyErr
-	}
 	h.audit(r, "update", "access_control_rule", id, resultFromErr(err), err)
 	h.writeItem(w, updated, err)
 }
@@ -131,9 +101,6 @@ func (h handlers) deleteAccessControlRule(w http.ResponseWriter, r *http.Request
 		return
 	}
 	err := h.app.Store.DeleteProtectionRule(r.Context(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		err = h.app.Store.DeleteAccessListEntry(r.Context(), id)
-	}
 	h.audit(r, "delete", "access_control_rule", id, resultFromErr(err), err)
 	h.writeNoContent(w, err)
 }
@@ -147,14 +114,6 @@ type accessControlRequest struct {
 	Action   model.ProtectionRuleAction `json:"action"`
 	Module   string                     `json:"module"`
 	Category string                     `json:"category"`
-}
-
-func (r accessControlRequest) toAccessList() (model.AccessListEntry, error) {
-	rule, err := r.toProtectionRule()
-	if err != nil {
-		return model.AccessListEntry{}, err
-	}
-	return protectionrules.ToAccessList(rule), nil
 }
 
 func (r accessControlRequest) toProtectionRule() (model.ProtectionRule, error) {
@@ -231,13 +190,9 @@ func (r accessControlRequest) validate() error {
 	}
 	switch r.Match.Target {
 	case "ip":
-		if net.ParseIP(r.Match.Value) == nil {
-			return errors.New("access control ip value is invalid")
-		}
+		return errors.New("source IP black/white lists must use /api/v1/ip-access-lists")
 	case "cidr":
-		if _, _, err := net.ParseCIDR(r.Match.Value); err != nil {
-			return errors.New("access control cidr value is invalid")
-		}
+		return errors.New("source CIDR black/white lists must use /api/v1/ip-access-lists")
 	case "path":
 		if !strings.HasPrefix(r.Match.Path, "/") {
 			return errors.New("access control path must start with /")
@@ -301,10 +256,6 @@ func accessControlMatches(rule model.ProtectionRule, filter accessControlFilter)
 	return true
 }
 
-func accessControlFromAccessList(item model.AccessListEntry) model.ProtectionRule {
-	return publish.AccessControlFromAccessList(item)
-}
-
 func inferAccessControlTarget(match model.ProtectionRuleMatch) string {
 	switch {
 	case match.Path != "":
@@ -314,7 +265,7 @@ func inferAccessControlTarget(match model.ProtectionRuleMatch) string {
 	case match.Host != "":
 		return "host"
 	default:
-		return "ip"
+		return ""
 	}
 }
 

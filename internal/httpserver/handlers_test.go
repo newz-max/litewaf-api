@@ -248,6 +248,114 @@ func TestObservabilityIngestionRequiresGatewayToken(t *testing.T) {
 	}
 }
 
+func TestDynamicBanListUnbanClearFeedAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"ban-1","site_id":7,"event_type":"dynamic-ban","rule_id":3,"rule_type":"cc","target":"path","module":"cc-protection","category":"rate-limit","rule_name":"Login ban","action":"block","disposition":"blocked","client_ip":"198.51.100.10","method":"POST","uri":"/api/login","summary":"cc protection temporary ban created","ban_reason":"cc-protection:3","ban_duration_sec":600,"ban_remaining_sec":600}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest dynamic ban status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-bans?site_id=7&status=active", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list dynamic bans status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.DynamicBan `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode active bans: %v", err)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].ClientIP != "198.51.100.10" || listResponse.Items[0].Status != "active" {
+		t.Fatalf("unexpected active ban list: %+v", listResponse.Items)
+	}
+
+	readonlyToken, _, err := auth.IssueToken("test-secret", "readonly", 99, "readonly", 3600000000000)
+	if err != nil {
+		t.Fatalf("issue readonly token: %v", err)
+	}
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-bans?site_id=7", nil), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("readonly list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-bans/unban", bytes.NewBufferString(`{"site_id":7,"client_ip":"198.51.100.10"}`)), readonlyToken)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("readonly unban status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-bans/unban", bytes.NewBufferString(`{"site_id":7,"client_ip":"198.51.100.10"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unban status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var clearResponse struct {
+		Item model.DynamicBanClearResult `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&clearResponse); err != nil {
+		t.Fatalf("decode clear result: %v", err)
+	}
+	if clearResponse.Item.Status != "cleared" || clearResponse.Item.Revision == 0 {
+		t.Fatalf("unexpected clear response: %+v", clearResponse.Item)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-bans/clears?since_revision=0", nil)
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear feed status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var feedResponse struct {
+		Items []model.DynamicBanClearResult `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&feedResponse); err != nil {
+		t.Fatalf("decode clear feed: %v", err)
+	}
+	if len(feedResponse.Items) != 1 || feedResponse.Items[0].ClientIP != "198.51.100.10" {
+		t.Fatalf("unexpected clear feed: %+v", feedResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=dynamic_ban&action=unban", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit query status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode audit logs: %v", err)
+	}
+	if len(auditResponse.Items) != 1 || auditResponse.Items[0].ResourceID != "7:198.51.100.10" || auditResponse.Items[0].Result != "cleared" {
+		t.Fatalf("unexpected audit logs: %+v", auditResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-bans?site_id=7&status=active", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list active after unban status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode active bans after unban: %v", err)
+	}
+	if len(listResponse.Items) != 0 {
+		t.Fatalf("expected no active bans after unban, got %+v", listResponse.Items)
+	}
+}
+
 func TestObservabilityEmptyQueryAndSummary(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

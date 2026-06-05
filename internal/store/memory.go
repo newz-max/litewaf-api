@@ -15,117 +15,125 @@ import (
 )
 
 type MemoryStore struct {
-	mu                    sync.RWMutex
-	nextSiteID            int64
-	nextRuleID            int64
-	nextPolicyID          int64
-	nextPublishID         int64
-	nextUserID            int64
-	nextAuditID           int64
-	nextAccessID          int64
-	nextRateID            int64
-	nextUploadID          int64
-	nextBotID             int64
-	nextDynamicID         int64
-	nextProtectionRuleID  int64
-	nextCatalogID         int64
-	nextCatalogPackageID  int64
-	nextTrustKeyID        int64
-	nextProviderID        int64
-	nextProviderPackageID int64
-	nextAccountSourceID   int64
-	nextContributionID    int64
-	nextPushAttemptID     int64
-	nextReviewQueueID     int64
-	nextFeedbackID        int64
-	nextSuggestionID      int64
-	nextAccessLogID       int64
-	nextWAFEventID        int64
-	sites                 map[int64]model.Site
-	rules                 map[int64]model.Rule
-	policies              map[int64]model.Policy
-	publishes             map[int64]model.PublishRecord
-	users                 map[int64]model.User
-	audits                map[int64]model.AuditLog
-	accessLists           map[int64]model.AccessListEntry
-	rateLimits            map[int64]model.RateLimitRule
-	uploadRules           map[int64]model.UploadProtectionRule
-	botRules              map[int64]model.BotProtectionRule
-	dynamicRules          map[int64]model.DynamicProtectionRule
-	protectionRules       map[int64]model.ProtectionRule
-	catalogSources        map[int64]model.RuleCatalogSource
-	catalogPackages       map[int64]model.RuleCatalogPackage
-	trustKeys             map[int64]model.RuleTrustKey
-	providers             map[int64]model.RuleProviderAdapter
-	providerSecrets       map[int64]string
-	providerPackages      map[int64]model.RuleProviderPackage
-	accountSources        map[int64]model.RuleCommunityAccountSource
-	accountSecrets        map[int64]string
-	contributionTargets   map[int64]model.RuleContributionTarget
-	contributionSecrets   map[int64]string
-	pushAttempts          map[int64]model.RuleContributionPushAttempt
-	reviewQueue           map[int64]model.RuleReviewQueueItem
-	feedback              map[int64]model.RuleFeedback
-	feedbackSuggestions   map[int64]model.RuleFeedbackSuggestion
-	accessLogs            map[int64]model.AccessLog
-	wafEvents             map[int64]model.WAFEvent
+	mu                     sync.RWMutex
+	nextSiteID             int64
+	nextRuleID             int64
+	nextPolicyID           int64
+	nextPublishID          int64
+	nextUserID             int64
+	nextAuditID            int64
+	nextAccessID           int64
+	nextRateID             int64
+	nextUploadID           int64
+	nextBotID              int64
+	nextDynamicID          int64
+	nextProtectionRuleID   int64
+	nextCatalogID          int64
+	nextCatalogPackageID   int64
+	nextTrustKeyID         int64
+	nextProviderID         int64
+	nextProviderPackageID  int64
+	nextAccountSourceID    int64
+	nextContributionID     int64
+	nextPushAttemptID      int64
+	nextReviewQueueID      int64
+	nextFeedbackID         int64
+	nextSuggestionID       int64
+	nextAccessLogID        int64
+	nextWAFEventID         int64
+	nextDynamicBanID       int64
+	nextDynamicBanRevision int64
+	sites                  map[int64]model.Site
+	rules                  map[int64]model.Rule
+	policies               map[int64]model.Policy
+	publishes              map[int64]model.PublishRecord
+	users                  map[int64]model.User
+	audits                 map[int64]model.AuditLog
+	accessLists            map[int64]model.AccessListEntry
+	rateLimits             map[int64]model.RateLimitRule
+	uploadRules            map[int64]model.UploadProtectionRule
+	botRules               map[int64]model.BotProtectionRule
+	dynamicRules           map[int64]model.DynamicProtectionRule
+	protectionRules        map[int64]model.ProtectionRule
+	catalogSources         map[int64]model.RuleCatalogSource
+	catalogPackages        map[int64]model.RuleCatalogPackage
+	trustKeys              map[int64]model.RuleTrustKey
+	providers              map[int64]model.RuleProviderAdapter
+	providerSecrets        map[int64]string
+	providerPackages       map[int64]model.RuleProviderPackage
+	accountSources         map[int64]model.RuleCommunityAccountSource
+	accountSecrets         map[int64]string
+	contributionTargets    map[int64]model.RuleContributionTarget
+	contributionSecrets    map[int64]string
+	pushAttempts           map[int64]model.RuleContributionPushAttempt
+	reviewQueue            map[int64]model.RuleReviewQueueItem
+	feedback               map[int64]model.RuleFeedback
+	feedbackSuggestions    map[int64]model.RuleFeedbackSuggestion
+	accessLogs             map[int64]model.AccessLog
+	wafEvents              map[int64]model.WAFEvent
+	dynamicBans            map[string]model.DynamicBan
+	dynamicBanClears       map[int64]model.DynamicBanClearResult
 }
 
 func NewMemoryStore() *MemoryStore {
 	store := &MemoryStore{
-		nextSiteID:            1,
-		nextRuleID:            1,
-		nextPolicyID:          1,
-		nextPublishID:         1,
-		nextUserID:            1,
-		nextAuditID:           1,
-		nextAccessID:          1,
-		nextRateID:            1,
-		nextUploadID:          1,
-		nextBotID:             1,
-		nextDynamicID:         1,
-		nextProtectionRuleID:  1,
-		nextCatalogID:         1,
-		nextCatalogPackageID:  1,
-		nextTrustKeyID:        1,
-		nextProviderID:        1,
-		nextProviderPackageID: 1,
-		nextAccountSourceID:   1,
-		nextContributionID:    1,
-		nextPushAttemptID:     1,
-		nextReviewQueueID:     1,
-		nextFeedbackID:        1,
-		nextSuggestionID:      1,
-		nextAccessLogID:       1,
-		nextWAFEventID:        1,
-		sites:                 map[int64]model.Site{},
-		rules:                 map[int64]model.Rule{},
-		policies:              map[int64]model.Policy{},
-		publishes:             map[int64]model.PublishRecord{},
-		users:                 map[int64]model.User{},
-		audits:                map[int64]model.AuditLog{},
-		accessLists:           map[int64]model.AccessListEntry{},
-		rateLimits:            map[int64]model.RateLimitRule{},
-		uploadRules:           map[int64]model.UploadProtectionRule{},
-		botRules:              map[int64]model.BotProtectionRule{},
-		dynamicRules:          map[int64]model.DynamicProtectionRule{},
-		protectionRules:       map[int64]model.ProtectionRule{},
-		catalogSources:        map[int64]model.RuleCatalogSource{},
-		catalogPackages:       map[int64]model.RuleCatalogPackage{},
-		trustKeys:             map[int64]model.RuleTrustKey{},
-		providers:             map[int64]model.RuleProviderAdapter{},
-		providerSecrets:       map[int64]string{},
-		providerPackages:      map[int64]model.RuleProviderPackage{},
-		accountSources:        map[int64]model.RuleCommunityAccountSource{},
-		accountSecrets:        map[int64]string{},
-		contributionTargets:   map[int64]model.RuleContributionTarget{},
-		contributionSecrets:   map[int64]string{},
-		pushAttempts:          map[int64]model.RuleContributionPushAttempt{},
-		reviewQueue:           map[int64]model.RuleReviewQueueItem{},
-		feedback:              map[int64]model.RuleFeedback{},
-		feedbackSuggestions:   map[int64]model.RuleFeedbackSuggestion{},
-		accessLogs:            map[int64]model.AccessLog{},
-		wafEvents:             map[int64]model.WAFEvent{},
+		nextSiteID:             1,
+		nextRuleID:             1,
+		nextPolicyID:           1,
+		nextPublishID:          1,
+		nextUserID:             1,
+		nextAuditID:            1,
+		nextAccessID:           1,
+		nextRateID:             1,
+		nextUploadID:           1,
+		nextBotID:              1,
+		nextDynamicID:          1,
+		nextProtectionRuleID:   1,
+		nextCatalogID:          1,
+		nextCatalogPackageID:   1,
+		nextTrustKeyID:         1,
+		nextProviderID:         1,
+		nextProviderPackageID:  1,
+		nextAccountSourceID:    1,
+		nextContributionID:     1,
+		nextPushAttemptID:      1,
+		nextReviewQueueID:      1,
+		nextFeedbackID:         1,
+		nextSuggestionID:       1,
+		nextAccessLogID:        1,
+		nextWAFEventID:         1,
+		nextDynamicBanID:       1,
+		nextDynamicBanRevision: 1,
+		sites:                  map[int64]model.Site{},
+		rules:                  map[int64]model.Rule{},
+		policies:               map[int64]model.Policy{},
+		publishes:              map[int64]model.PublishRecord{},
+		users:                  map[int64]model.User{},
+		audits:                 map[int64]model.AuditLog{},
+		accessLists:            map[int64]model.AccessListEntry{},
+		rateLimits:             map[int64]model.RateLimitRule{},
+		uploadRules:            map[int64]model.UploadProtectionRule{},
+		botRules:               map[int64]model.BotProtectionRule{},
+		dynamicRules:           map[int64]model.DynamicProtectionRule{},
+		protectionRules:        map[int64]model.ProtectionRule{},
+		catalogSources:         map[int64]model.RuleCatalogSource{},
+		catalogPackages:        map[int64]model.RuleCatalogPackage{},
+		trustKeys:              map[int64]model.RuleTrustKey{},
+		providers:              map[int64]model.RuleProviderAdapter{},
+		providerSecrets:        map[int64]string{},
+		providerPackages:       map[int64]model.RuleProviderPackage{},
+		accountSources:         map[int64]model.RuleCommunityAccountSource{},
+		accountSecrets:         map[int64]string{},
+		contributionTargets:    map[int64]model.RuleContributionTarget{},
+		contributionSecrets:    map[int64]string{},
+		pushAttempts:           map[int64]model.RuleContributionPushAttempt{},
+		reviewQueue:            map[int64]model.RuleReviewQueueItem{},
+		feedback:               map[int64]model.RuleFeedback{},
+		feedbackSuggestions:    map[int64]model.RuleFeedbackSuggestion{},
+		accessLogs:             map[int64]model.AccessLog{},
+		wafEvents:              map[int64]model.WAFEvent{},
+		dynamicBans:            map[string]model.DynamicBan{},
+		dynamicBanClears:       map[int64]model.DynamicBanClearResult{},
 	}
 	store.seedRules()
 	return store
@@ -461,6 +469,7 @@ func (s *MemoryStore) CreateWAFEvent(_ context.Context, item model.WAFEvent) (mo
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	s.wafEvents[item.ID] = item
 	s.nextWAFEventID++
+	s.projectDynamicBanEventLocked(item)
 	return item, nil
 }
 
@@ -474,6 +483,82 @@ func (s *MemoryStore) ListWAFEvents(_ context.Context, filter model.WAFEventFilt
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	return paginate(items, filter.Pagination), nil
+}
+
+func (s *MemoryStore) ListDynamicBans(_ context.Context, filter model.DynamicBanFilter) ([]model.DynamicBan, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now().UTC()
+	items := make([]model.DynamicBan, 0, len(s.dynamicBans))
+	for _, item := range s.dynamicBans {
+		item = dynamicBanWithStatus(item, now)
+		if !dynamicBanMatches(item, filter) {
+			continue
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	return paginate(items, filter.Pagination), nil
+}
+
+func (s *MemoryStore) ClearDynamicBan(_ context.Context, request model.DynamicBanClearRequest) (model.DynamicBanClearResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	revision := s.nextDynamicBanRevision
+	s.nextDynamicBanRevision++
+	status := "no-op"
+	message := "dynamic ban was already cleared, expired, or not found"
+	key := dynamicBanKey(request.SiteID, request.ClientIP)
+	if item, ok := s.dynamicBans[key]; ok {
+		item = dynamicBanWithStatus(item, now)
+		if item.Status == "active" {
+			status = "cleared"
+			message = "dynamic ban clear recorded"
+		}
+		item.Status = status
+		item.ClearedAt = now
+		item.UpdatedAt = now
+		item.Revision = revision
+		item.BanRemainingSec = 0
+		item.Time = item.CreatedAt.Format(time.RFC3339)
+		s.dynamicBans[key] = item
+	}
+	result := model.DynamicBanClearResult{
+		SiteID:    request.SiteID,
+		ClientIP:  request.ClientIP,
+		Status:    status,
+		Revision:  revision,
+		ClearedAt: now,
+		Message:   message,
+	}
+	s.dynamicBanClears[revision] = result
+	return result, nil
+}
+
+func (s *MemoryStore) ListDynamicBanClears(_ context.Context, filter model.DynamicBanFilter) ([]model.DynamicBanClearResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.DynamicBanClearResult, 0, len(s.dynamicBanClears))
+	for _, item := range s.dynamicBanClears {
+		if filter.SiteID > 0 && item.SiteID != filter.SiteID {
+			continue
+		}
+		if filter.ClientIP != "" && item.ClientIP != filter.ClientIP {
+			continue
+		}
+		if filter.MinRevision > 0 && item.Revision <= filter.MinRevision {
+			continue
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Revision < items[j].Revision })
 	return paginate(items, filter.Pagination), nil
 }
 
@@ -1779,6 +1864,96 @@ func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 		return false
 	}
 	return summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until)
+}
+
+func (s *MemoryStore) projectDynamicBanEventLocked(item model.WAFEvent) {
+	if item.EventType != "dynamic-ban" || item.SiteID <= 0 || item.ClientIP == "" {
+		return
+	}
+	duration := item.BanDurationSec
+	if duration <= 0 {
+		duration = item.BanRemainingSec
+	}
+	if duration <= 0 {
+		return
+	}
+	now := item.CreatedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	key := dynamicBanKey(item.SiteID, item.ClientIP)
+	existing, ok := s.dynamicBans[key]
+	if !ok {
+		existing.ID = s.nextDynamicBanID
+		s.nextDynamicBanID++
+		existing.CreatedAt = now
+	}
+	existing.SiteID = item.SiteID
+	existing.ClientIP = item.ClientIP
+	existing.BanReason = item.BanReason
+	existing.Source = dynamicBanSource(item)
+	existing.SourceEventID = item.ID
+	existing.BanDurationSec = duration
+	existing.BanRemainingSec = duration
+	if item.BanRemainingSec > 0 {
+		existing.BanRemainingSec = item.BanRemainingSec
+	}
+	existing.Status = "active"
+	existing.ExpiresAt = now.Add(time.Duration(existing.BanRemainingSec) * time.Second)
+	existing.ClearedAt = time.Time{}
+	existing.UpdatedAt = now
+	existing.Time = existing.CreatedAt.Format(time.RFC3339)
+	s.dynamicBans[key] = existing
+}
+
+func dynamicBanKey(siteID int64, clientIP string) string {
+	return strconv.FormatInt(siteID, 10) + "|" + clientIP
+}
+
+func dynamicBanSource(item model.WAFEvent) string {
+	if item.Module != "" && item.RuleName != "" {
+		return item.Module + ":" + item.RuleName
+	}
+	if item.Module != "" {
+		return item.Module
+	}
+	if item.BanReason != "" {
+		return item.BanReason
+	}
+	return item.EventType
+}
+
+func dynamicBanWithStatus(item model.DynamicBan, now time.Time) model.DynamicBan {
+	if item.Status == "active" {
+		remaining := int(time.Until(item.ExpiresAt).Seconds())
+		if !now.IsZero() {
+			remaining = int(item.ExpiresAt.Sub(now).Seconds())
+		}
+		if remaining <= 0 {
+			item.Status = "expired"
+			item.BanRemainingSec = 0
+		} else {
+			item.BanRemainingSec = remaining
+		}
+	}
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	return item
+}
+
+func dynamicBanMatches(item model.DynamicBan, filter model.DynamicBanFilter) bool {
+	if filter.SiteID > 0 && item.SiteID != filter.SiteID {
+		return false
+	}
+	if filter.ClientIP != "" && item.ClientIP != filter.ClientIP {
+		return false
+	}
+	if filter.Status != "" && item.Status != filter.Status {
+		return false
+	}
+	if filter.MinRevision > 0 && item.Revision <= filter.MinRevision {
+		return false
+	}
+	return true
 }
 
 func summaryTimeMatches(createdAt time.Time, since time.Time, until time.Time) bool {

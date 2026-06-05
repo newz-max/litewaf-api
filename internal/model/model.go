@@ -223,6 +223,47 @@ type WAFEventFilter struct {
 	Pagination      Pagination
 }
 
+type DynamicBan struct {
+	ID              int64     `json:"id"`
+	SiteID          int64     `json:"site_id"`
+	ClientIP        string    `json:"client_ip"`
+	BanReason       string    `json:"ban_reason"`
+	Source          string    `json:"source"`
+	SourceEventID   int64     `json:"source_event_id"`
+	BanDurationSec  int       `json:"ban_duration_sec"`
+	BanRemainingSec int       `json:"ban_remaining_sec"`
+	Status          string    `json:"status"`
+	Revision        int64     `json:"revision"`
+	CreatedAt       time.Time `json:"created_at"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	ClearedAt       time.Time `json:"cleared_at,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+	Time            string    `json:"time"`
+}
+
+type DynamicBanFilter struct {
+	SiteID      int64
+	ClientIP    string
+	Status      string
+	MinRevision int64
+	Pagination  Pagination
+}
+
+type DynamicBanClearRequest struct {
+	SiteID   int64  `json:"site_id"`
+	ClientIP string `json:"client_ip"`
+	Actor    string `json:"actor,omitempty"`
+}
+
+type DynamicBanClearResult struct {
+	SiteID    int64     `json:"site_id"`
+	ClientIP  string    `json:"client_ip"`
+	Status    string    `json:"status"`
+	Revision  int64     `json:"revision"`
+	ClearedAt time.Time `json:"cleared_at"`
+	Message   string    `json:"message"`
+}
+
 type ObservabilitySummary struct {
 	Requests          int64          `json:"requests"`
 	BlockedRequests   int64          `json:"blocked_requests"`

@@ -259,6 +259,56 @@ CREATE INDEX IF NOT EXISTS idx_waf_events_action ON waf_events (action);
 CREATE INDEX IF NOT EXISTS idx_waf_events_disposition ON waf_events (disposition);
 CREATE INDEX IF NOT EXISTS idx_waf_events_event_type ON waf_events (event_type);
 
+CREATE SEQUENCE IF NOT EXISTS dynamic_ban_clear_revision_seq;
+
+CREATE TABLE IF NOT EXISTS dynamic_bans (
+	id BIGSERIAL PRIMARY KEY,
+	site_id BIGINT NOT NULL DEFAULT 0,
+	client_ip TEXT NOT NULL DEFAULT '',
+	ban_reason TEXT NOT NULL DEFAULT '',
+	source TEXT NOT NULL DEFAULT '',
+	source_event_id BIGINT NOT NULL DEFAULT 0,
+	ban_duration_sec INTEGER NOT NULL DEFAULT 0,
+	ban_remaining_sec INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL DEFAULT 'active',
+	revision BIGINT NOT NULL DEFAULT 0,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	expires_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	cleared_at TIMESTAMPTZ,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	UNIQUE (site_id, client_ip)
+);
+
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS source_event_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS ban_duration_sec INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS ban_remaining_sec INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_dynamic_bans_site_ip ON dynamic_bans (site_id, client_ip);
+CREATE INDEX IF NOT EXISTS idx_dynamic_bans_status ON dynamic_bans (status);
+CREATE INDEX IF NOT EXISTS idx_dynamic_bans_expires_at ON dynamic_bans (expires_at);
+CREATE INDEX IF NOT EXISTS idx_dynamic_bans_revision ON dynamic_bans (revision);
+
+CREATE TABLE IF NOT EXISTS dynamic_ban_clears (
+	id BIGSERIAL PRIMARY KEY,
+	site_id BIGINT NOT NULL DEFAULT 0,
+	client_ip TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT '',
+	revision BIGINT NOT NULL DEFAULT nextval('dynamic_ban_clear_revision_seq'),
+	actor TEXT NOT NULL DEFAULT '',
+	message TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '';
+ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT nextval('dynamic_ban_clear_revision_seq');
+ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS actor TEXT NOT NULL DEFAULT '';
+ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_revision ON dynamic_ban_clears (revision);
+CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_site_ip ON dynamic_ban_clears (site_id, client_ip);
+
 CREATE TABLE IF NOT EXISTS access_list_entries (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,

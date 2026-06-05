@@ -65,6 +65,44 @@ func (h handlers) observabilitySummary(w http.ResponseWriter, r *http.Request) {
 	h.writeItem(w, item, err)
 }
 
+func (h handlers) listDynamicBans(w http.ResponseWriter, r *http.Request) {
+	filter, ok := parseDynamicBanFilter(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.app.Store.ListDynamicBans(r.Context(), filter)
+	h.writeList(w, items, err)
+}
+
+func (h handlers) clearDynamicBan(w http.ResponseWriter, r *http.Request) {
+	var input model.DynamicBanClearRequest
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	input.ClientIP = strings.TrimSpace(input.ClientIP)
+	if input.SiteID <= 0 {
+		writeError(w, http.StatusBadRequest, "site_id is required")
+		return
+	}
+	if input.ClientIP == "" {
+		writeError(w, http.StatusBadRequest, "client_ip is required")
+		return
+	}
+	input.Actor = currentActor(r).Username
+	result, err := h.app.Store.ClearDynamicBan(r.Context(), input)
+	h.auditDynamicBanClear(r, input, result, err)
+	h.writeItem(w, result, err)
+}
+
+func (h handlers) listDynamicBanClears(w http.ResponseWriter, r *http.Request) {
+	filter, ok := parseDynamicBanFilter(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.app.Store.ListDynamicBanClears(r.Context(), filter)
+	h.writeList(w, items, err)
+}
+
 func (h handlers) protectionOverview(w http.ResponseWriter, r *http.Request) {
 	filter, ok := parseSummaryFilter(w, r)
 	if !ok {
@@ -212,6 +250,51 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 		return model.WAFEventFilter{}, false
 	}
 	return filter, true
+}
+
+func parseDynamicBanFilter(w http.ResponseWriter, r *http.Request) (model.DynamicBanFilter, bool) {
+	query := r.URL.Query()
+	filter := model.DynamicBanFilter{
+		ClientIP: strings.TrimSpace(query.Get("client_ip")),
+		Status:   strings.ToLower(strings.TrimSpace(query.Get("status"))),
+	}
+	var ok bool
+	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {
+		return model.DynamicBanFilter{}, false
+	}
+	if filter.MinRevision, ok = parseOptionalInt64(w, query.Get("since_revision"), "since_revision"); !ok {
+		return model.DynamicBanFilter{}, false
+	}
+	if filter.Pagination, ok = parsePagination(w, r); !ok {
+		return model.DynamicBanFilter{}, false
+	}
+	return filter, true
+}
+
+func (h handlers) auditDynamicBanClear(r *http.Request, request model.DynamicBanClearRequest, result model.DynamicBanClearResult, operationErr error) {
+	current := currentActor(r)
+	auditResult := resultFromErr(operationErr)
+	message := ""
+	if operationErr != nil {
+		message = operationErr.Error()
+	} else {
+		auditResult = result.Status
+		message = result.Message
+	}
+	_, err := h.app.Store.CreateAuditLog(r.Context(), model.AuditLog{
+		Actor:        current.Username,
+		Role:         current.Role,
+		Action:       "unban",
+		ResourceType: "dynamic_ban",
+		ResourceID:   strconv.FormatInt(request.SiteID, 10) + ":" + request.ClientIP,
+		Result:       auditResult,
+		RemoteAddr:   r.RemoteAddr,
+		UserAgent:    r.UserAgent(),
+		Message:      message,
+	})
+	if err != nil {
+		h.logger.Error("audit log failed", "error", err)
+	}
 }
 
 func boundedSummary(value string, limit int) string {

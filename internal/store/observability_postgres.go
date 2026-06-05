@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -82,7 +83,13 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 		createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
-	return item, err
+	if err != nil {
+		return item, err
+	}
+	if err := s.projectDynamicBanEvent(ctx, item); err != nil {
+		return item, err
+	}
+	return item, nil
 }
 
 func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEventFilter) ([]model.WAFEvent, error) {
@@ -212,6 +219,177 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 	}
 	summary.DynamicProtection, err = s.dynamicProtectionSummaryCounts(ctx, filter, limit)
 	return summary, err
+}
+
+func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.DynamicBanFilter) ([]model.DynamicBan, error) {
+	limit := normalizeLimit(filter.Pagination.Limit)
+	offset := filter.Pagination.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, site_id, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
+			ban_remaining_sec, status, revision, created_at, expires_at, cleared_at, updated_at
+		FROM dynamic_bans
+		WHERE ($1::bigint = 0 OR site_id = $1)
+			AND ($2 = '' OR client_ip = $2)
+			AND ($3::bigint = 0 OR revision > $3)
+		ORDER BY updated_at DESC, id DESC
+		LIMIT $4 OFFSET $5`,
+		filter.SiteID, filter.ClientIP, filter.MinRevision, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := time.Now().UTC()
+	items := []model.DynamicBan{}
+	for rows.Next() {
+		item, err := scanDynamicBan(rows)
+		if err != nil {
+			return nil, err
+		}
+		item = dynamicBanWithStatus(item, now)
+		if filter.Status != "" && item.Status != filter.Status {
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) ClearDynamicBan(ctx context.Context, request model.DynamicBanClearRequest) (model.DynamicBanClearResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.DynamicBanClearResult{}, err
+	}
+	defer tx.Rollback()
+	var revision int64
+	if err := tx.QueryRowContext(ctx, `SELECT nextval('dynamic_ban_clear_revision_seq')`).Scan(&revision); err != nil {
+		return model.DynamicBanClearResult{}, err
+	}
+	now := time.Now().UTC()
+	status := "no-op"
+	message := "dynamic ban was already cleared, expired, or not found"
+	result, err := tx.ExecContext(ctx, `
+		UPDATE dynamic_bans
+		SET status = 'cleared', cleared_at = $1, updated_at = $1, revision = $2, ban_remaining_sec = 0
+		WHERE site_id = $3 AND client_ip = $4 AND status = 'active' AND expires_at > $1`,
+		now, revision, request.SiteID, request.ClientIP)
+	if err != nil {
+		return model.DynamicBanClearResult{}, err
+	}
+	if affected, _ := result.RowsAffected(); affected > 0 {
+		status = "cleared"
+		message = "dynamic ban clear recorded"
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO dynamic_ban_clears (site_id, client_ip, status, revision, actor, message, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		request.SiteID, request.ClientIP, status, revision, request.Actor, message, now); err != nil {
+		return model.DynamicBanClearResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.DynamicBanClearResult{}, err
+	}
+	return model.DynamicBanClearResult{
+		SiteID:    request.SiteID,
+		ClientIP:  request.ClientIP,
+		Status:    status,
+		Revision:  revision,
+		ClearedAt: now,
+		Message:   message,
+	}, nil
+}
+
+func (s *PostgresStore) ListDynamicBanClears(ctx context.Context, filter model.DynamicBanFilter) ([]model.DynamicBanClearResult, error) {
+	limit := normalizeLimit(filter.Pagination.Limit)
+	offset := filter.Pagination.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT site_id, client_ip, status, revision, created_at, message
+		FROM dynamic_ban_clears
+		WHERE ($1::bigint = 0 OR site_id = $1)
+			AND ($2 = '' OR client_ip = $2)
+			AND ($3::bigint = 0 OR revision > $3)
+		ORDER BY revision ASC
+		LIMIT $4 OFFSET $5`,
+		filter.SiteID, filter.ClientIP, filter.MinRevision, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []model.DynamicBanClearResult{}
+	for rows.Next() {
+		var item model.DynamicBanClearResult
+		if err := rows.Scan(&item.SiteID, &item.ClientIP, &item.Status, &item.Revision, &item.ClearedAt, &item.Message); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) projectDynamicBanEvent(ctx context.Context, item model.WAFEvent) error {
+	if item.EventType != "dynamic-ban" || item.SiteID <= 0 || item.ClientIP == "" {
+		return nil
+	}
+	duration := item.BanDurationSec
+	if duration <= 0 {
+		duration = item.BanRemainingSec
+	}
+	if duration <= 0 {
+		return nil
+	}
+	remaining := duration
+	if item.BanRemainingSec > 0 {
+		remaining = item.BanRemainingSec
+	}
+	createdAt := item.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	expiresAt := createdAt.Add(time.Duration(remaining) * time.Second)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO dynamic_bans (
+			site_id, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
+			ban_remaining_sec, status, created_at, expires_at, cleared_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, NULL, $8)
+		ON CONFLICT (site_id, client_ip) DO UPDATE SET
+			ban_reason = EXCLUDED.ban_reason,
+			source = EXCLUDED.source,
+			source_event_id = EXCLUDED.source_event_id,
+			ban_duration_sec = EXCLUDED.ban_duration_sec,
+			ban_remaining_sec = EXCLUDED.ban_remaining_sec,
+			status = 'active',
+			created_at = EXCLUDED.created_at,
+			expires_at = EXCLUDED.expires_at,
+			cleared_at = NULL,
+			updated_at = EXCLUDED.updated_at`,
+		item.SiteID, item.ClientIP, item.BanReason, dynamicBanSource(item), item.ID,
+		duration, remaining, createdAt, expiresAt)
+	return err
+}
+
+type dynamicBanScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDynamicBan(row dynamicBanScanner) (model.DynamicBan, error) {
+	var item model.DynamicBan
+	var clearedAt sql.NullTime
+	err := row.Scan(
+		&item.ID, &item.SiteID, &item.ClientIP, &item.BanReason, &item.Source, &item.SourceEventID,
+		&item.BanDurationSec, &item.BanRemainingSec, &item.Status, &item.Revision,
+		&item.CreatedAt, &item.ExpiresAt, &clearedAt, &item.UpdatedAt,
+	)
+	if clearedAt.Valid {
+		item.ClearedAt = clearedAt.Time
+	}
+	item.Time = item.CreatedAt.Format(time.RFC3339)
+	return item, err
 }
 
 func (s *PostgresStore) accessControlSummaryCounts(ctx context.Context, filter model.ObservabilitySummaryFilter, limit int) ([]model.SummaryCount, error) {

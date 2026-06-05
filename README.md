@@ -15,14 +15,30 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 ## 快速开始
 
 ```bash
-cd deploy
-docker compose up -d --build
+sudo mkdir -p /opt/litewaf
+cd /opt/litewaf
+
+BASE_URL="https://gitee.com/old_records/litewaf-api/raw/master/deploy"
+
+sudo curl -fsSLo docker-compose.prod.yml "$BASE_URL/docker-compose.prod.yml"
+sudo curl -fsSLo .env.example "$BASE_URL/.env.example"
+sudo curl -fsSLo litewafctl.sh "$BASE_URL/litewafctl.sh"
+
+sudo chmod +x litewafctl.sh
+sudo cp -n .env.example .env
+sudo sed -i \
+  -e 's|^LITEWAF_IMAGE_PREFIX=.*|LITEWAF_IMAGE_PREFIX=mmxiaozhi|' \
+  -e 's|^LITEWAF_IMAGE_TAG=.*|LITEWAF_IMAGE_TAG=0.1.0|' \
+  .env
+
+sudo ./litewafctl.sh install
+sudo ./litewafctl.sh health
 ```
 
 默认入口：
 
-- Dashboard: `http://localhost:18080`
-- Gateway: `http://localhost:18081`
+- Dashboard: `http://服务器IP:18080`
+- Gateway: `http://服务器IP:18081`
 - API: Dashboard 反代 `/api/`，容器内地址为 `waf-api:8080`
 
 更完整的首次验证流程见 [快速开始](doc/快速开始.md)。

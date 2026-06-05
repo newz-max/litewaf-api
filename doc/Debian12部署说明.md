@@ -77,9 +77,22 @@ LITEWAF_IMAGE_PREFIX=litewaf
 LITEWAF_IMAGE_TAG=v1.0.0
 METRICS_ENABLED=false
 LITEWAF_METRICS_ENABLED=false
+LITEWAF_REAL_IP_TRUSTED_CIDRS=
+LITEWAF_REAL_IP_HEADER=X-Forwarded-For
+LITEWAF_REAL_IP_RECURSIVE=on
 ```
 
 `LITEWAF_IMAGE_TAG` 建议使用不可变版本标签，不建议生产长期使用 `latest`。
+
+如果 Gateway 前面存在受信任的负载均衡、CDN、宿主机反向代理或 Docker bridge 代理路径，需要在 `.env` 中配置真实客户端 IP 恢复：
+
+```text
+LITEWAF_REAL_IP_TRUSTED_CIDRS=10.0.0.0/8,172.16.0.0/12
+LITEWAF_REAL_IP_HEADER=X-Forwarded-For
+LITEWAF_REAL_IP_RECURSIVE=on
+```
+
+`LITEWAF_REAL_IP_TRUSTED_CIDRS` 只应填写直接连接到网关的可信代理网段；为空时网关使用连接来源地址，不信任客户端提交的转发头。部署后可运行 `litewaf-gateway/scripts/real-ip-smoke.ps1` 或用带 `X-Forwarded-For` 的请求检查访问日志中的 `client_ip`，确认 IP/CIDR 访问控制、CC 计数和临时封禁都使用真实客户端 IP。
 
 ## 备份和恢复
 

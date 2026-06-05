@@ -28,6 +28,9 @@ services:
   waf-api:
     build:
       context: ..
+      args:
+        GO_BUILDER_IMAGE: ${GO_BUILDER_IMAGE:-golang:1.24-bookworm}
+        API_RUNTIME_IMAGE: ${API_RUNTIME_IMAGE:-debian:12-slim}
     environment:
       APP_ENV: ${APP_ENV:-compose}
       HTTP_ADDR: :8080
@@ -79,6 +82,9 @@ services:
       LITEWAF_METRICS_ENABLED: ${LITEWAF_METRICS_ENABLED:-false}
       LITEWAF_SENSITIVE_HEADERS: ${LITEWAF_SENSITIVE_HEADERS:-authorization,cookie,set-cookie}
       LITEWAF_LOG_VALUE_MAX_LEN: ${LITEWAF_LOG_VALUE_MAX_LEN:-160}
+      LITEWAF_REAL_IP_TRUSTED_CIDRS: ${LITEWAF_REAL_IP_TRUSTED_CIDRS:-}
+      LITEWAF_REAL_IP_HEADER: ${LITEWAF_REAL_IP_HEADER:-X-Forwarded-For}
+      LITEWAF_REAL_IP_RECURSIVE: ${LITEWAF_REAL_IP_RECURSIVE:-on}
     volumes:
       - litewaf-gateway-config:/etc/litewaf
     ports:

@@ -10,6 +10,7 @@ import (
 
 const RuleSetVersion = "litewaf-default-rules-v1"
 const RulePackageID = "litewaf-default-rules"
+const RulePackageLicense = "PolyForm-Noncommercial-1.0.0"
 
 var DefaultRules = []model.Rule{
 	{
@@ -149,7 +150,7 @@ func DefaultRulePackage() model.RulePackage {
 			Name:            "LiteWaf default managed rules",
 			Version:         RuleSetVersion,
 			Author:          "LiteWaf",
-			License:         "MIT",
+			License:         RulePackageLicense,
 			Compatibility:   "litewaf-rule-package-v1",
 			SignatureStatus: "unsigned",
 			RuleCount:       len(rules),

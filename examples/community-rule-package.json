@@ -3,7 +3,7 @@
   "name": "LiteWaf Community Demo",
   "version": "v1.0.0",
   "author": "LiteWaf Community",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "compatibility": "litewaf-rule-package-v1",
   "defaults": {
     "enabled": false,

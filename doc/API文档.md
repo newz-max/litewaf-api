@@ -605,7 +605,7 @@ CC 防护接口以通用 `protection_rules` 表作为主存储，对外以 `modu
     "name": "Community baseline",
     "version": "v1",
     "author": "LiteWaf Community",
-    "license": "MIT",
+    "license": "PolyForm-Noncommercial-1.0.0",
     "compatibility": "litewaf-rule-package-v1",
     "defaults": {
       "enabled": false,

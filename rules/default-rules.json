@@ -1,5 +1,6 @@
 {
   "version": "litewaf-default-rules-v1",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "compatibility": {
     "api": "/api/v1",
     "gateway_config": "generated",

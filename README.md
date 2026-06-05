@@ -1,6 +1,6 @@
 # LiteWaf
 
-LiteWaf 是一个以开源、轻便、快速部署为目标的 OpenResty WAF 项目。数据面使用 OpenResty + LuaJIT，控制面使用 Go 标准库，后台管理使用 Vue 3 + TypeScript + Vite + Naive UI，默认推荐 Debian 12 minimal + Docker Compose 部署。
+LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty WAF 项目。数据面使用 OpenResty + LuaJIT，控制面使用 Go 标准库，后台管理使用 Vue 3 + TypeScript + Vite + Naive UI，默认推荐 Debian 12 minimal + Docker Compose 部署。
 
 ## 当前能力
 
@@ -86,4 +86,4 @@ docker build -t litewaf-gateway .
 
 ## 许可证
 
-当前仓库尚未补充正式开源许可证文件。发布公开版本前应新增 `LICENSE` 并在贡献指南中同步说明。
+本仓库采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。非商业用途可按许可证使用、复制、分发和修改；任何商业使用都需要提前获得版权持有人的单独书面许可或商业授权。

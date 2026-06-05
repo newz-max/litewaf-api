@@ -51,6 +51,8 @@ func Normalize(rule model.ProtectionRule) model.ProtectionRule {
 	if rule.Challenge != nil {
 		rule.Challenge.Mode = strings.ToLower(strings.TrimSpace(rule.Challenge.Mode))
 		rule.Challenge.FailureAction = strings.ToLower(strings.TrimSpace(rule.Challenge.FailureAction))
+		rule.Challenge.FailureMessage = strings.TrimSpace(rule.Challenge.FailureMessage)
+		rule.Challenge.PrivacyNotice = strings.TrimSpace(rule.Challenge.PrivacyNotice)
 	}
 	if rule.Dynamic != nil {
 		rule.Dynamic.Mode = strings.ToLower(strings.TrimSpace(rule.Dynamic.Mode))
@@ -337,6 +339,11 @@ func ToBot(rule model.ProtectionRule) model.BotProtectionRule {
 	}
 }
 
+const (
+	maxBotChallengeTextLength   = 360
+	maxBotChallengeReasonLength = 240
+)
+
 func FromDynamic(item model.DynamicProtectionRule) model.ProtectionRule {
 	path := item.Path
 	if path == "" {
@@ -612,11 +619,20 @@ func validateBot(rule model.ProtectionRule) error {
 	if rule.Challenge == nil {
 		return fmt.Errorf("bot protection challenge is required")
 	}
-	if rule.Challenge.Mode != "js-challenge" {
-		return fmt.Errorf("bot protection challenge mode must be js-challenge")
+	if !oneOf(rule.Challenge.Mode, "js-challenge", "captcha") {
+		return fmt.Errorf("bot protection challenge mode must be js-challenge or captcha")
 	}
 	if rule.Challenge.VerifyTTL <= 0 || rule.Challenge.VerifyTTL > 86400 {
 		return fmt.Errorf("bot protection verify_ttl_sec is invalid")
+	}
+	if rule.Challenge.BehaviorEnabled && (rule.Challenge.BehaviorThreshold <= 0 || rule.Challenge.BehaviorThreshold > 100) {
+		return fmt.Errorf("bot protection behavior_threshold is invalid")
+	}
+	if len(rule.Challenge.FailureMessage) > maxBotChallengeReasonLength {
+		return fmt.Errorf("bot protection failure_message is too long")
+	}
+	if len(rule.Challenge.PrivacyNotice) > maxBotChallengeTextLength {
+		return fmt.Errorf("bot protection privacy_notice is too long")
 	}
 	if !oneOf(rule.Challenge.FailureAction, "log-only", "block") {
 		return fmt.Errorf("bot protection failure_action is unsupported")

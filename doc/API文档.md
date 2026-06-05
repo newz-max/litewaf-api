@@ -313,7 +313,7 @@ Authorization: Bearer <token>
 
 ## Bot / 人机验证
 
-Bot / 人机验证接口以通用 `protection_rules` 表作为主存储，对外以 `module=bot-protection`、`category=challenge` 的防护规则模型呈现。当前阶段只支持本地 JavaScript challenge，不包含第三方 captcha、行为评分、设备指纹、动态令牌或等候室。
+Bot / 人机验证接口以通用 `protection_rules` 表作为主存储，对外以 `module=bot-protection`、`category=challenge` 的防护规则模型呈现。当前阶段支持本地 JavaScript challenge、本地算术 captcha、轻量行为评分、粗粒度设备信号绑定、搜索引擎 UA 绕过、失败说明和隐私提示；不包含第三方 captcha 服务、反向 DNS 搜索引擎验证、长期设备画像、动态令牌或等候室。
 
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
@@ -344,7 +344,13 @@ Bot / 人机验证接口以通用 `protection_rules` 表作为主存储，对外
   "challenge": {
     "mode": "js-challenge",
     "verify_ttl_sec": 300,
-    "failure_action": "block"
+    "failure_action": "block",
+    "behavior_enabled": false,
+    "behavior_threshold": 60,
+    "device_binding": false,
+    "search_engine_bypass": false,
+    "failure_message": "验证失败，请稍后重试。",
+    "privacy_notice": "LiteWaf 仅使用本地挑战信号完成验证。"
   }
 }
 ```
@@ -357,9 +363,14 @@ Bot / 人机验证接口以通用 `protection_rules` 表作为主存储，对外
 - `match.path` 必须以 `/` 开头。
 - `match.path_match` 支持 `exact`、`prefix`；prefix 匹配按路径段边界处理，`/admin` 不匹配 `/admin2`。
 - `match.methods` 支持 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`、`OPTIONS`，空数组表示全部方法。
-- `challenge.mode` 当前仅支持 `js-challenge`。
+- `challenge.mode` 支持 `js-challenge`、`captcha`；`captcha` 为网关本地算术挑战，不需要第三方凭据。
 - `challenge.verify_ttl_sec` 必须大于 `0` 且不超过 `86400`。
 - `challenge.failure_action` 支持 `block`、`log-only`。
+- `challenge.behavior_enabled` 启用轻量行为评分；启用时 `challenge.behavior_threshold` 必须在 `1` 到 `100` 之间。
+- `challenge.device_binding` 启用粗粒度设备信号绑定，网关会将 pass token 与 User-Agent / Accept-Language 派生信号绑定，但不记录原始信号。
+- `challenge.search_engine_bypass` 启用已知搜索引擎 UA 绕过；当前不做反向 DNS 验证，命中时会写入 Bot 结果日志。
+- `challenge.failure_message` 最多 `240` 字符，用于本地挑战或阻断说明。
+- `challenge.privacy_notice` 最多 `360` 字符，用于向用户说明本地验证信号使用边界。
 - `action.type` 可省略；传入时必须与 `challenge.failure_action` 一致。
 - `priority` 不能为负数，发布和网关按较小值优先执行。
 

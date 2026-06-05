@@ -435,7 +435,7 @@ func TestBotProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Admin challenge","site_id":3,"priority":70,"match":{"path":"/admin","path_match":"prefix","methods":["get","POST"]},"challenge":{"mode":"js-challenge","verify_ttl_sec":600,"failure_action":"block"}}`)
+	body := bytes.NewBufferString(`{"name":"Admin challenge","site_id":3,"priority":70,"match":{"path":"/admin","path_match":"prefix","methods":["get","POST"]},"challenge":{"mode":"captcha","verify_ttl_sec":600,"failure_action":"block","behavior_enabled":true,"behavior_threshold":60,"device_binding":true,"search_engine_bypass":true,"failure_message":"验证失败，请稍后重试","privacy_notice":"仅使用浏览器信号完成本地验证"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/bot-protection/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -454,8 +454,14 @@ func TestBotProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	if createResponse.Item.Match.Path != "/admin" || createResponse.Item.Match.PathMatch != "prefix" || len(createResponse.Item.Match.Methods) != 2 {
 		t.Fatalf("unexpected bot protection match: %+v", createResponse.Item.Match)
 	}
-	if createResponse.Item.Challenge == nil || createResponse.Item.Challenge.Mode != "js-challenge" || createResponse.Item.Challenge.VerifyTTL != 600 || createResponse.Item.Challenge.FailureAction != "block" {
+	if createResponse.Item.Challenge == nil || createResponse.Item.Challenge.Mode != "captcha" || createResponse.Item.Challenge.VerifyTTL != 600 || createResponse.Item.Challenge.FailureAction != "block" {
 		t.Fatalf("unexpected bot protection challenge: %+v", createResponse.Item.Challenge)
+	}
+	if !createResponse.Item.Challenge.BehaviorEnabled || createResponse.Item.Challenge.BehaviorThreshold != 60 || !createResponse.Item.Challenge.DeviceBinding || !createResponse.Item.Challenge.SearchEngineBypass {
+		t.Fatalf("unexpected bot protection enhancement config: %+v", createResponse.Item.Challenge)
+	}
+	if createResponse.Item.Challenge.FailureMessage == "" || createResponse.Item.Challenge.PrivacyNotice == "" {
+		t.Fatalf("expected bot protection message fields: %+v", createResponse.Item.Challenge)
 	}
 	if createResponse.Item.Action.Type != "block" || createResponse.Item.Priority != 70 {
 		t.Fatalf("unexpected bot protection action: %+v", createResponse.Item)
@@ -578,10 +584,11 @@ func TestBotProtectionWriteValidationAndAuthorization(t *testing.T) {
 		`{"name":"bad","match":{"path":"admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"regex"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"prefix","methods":["TRACE"]},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
-		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"captcha","verify_ttl_sec":300,"failure_action":"block"}}`,
+		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"turnstile","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":0,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"captcha"}}`,
 		`{"name":"bad","priority":-1,"match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
+		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block","behavior_enabled":true,"behavior_threshold":101}}`,
 	}
 	for _, body := range invalidBodies {
 		req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/bot-protection/rules", bytes.NewBufferString(body)), token)
@@ -1895,7 +1902,7 @@ func TestBotProtectionEventQueryAndSummary(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"req-bot","site_id":1,"event_type":"bot-protection","rule_id":11,"rule_type":"challenge","target":"path","module":"bot-protection","category":"challenge","rule_name":"Admin challenge","challenge_mode":"js-challenge","challenge_result":"failed","action":"block","disposition":"blocked","client_ip":"192.0.2.50","method":"GET","uri":"/admin","summary":"challenge failed"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"req-bot","site_id":1,"event_type":"bot-protection","rule_id":11,"rule_type":"challenge","target":"path","module":"bot-protection","category":"challenge","rule_name":"Admin challenge","challenge_mode":"captcha","challenge_result":"failed","bot_result":"captcha-failed","bot_reason":"answer mismatch","device_signal":"matched","action":"block","disposition":"blocked","client_ip":"192.0.2.50","method":"GET","uri":"/admin","summary":"challenge failed"}`))
 	req.Header.Set("Authorization", "Bearer gateway-secret")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1903,7 +1910,7 @@ func TestBotProtectionEventQueryAndSummary(t *testing.T) {
 		t.Fatalf("ingest bot protection waf status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?module=bot-protection&challenge_result=failed", nil), token)
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?module=bot-protection&challenge_result=failed&bot_result=captcha-failed", nil), token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1915,8 +1922,11 @@ func TestBotProtectionEventQueryAndSummary(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&attackResponse); err != nil {
 		t.Fatalf("decode bot protection logs: %v", err)
 	}
-	if len(attackResponse.Items) != 1 || attackResponse.Items[0].Module != "bot-protection" || attackResponse.Items[0].ChallengeResult != "failed" {
+	if len(attackResponse.Items) != 1 || attackResponse.Items[0].Module != "bot-protection" || attackResponse.Items[0].ChallengeResult != "failed" || attackResponse.Items[0].BotResult != "captcha-failed" {
 		t.Fatalf("unexpected bot protection logs: %+v", attackResponse.Items)
+	}
+	if attackResponse.Items[0].BotReason != "answer mismatch" || attackResponse.Items[0].DeviceSignal != "matched" {
+		t.Fatalf("unexpected bot protection enhancement fields: %+v", attackResponse.Items[0])
 	}
 
 	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/observability/summary", nil), token)
@@ -1931,7 +1941,7 @@ func TestBotProtectionEventQueryAndSummary(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&summaryResponse); err != nil {
 		t.Fatalf("decode summary: %v", err)
 	}
-	if len(summaryResponse.Item.BotProtection) != 1 || summaryResponse.Item.BotProtection[0].Key != "failed|block|blocked" {
+	if len(summaryResponse.Item.BotProtection) != 1 || summaryResponse.Item.BotProtection[0].Key != "failed|captcha-failed|block|blocked" {
 		t.Fatalf("unexpected bot protection summary: %+v", summaryResponse.Item)
 	}
 }

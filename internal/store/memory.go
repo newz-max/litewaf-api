@@ -15,117 +15,117 @@ import (
 )
 
 type MemoryStore struct {
-	mu                   sync.RWMutex
-	nextSiteID           int64
-	nextRuleID           int64
-	nextPolicyID         int64
-	nextPublishID        int64
-	nextUserID           int64
-	nextAuditID          int64
-	nextAccessID         int64
-	nextRateID           int64
-	nextUploadID         int64
-	nextBotID            int64
-	nextDynamicID        int64
-	nextProtectionRuleID int64
-	nextCatalogID        int64
-	nextCatalogPackageID int64
-	nextTrustKeyID       int64
-	nextProviderID       int64
+	mu                    sync.RWMutex
+	nextSiteID            int64
+	nextRuleID            int64
+	nextPolicyID          int64
+	nextPublishID         int64
+	nextUserID            int64
+	nextAuditID           int64
+	nextAccessID          int64
+	nextRateID            int64
+	nextUploadID          int64
+	nextBotID             int64
+	nextDynamicID         int64
+	nextProtectionRuleID  int64
+	nextCatalogID         int64
+	nextCatalogPackageID  int64
+	nextTrustKeyID        int64
+	nextProviderID        int64
 	nextProviderPackageID int64
-	nextAccountSourceID  int64
-	nextContributionID   int64
-	nextPushAttemptID    int64
-	nextReviewQueueID    int64
-	nextFeedbackID       int64
-	nextSuggestionID     int64
-	nextAccessLogID      int64
-	nextWAFEventID       int64
-	sites                map[int64]model.Site
-	rules                map[int64]model.Rule
-	policies             map[int64]model.Policy
-	publishes            map[int64]model.PublishRecord
-	users                map[int64]model.User
-	audits               map[int64]model.AuditLog
-	accessLists          map[int64]model.AccessListEntry
-	rateLimits           map[int64]model.RateLimitRule
-	uploadRules          map[int64]model.UploadProtectionRule
-	botRules             map[int64]model.BotProtectionRule
-	dynamicRules         map[int64]model.DynamicProtectionRule
-	protectionRules      map[int64]model.ProtectionRule
-	catalogSources       map[int64]model.RuleCatalogSource
-	catalogPackages      map[int64]model.RuleCatalogPackage
-	trustKeys            map[int64]model.RuleTrustKey
-	providers            map[int64]model.RuleProviderAdapter
-	providerSecrets      map[int64]string
-	providerPackages     map[int64]model.RuleProviderPackage
-	accountSources       map[int64]model.RuleCommunityAccountSource
-	accountSecrets       map[int64]string
-	contributionTargets  map[int64]model.RuleContributionTarget
-	contributionSecrets  map[int64]string
-	pushAttempts         map[int64]model.RuleContributionPushAttempt
-	reviewQueue          map[int64]model.RuleReviewQueueItem
-	feedback             map[int64]model.RuleFeedback
-	feedbackSuggestions  map[int64]model.RuleFeedbackSuggestion
-	accessLogs           map[int64]model.AccessLog
-	wafEvents            map[int64]model.WAFEvent
+	nextAccountSourceID   int64
+	nextContributionID    int64
+	nextPushAttemptID     int64
+	nextReviewQueueID     int64
+	nextFeedbackID        int64
+	nextSuggestionID      int64
+	nextAccessLogID       int64
+	nextWAFEventID        int64
+	sites                 map[int64]model.Site
+	rules                 map[int64]model.Rule
+	policies              map[int64]model.Policy
+	publishes             map[int64]model.PublishRecord
+	users                 map[int64]model.User
+	audits                map[int64]model.AuditLog
+	accessLists           map[int64]model.AccessListEntry
+	rateLimits            map[int64]model.RateLimitRule
+	uploadRules           map[int64]model.UploadProtectionRule
+	botRules              map[int64]model.BotProtectionRule
+	dynamicRules          map[int64]model.DynamicProtectionRule
+	protectionRules       map[int64]model.ProtectionRule
+	catalogSources        map[int64]model.RuleCatalogSource
+	catalogPackages       map[int64]model.RuleCatalogPackage
+	trustKeys             map[int64]model.RuleTrustKey
+	providers             map[int64]model.RuleProviderAdapter
+	providerSecrets       map[int64]string
+	providerPackages      map[int64]model.RuleProviderPackage
+	accountSources        map[int64]model.RuleCommunityAccountSource
+	accountSecrets        map[int64]string
+	contributionTargets   map[int64]model.RuleContributionTarget
+	contributionSecrets   map[int64]string
+	pushAttempts          map[int64]model.RuleContributionPushAttempt
+	reviewQueue           map[int64]model.RuleReviewQueueItem
+	feedback              map[int64]model.RuleFeedback
+	feedbackSuggestions   map[int64]model.RuleFeedbackSuggestion
+	accessLogs            map[int64]model.AccessLog
+	wafEvents             map[int64]model.WAFEvent
 }
 
 func NewMemoryStore() *MemoryStore {
 	store := &MemoryStore{
-		nextSiteID:           1,
-		nextRuleID:           1,
-		nextPolicyID:         1,
-		nextPublishID:        1,
-		nextUserID:           1,
-		nextAuditID:          1,
-		nextAccessID:         1,
-		nextRateID:           1,
-		nextUploadID:         1,
-		nextBotID:            1,
-		nextDynamicID:        1,
-		nextProtectionRuleID: 1,
-		nextCatalogID:        1,
-		nextCatalogPackageID: 1,
-		nextTrustKeyID:       1,
-		nextProviderID:       1,
+		nextSiteID:            1,
+		nextRuleID:            1,
+		nextPolicyID:          1,
+		nextPublishID:         1,
+		nextUserID:            1,
+		nextAuditID:           1,
+		nextAccessID:          1,
+		nextRateID:            1,
+		nextUploadID:          1,
+		nextBotID:             1,
+		nextDynamicID:         1,
+		nextProtectionRuleID:  1,
+		nextCatalogID:         1,
+		nextCatalogPackageID:  1,
+		nextTrustKeyID:        1,
+		nextProviderID:        1,
 		nextProviderPackageID: 1,
-		nextAccountSourceID:  1,
-		nextContributionID:   1,
-		nextPushAttemptID:    1,
-		nextReviewQueueID:    1,
-		nextFeedbackID:       1,
-		nextSuggestionID:     1,
-		nextAccessLogID:      1,
-		nextWAFEventID:       1,
-		sites:                map[int64]model.Site{},
-		rules:                map[int64]model.Rule{},
-		policies:             map[int64]model.Policy{},
-		publishes:            map[int64]model.PublishRecord{},
-		users:                map[int64]model.User{},
-		audits:               map[int64]model.AuditLog{},
-		accessLists:          map[int64]model.AccessListEntry{},
-		rateLimits:           map[int64]model.RateLimitRule{},
-		uploadRules:          map[int64]model.UploadProtectionRule{},
-		botRules:             map[int64]model.BotProtectionRule{},
-		dynamicRules:         map[int64]model.DynamicProtectionRule{},
-		protectionRules:      map[int64]model.ProtectionRule{},
-		catalogSources:       map[int64]model.RuleCatalogSource{},
-		catalogPackages:      map[int64]model.RuleCatalogPackage{},
-		trustKeys:            map[int64]model.RuleTrustKey{},
-		providers:            map[int64]model.RuleProviderAdapter{},
-		providerSecrets:      map[int64]string{},
-		providerPackages:     map[int64]model.RuleProviderPackage{},
-		accountSources:       map[int64]model.RuleCommunityAccountSource{},
-		accountSecrets:       map[int64]string{},
-		contributionTargets:  map[int64]model.RuleContributionTarget{},
-		contributionSecrets:  map[int64]string{},
-		pushAttempts:         map[int64]model.RuleContributionPushAttempt{},
-		reviewQueue:          map[int64]model.RuleReviewQueueItem{},
-		feedback:             map[int64]model.RuleFeedback{},
-		feedbackSuggestions:  map[int64]model.RuleFeedbackSuggestion{},
-		accessLogs:           map[int64]model.AccessLog{},
-		wafEvents:            map[int64]model.WAFEvent{},
+		nextAccountSourceID:   1,
+		nextContributionID:    1,
+		nextPushAttemptID:     1,
+		nextReviewQueueID:     1,
+		nextFeedbackID:        1,
+		nextSuggestionID:      1,
+		nextAccessLogID:       1,
+		nextWAFEventID:        1,
+		sites:                 map[int64]model.Site{},
+		rules:                 map[int64]model.Rule{},
+		policies:              map[int64]model.Policy{},
+		publishes:             map[int64]model.PublishRecord{},
+		users:                 map[int64]model.User{},
+		audits:                map[int64]model.AuditLog{},
+		accessLists:           map[int64]model.AccessListEntry{},
+		rateLimits:            map[int64]model.RateLimitRule{},
+		uploadRules:           map[int64]model.UploadProtectionRule{},
+		botRules:              map[int64]model.BotProtectionRule{},
+		dynamicRules:          map[int64]model.DynamicProtectionRule{},
+		protectionRules:       map[int64]model.ProtectionRule{},
+		catalogSources:        map[int64]model.RuleCatalogSource{},
+		catalogPackages:       map[int64]model.RuleCatalogPackage{},
+		trustKeys:             map[int64]model.RuleTrustKey{},
+		providers:             map[int64]model.RuleProviderAdapter{},
+		providerSecrets:       map[int64]string{},
+		providerPackages:      map[int64]model.RuleProviderPackage{},
+		accountSources:        map[int64]model.RuleCommunityAccountSource{},
+		accountSecrets:        map[int64]string{},
+		contributionTargets:   map[int64]model.RuleContributionTarget{},
+		contributionSecrets:   map[int64]string{},
+		pushAttempts:          map[int64]model.RuleContributionPushAttempt{},
+		reviewQueue:           map[int64]model.RuleReviewQueueItem{},
+		feedback:              map[int64]model.RuleFeedback{},
+		feedbackSuggestions:   map[int64]model.RuleFeedbackSuggestion{},
+		accessLogs:            map[int64]model.AccessLog{},
+		wafEvents:             map[int64]model.WAFEvent{},
 	}
 	store.seedRules()
 	return store
@@ -548,7 +548,11 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 			increment(uploadProtectionCounts, strings.Join([]string{item.Action, item.Disposition}, "|"))
 		}
 		if item.Module == "bot-protection" {
-			increment(botProtectionCounts, strings.Join([]string{item.ChallengeResult, item.Action, item.Disposition}, "|"))
+			botResult := item.BotResult
+			if botResult == "" {
+				botResult = "standard"
+			}
+			increment(botProtectionCounts, strings.Join([]string{item.ChallengeResult, botResult, item.Action, item.Disposition}, "|"))
 		}
 		if item.Module == "dynamic-protection" {
 			increment(dynamicProtectionCounts, strings.Join([]string{item.Category, item.AdvancedTarget, item.Action, item.Disposition}, "|"))
@@ -1763,6 +1767,9 @@ func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 		return false
 	}
 	if filter.ChallengeResult != "" && item.ChallengeResult != filter.ChallengeResult {
+		return false
+	}
+	if filter.BotResult != "" && item.BotResult != filter.BotResult {
 		return false
 	}
 	if filter.DynamicResult != "" && item.AdvancedTarget != filter.DynamicResult {

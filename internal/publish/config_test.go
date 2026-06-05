@@ -338,6 +338,56 @@ func TestGenerateExtendedGatewayConfigIncludesBotProtectionRules(t *testing.T) {
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesBotEnhancementFields(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name:     "Captcha challenge",
+		Module:   "bot-protection",
+		Category: "challenge",
+		SiteID:   3,
+		Enabled:  true,
+		Priority: 45,
+		Match: model.ProtectionRuleMatch{
+			Path:      "/checkout",
+			PathMatch: "prefix",
+			Methods:   []string{"GET", "POST"},
+		},
+		Challenge: &model.ProtectionRuleChallenge{
+			Mode:               "captcha",
+			VerifyTTL:          180,
+			FailureAction:      "block",
+			BehaviorEnabled:    true,
+			BehaviorThreshold:  55,
+			DeviceBinding:      true,
+			SearchEngineBypass: true,
+			FailureMessage:     "验证失败",
+			PrivacyNotice:      "仅使用本地验证信号",
+		},
+		Action: model.ProtectionRuleAction{Type: "block"},
+	})
+	if err != nil {
+		t.Fatalf("create bot enhancement rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-bot-enhancement")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected bot enhancement output, got %+v", config.ProtectionRules)
+	}
+	challenge := config.ProtectionRules[0].Challenge
+	if challenge == nil || challenge.Mode != "captcha" || challenge.VerifyTTL != 180 || challenge.FailureAction != "block" {
+		t.Fatalf("unexpected bot enhancement challenge: %+v", challenge)
+	}
+	if !challenge.BehaviorEnabled || challenge.BehaviorThreshold != 55 || !challenge.DeviceBinding || !challenge.SearchEngineBypass {
+		t.Fatalf("unexpected bot enhancement fields: %+v", challenge)
+	}
+	if challenge.FailureMessage != "验证失败" || challenge.PrivacyNotice != "仅使用本地验证信号" {
+		t.Fatalf("unexpected bot enhancement display text: %+v", challenge)
+	}
+}
+
 func TestGenerateExtendedGatewayConfigIncludesDynamicProtectionRules(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()

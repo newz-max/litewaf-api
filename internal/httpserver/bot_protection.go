@@ -17,6 +17,8 @@ const (
 	botProtectionCategory = "challenge"
 	defaultBotVerifyTTL   = 300
 	maxBotVerifyTTL       = 86400
+	maxBotMessageLength   = 240
+	maxBotNoticeLength    = 360
 )
 
 type botProtectionFilter struct {
@@ -190,6 +192,8 @@ func (r *botProtectionRequest) normalize() {
 	}
 	r.Challenge.Mode = strings.ToLower(strings.TrimSpace(r.Challenge.Mode))
 	r.Challenge.FailureAction = strings.ToLower(strings.TrimSpace(r.Challenge.FailureAction))
+	r.Challenge.FailureMessage = strings.TrimSpace(r.Challenge.FailureMessage)
+	r.Challenge.PrivacyNotice = strings.TrimSpace(r.Challenge.PrivacyNotice)
 	r.Action.Type = strings.ToLower(strings.TrimSpace(r.Action.Type))
 	if r.Module == "" {
 		r.Module = botProtectionModule
@@ -241,11 +245,20 @@ func (r botProtectionRequest) validate() error {
 	if r.Challenge == nil {
 		return errors.New("bot protection challenge is required")
 	}
-	if r.Challenge.Mode != "js-challenge" {
-		return errors.New("bot protection challenge mode must be js-challenge")
+	if !oneOf(r.Challenge.Mode, "js-challenge", "captcha") {
+		return errors.New("bot protection challenge mode must be js-challenge or captcha")
 	}
 	if r.Challenge.VerifyTTL <= 0 || r.Challenge.VerifyTTL > maxBotVerifyTTL {
 		return errors.New("bot protection verify_ttl_sec is invalid")
+	}
+	if r.Challenge.BehaviorEnabled && (r.Challenge.BehaviorThreshold <= 0 || r.Challenge.BehaviorThreshold > 100) {
+		return errors.New("bot protection behavior_threshold is invalid")
+	}
+	if len(r.Challenge.FailureMessage) > maxBotMessageLength {
+		return errors.New("bot protection failure_message is too long")
+	}
+	if len(r.Challenge.PrivacyNotice) > maxBotNoticeLength {
+		return errors.New("bot protection privacy_notice is too long")
 	}
 	if !oneOf(r.Challenge.FailureAction, "log-only", "block") {
 		return errors.New("bot protection failure_action is unsupported")

@@ -1029,6 +1029,10 @@ func uploadProtectionSummary(rules []model.ProtectionRule) envelope {
 func botProtectionSummary(rules []model.ProtectionRule) envelope {
 	enabled := 0
 	challenges := 0
+	captcha := 0
+	behaviorScoring := 0
+	deviceBinding := 0
+	searchEngineBypass := 0
 	block := 0
 	logOnly := 0
 	warnings := []string{}
@@ -1038,8 +1042,22 @@ func botProtectionSummary(rules []model.ProtectionRule) envelope {
 			continue
 		}
 		enabled++
-		if item.Challenge != nil && item.Challenge.Mode == "js-challenge" {
-			challenges++
+		if item.Challenge != nil {
+			switch item.Challenge.Mode {
+			case "js-challenge":
+				challenges++
+			case "captcha":
+				captcha++
+			}
+			if item.Challenge.BehaviorEnabled {
+				behaviorScoring++
+			}
+			if item.Challenge.DeviceBinding {
+				deviceBinding++
+			}
+			if item.Challenge.SearchEngineBypass {
+				searchEngineBypass++
+			}
 		}
 		failureAction := ""
 		if item.Challenge != nil {
@@ -1051,23 +1069,27 @@ func botProtectionSummary(rules []model.ProtectionRule) envelope {
 		case "block":
 			block++
 			if item.Match.Path == "/" && item.Match.PathMatch == "prefix" {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用 JS Challenge 阻断", item.Name))
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全站路径启用 Bot Challenge 阻断", item.Name))
 			}
 			if len(item.Match.Methods) == 0 {
-				warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用 JS Challenge 阻断", item.Name))
+				warnings = append(warnings, fmt.Sprintf("规则 %s 对全部方法启用 Bot Challenge 阻断", item.Name))
 			}
 		}
 	}
 	return envelope{
-		"rules":           len(rules),
-		"enabled":         enabled,
-		"challenges":      challenges,
-		"block":           block,
-		"log_only":        logOnly,
-		"warnings":        warnings,
-		"migrated":        migration.Migrated,
-		"legacy_fallback": migration.LegacyFallback,
-		"disabled":        migration.Disabled,
+		"rules":                len(rules),
+		"enabled":              enabled,
+		"challenges":           challenges,
+		"captcha":              captcha,
+		"behavior_scoring":     behaviorScoring,
+		"device_binding":       deviceBinding,
+		"search_engine_bypass": searchEngineBypass,
+		"block":                block,
+		"log_only":             logOnly,
+		"warnings":             warnings,
+		"migrated":             migration.Migrated,
+		"legacy_fallback":      migration.LegacyFallback,
+		"disabled":             migration.Disabled,
 	}
 }
 

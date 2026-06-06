@@ -25,6 +25,13 @@ services:
       timeout: 5s
       retries: 5
 
+  gateway-config-permissions:
+    image: ${LITEWAF_IMAGE_PREFIX:-litewaf}/litewaf-gateway:${LITEWAF_IMAGE_TAG:-latest}
+    entrypoint: ["/bin/sh", "-c", "chown -R 999:999 /etc/litewaf && chmod -R u+rwX,go+rX /etc/litewaf"]
+    volumes:
+      - litewaf-gateway-config:/etc/litewaf
+    restart: "no"
+
   waf-api:
     build:
       context: ..
@@ -51,6 +58,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      gateway-config-permissions:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/app/litewaf-api", "-healthcheck"]
       interval: 10s

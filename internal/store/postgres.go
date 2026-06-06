@@ -95,6 +95,202 @@ func (s *PostgresStore) DeleteSite(ctx context.Context, id int64) error {
 	return checkRowsAffected(result, err)
 }
 
+func (s *PostgresStore) ListApplications(ctx context.Context) ([]model.Application, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, mode, enabled, description, created_at, updated_at
+		FROM applications
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.Application
+	for rows.Next() {
+		var item model.Application
+		if err := rows.Scan(&item.ID, &item.Name, &item.Mode, &item.Enabled, &item.Description, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := s.loadApplicationChildren(ctx, &item); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetApplication(ctx context.Context, id int64) (model.Application, error) {
+	var item model.Application
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, name, mode, enabled, description, created_at, updated_at
+		FROM applications
+		WHERE id = $1`, id).
+		Scan(&item.ID, &item.Name, &item.Mode, &item.Enabled, &item.Description, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Application{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Application{}, err
+	}
+	if err := s.loadApplicationChildren(ctx, &item); err != nil {
+		return model.Application{}, err
+	}
+	return item, nil
+}
+
+func (s *PostgresStore) CreateApplication(ctx context.Context, item model.Application) (model.Application, error) {
+	model.NormalizeApplication(&item)
+	if err := model.ValidateApplication(item, func(id int64) bool {
+		ok, err := s.certificateExists(ctx, id)
+		return err == nil && ok
+	}); err != nil {
+		return model.Application{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Application{}, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `
+		INSERT INTO applications (name, mode, enabled, description)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at, updated_at`,
+		item.Name, item.Mode, item.Enabled, item.Description).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if err != nil {
+		return model.Application{}, err
+	}
+	if err := replaceApplicationChildren(ctx, tx, &item); err != nil {
+		return model.Application{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Application{}, err
+	}
+	return s.GetApplication(ctx, item.ID)
+}
+
+func (s *PostgresStore) UpdateApplication(ctx context.Context, id int64, item model.Application) (model.Application, error) {
+	model.NormalizeApplication(&item)
+	if err := model.ValidateApplication(item, func(certID int64) bool {
+		ok, err := s.certificateExists(ctx, certID)
+		return err == nil && ok
+	}); err != nil {
+		return model.Application{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Application{}, err
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(ctx, `
+		UPDATE applications
+		SET name = $2, mode = $3, enabled = $4, description = $5, updated_at = now()
+		WHERE id = $1
+		RETURNING id, created_at, updated_at`,
+		id, item.Name, item.Mode, item.Enabled, item.Description).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Application{}, ErrNotFound
+	}
+	if err != nil {
+		return model.Application{}, err
+	}
+	item.ID = id
+	if _, err := tx.ExecContext(ctx, `DELETE FROM application_hosts WHERE application_id = $1`, id); err != nil {
+		return model.Application{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM application_listeners WHERE application_id = $1`, id); err != nil {
+		return model.Application{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM application_upstreams WHERE application_id = $1`, id); err != nil {
+		return model.Application{}, err
+	}
+	if err := replaceApplicationChildren(ctx, tx, &item); err != nil {
+		return model.Application{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Application{}, err
+	}
+	return s.GetApplication(ctx, id)
+}
+
+func (s *PostgresStore) DeleteApplication(ctx context.Context, id int64) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM applications WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) ListCertificates(ctx context.Context) ([]model.Certificate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, domains, cert_pem, key_pem, not_before, not_after, fingerprint, created_at, updated_at
+		FROM certificates
+		ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.Certificate
+	for rows.Next() {
+		item, err := scanCertificate(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetCertificate(ctx context.Context, id int64) (model.Certificate, error) {
+	item, err := scanCertificate(s.db.QueryRowContext(ctx, `
+		SELECT id, name, domains, cert_pem, key_pem, not_before, not_after, fingerprint, created_at, updated_at
+		FROM certificates
+		WHERE id = $1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Certificate{}, ErrNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) CreateCertificate(ctx context.Context, item model.Certificate) (model.Certificate, error) {
+	if err := model.ValidateCertificate(item); err != nil {
+		return model.Certificate{}, err
+	}
+	err := s.db.QueryRowContext(ctx, `
+		INSERT INTO certificates (name, domains, cert_pem, key_pem, not_before, not_after, fingerprint)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, created_at, updated_at`,
+		item.Name, joinCSV(item.Domains), item.CertPEM, item.KeyPEM, item.NotBefore, item.NotAfter, item.Fingerprint).
+		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) DeleteCertificate(ctx context.Context, id int64) error {
+	inUse, err := s.CertificateInUse(ctx, id)
+	if err != nil {
+		return err
+	}
+	if inUse {
+		return errors.New("certificate is used by enabled application listeners")
+	}
+	result, err := s.db.ExecContext(ctx, `DELETE FROM certificates WHERE id = $1`, id)
+	return checkRowsAffected(result, err)
+}
+
+func (s *PostgresStore) CertificateInUse(ctx context.Context, id int64) (bool, error) {
+	exists, err := s.certificateExists(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, ErrNotFound
+	}
+	var count int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*) FROM application_listeners
+		WHERE certificate_id = $1 AND enabled = true`, id).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (s *PostgresStore) ListRules(ctx context.Context) ([]model.Rule, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, type, target, action, expression, score, enabled, module, category, attack_type, group_name, priority,
@@ -292,7 +488,7 @@ func (s *PostgresStore) CreatePolicy(ctx context.Context, policy model.Policy) (
 	}
 	defer tx.Rollback()
 
-	if err := validateRefs(ctx, tx, "sites", policy.SiteIDs); err != nil {
+	if err := validateApplicationRefs(ctx, tx, policy.SiteIDs); err != nil {
 		return model.Policy{}, err
 	}
 	if err := validateRefs(ctx, tx, "rules", policy.RuleIDs); err != nil {
@@ -336,7 +532,7 @@ func (s *PostgresStore) UpdatePolicy(ctx context.Context, id int64, policy model
 	}
 	defer tx.Rollback()
 
-	if err := validateRefs(ctx, tx, "sites", policy.SiteIDs); err != nil {
+	if err := validateApplicationRefs(ctx, tx, policy.SiteIDs); err != nil {
 		return model.Policy{}, err
 	}
 	if err := validateRefs(ctx, tx, "rules", policy.RuleIDs); err != nil {
@@ -410,7 +606,7 @@ func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.Publish
 			return nil, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
-		items = append(items, item)
+		items = append(items, model.AttachPublishActivation(item))
 	}
 	return items, rows.Err()
 }
@@ -423,6 +619,7 @@ func (s *PostgresStore) CreatePublishRecord(ctx context.Context, record model.Pu
 		record.Version, record.Operator, record.Status, record.ConfigPath, record.Checksum, record.Note, record.ConfigJSON).
 		Scan(&record.ID, &record.CreatedAt)
 	record.Time = record.CreatedAt.Format(time.RFC3339)
+	record = model.AttachPublishActivation(record)
 	return record, err
 }
 
@@ -443,7 +640,7 @@ func (s *PostgresStore) GetPublishRecordByVersion(ctx context.Context, version s
 		return model.PublishRecord{}, ErrNotFound
 	}
 	item.Time = item.CreatedAt.Format(time.RFC3339)
-	return item, err
+	return model.AttachPublishActivation(item), err
 }
 
 func (s *PostgresStore) GetUserByUsername(ctx context.Context, username string) (model.User, error) {
@@ -2036,6 +2233,112 @@ func checkRowsAffected(result sql.Result, err error) error {
 	return nil
 }
 
+type certificateScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanCertificate(row certificateScanner) (model.Certificate, error) {
+	var item model.Certificate
+	var domains string
+	err := row.Scan(&item.ID, &item.Name, &domains, &item.CertPEM, &item.KeyPEM, &item.NotBefore, &item.NotAfter, &item.Fingerprint, &item.CreatedAt, &item.UpdatedAt)
+	item.Domains = splitCSV(domains)
+	return item, err
+}
+
+func (s *PostgresStore) certificateExists(ctx context.Context, id int64) (bool, error) {
+	var exists bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM certificates WHERE id = $1)`, id).Scan(&exists)
+	return exists, err
+}
+
+func (s *PostgresStore) loadApplicationChildren(ctx context.Context, item *model.Application) error {
+	hostRows, err := s.db.QueryContext(ctx, `
+		SELECT id, application_id, host, is_primary
+		FROM application_hosts
+		WHERE application_id = $1
+		ORDER BY id`, item.ID)
+	if err != nil {
+		return err
+	}
+	defer hostRows.Close()
+	for hostRows.Next() {
+		var host model.ApplicationHost
+		if err := hostRows.Scan(&host.ID, &host.ApplicationID, &host.Host, &host.IsPrimary); err != nil {
+			return err
+		}
+		item.Hosts = append(item.Hosts, host)
+	}
+	if err := hostRows.Err(); err != nil {
+		return err
+	}
+
+	listenerRows, err := s.db.QueryContext(ctx, `
+		SELECT id, application_id, port, protocol, certificate_id, enabled
+		FROM application_listeners
+		WHERE application_id = $1
+		ORDER BY id`, item.ID)
+	if err != nil {
+		return err
+	}
+	defer listenerRows.Close()
+	for listenerRows.Next() {
+		var listener model.ApplicationListener
+		if err := listenerRows.Scan(&listener.ID, &listener.ApplicationID, &listener.Port, &listener.Protocol, &listener.CertificateID, &listener.Enabled); err != nil {
+			return err
+		}
+		item.Listeners = append(item.Listeners, listener)
+	}
+	if err := listenerRows.Err(); err != nil {
+		return err
+	}
+
+	upstreamRows, err := s.db.QueryContext(ctx, `
+		SELECT id, application_id, name, url, weight, enabled
+		FROM application_upstreams
+		WHERE application_id = $1
+		ORDER BY id`, item.ID)
+	if err != nil {
+		return err
+	}
+	defer upstreamRows.Close()
+	for upstreamRows.Next() {
+		var upstream model.ApplicationUpstream
+		if err := upstreamRows.Scan(&upstream.ID, &upstream.ApplicationID, &upstream.Name, &upstream.URL, &upstream.Weight, &upstream.Enabled); err != nil {
+			return err
+		}
+		item.Upstreams = append(item.Upstreams, upstream)
+	}
+	return upstreamRows.Err()
+}
+
+func replaceApplicationChildren(ctx context.Context, tx *sql.Tx, item *model.Application) error {
+	for _, host := range item.Hosts {
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO application_hosts (application_id, host, is_primary)
+			VALUES ($1, $2, $3)
+			RETURNING id`, item.ID, host.Host, host.IsPrimary).Scan(&host.ID); err != nil {
+			return err
+		}
+	}
+	for _, listener := range item.Listeners {
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO application_listeners (application_id, port, protocol, certificate_id, enabled)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id`, item.ID, listener.Port, listener.Protocol, listener.CertificateID, listener.Enabled).Scan(&listener.ID); err != nil {
+			return err
+		}
+	}
+	for _, upstream := range item.Upstreams {
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO application_upstreams (application_id, name, url, weight, enabled)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING id`, item.ID, upstream.Name, upstream.URL, upstream.Weight, upstream.Enabled).Scan(&upstream.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func queryIDs(ctx context.Context, db *sql.DB, query string, args ...any) ([]int64, error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -2057,6 +2360,25 @@ func validateRefs(ctx context.Context, tx *sql.Tx, table string, ids []int64) er
 	for _, id := range ids {
 		var exists bool
 		if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM "+table+" WHERE id = $1)", id).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrNotFound
+		}
+	}
+	return nil
+}
+
+func validateApplicationRefs(ctx context.Context, tx *sql.Tx, ids []int64) error {
+	for _, id := range ids {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM applications WHERE id = $1)`, id).Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sites WHERE id = $1)`, id).Scan(&exists); err != nil {
 			return err
 		}
 		if !exists {

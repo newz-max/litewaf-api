@@ -39,6 +39,9 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-litewaf}:${POSTGRES_PASSWORD:-litewaf_dev_password}@postgres:5432/${POSTGRES_DB:-litewaf}?sslmode=disable
       REDIS_ADDR: redis:6379
       GATEWAY_CONFIG_PATH: /var/lib/litewaf/gateway/active.json
+      GATEWAY_RELOAD_COMMAND: ${GATEWAY_RELOAD_COMMAND:-}
+      GATEWAY_LISTENER_MODE: ${GATEWAY_LISTENER_MODE:-host-network}
+      GATEWAY_BRIDGE_PORT_RANGE: ${GATEWAY_BRIDGE_PORT_RANGE:-}
       PUBLISH_OPERATOR: ${PUBLISH_OPERATOR:-compose}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:?AUTH_TOKEN_SECRET is required}
       GATEWAY_INGESTION_TOKEN: ${GATEWAY_INGESTION_TOKEN:?GATEWAY_INGESTION_TOKEN is required}
@@ -48,6 +51,8 @@ services:
       LITEWAF_ADMIN_ROLE: ${LITEWAF_ADMIN_ROLE:-admin}
     volumes:
       - litewaf-gateway-config:/var/lib/litewaf/gateway
+    ports:
+      - "${API_LOOPBACK_ADDR:-127.0.0.1}:${API_LOOPBACK_PORT:-18081}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,9 +81,10 @@ services:
 
   gateway:
     image: ${LITEWAF_IMAGE_PREFIX:-litewaf}/litewaf-gateway:${LITEWAF_IMAGE_TAG:-latest}
+    network_mode: host
     environment:
       LITEWAF_CONFIG_PATH: /etc/litewaf/active.json
-      LITEWAF_INGESTION_URL: http://waf-api:8080
+      LITEWAF_INGESTION_URL: ${LITEWAF_INGESTION_URL:-http://127.0.0.1:${API_LOOPBACK_PORT:-18081}}
       LITEWAF_INGESTION_TOKEN: ${GATEWAY_INGESTION_TOKEN:?GATEWAY_INGESTION_TOKEN is required}
       LITEWAF_METRICS_ENABLED: ${LITEWAF_METRICS_ENABLED:-false}
       LITEWAF_SENSITIVE_HEADERS: ${LITEWAF_SENSITIVE_HEADERS:-authorization,cookie,set-cookie}
@@ -88,8 +94,6 @@ services:
       LITEWAF_REAL_IP_RECURSIVE: ${LITEWAF_REAL_IP_RECURSIVE:-on}
     volumes:
       - litewaf-gateway-config:/etc/litewaf
-    ports:
-      - "${GATEWAY_PORT:-8081}:8080"
     depends_on:
       waf-api:
         condition: service_healthy

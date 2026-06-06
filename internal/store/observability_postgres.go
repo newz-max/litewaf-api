@@ -13,10 +13,10 @@ import (
 func (s *PostgresStore) CreateAccessLog(ctx context.Context, item model.AccessLog) (model.AccessLog, error) {
 	createdAt := nullableTime(item.CreatedAt)
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO access_logs (request_id, site_id, host, method, uri, status, upstream_status, duration_ms, client_ip, user_agent, disposition, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::timestamptz, now()))
+		INSERT INTO access_logs (request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status, duration_ms, client_ip, user_agent, disposition, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14::timestamptz, now()))
 		RETURNING id, created_at`,
-		item.RequestID, item.SiteID, item.Host, item.Method, item.URI, item.Status, item.UpstreamStatus, item.DurationMS, item.ClientIP, item.UserAgent, item.Disposition, createdAt).
+		item.RequestID, item.SiteID, item.ListenerPort, item.Scheme, item.Host, item.Method, item.URI, item.Status, item.UpstreamStatus, item.DurationMS, item.ClientIP, item.UserAgent, item.Disposition, createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	return item, err
@@ -29,20 +29,22 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, request_id, site_id, host, method, uri, status, upstream_status, duration_ms, client_ip, user_agent, disposition, created_at
+		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status, duration_ms, client_ip, user_agent, disposition, created_at
 		FROM access_logs
 		WHERE ($1::bigint = 0 OR site_id = $1)
-			AND ($2 = '' OR host = $2)
-			AND ($3 = '' OR client_ip = $3)
-			AND ($4 = '' OR method = $4)
-			AND ($5 = '' OR uri ILIKE '%' || $5 || '%')
-			AND ($6::integer = 0 OR status = $6)
-			AND ($7 = '' OR disposition = $7)
-			AND ($8::timestamptz IS NULL OR created_at >= $8)
-			AND ($9::timestamptz IS NULL OR created_at <= $9)
+			AND ($2::integer = 0 OR listener_port = $2)
+			AND ($3 = '' OR scheme = $3)
+			AND ($4 = '' OR host = $4)
+			AND ($5 = '' OR client_ip = $5)
+			AND ($6 = '' OR method = $6)
+			AND ($7 = '' OR uri ILIKE '%' || $7 || '%')
+			AND ($8::integer = 0 OR status = $8)
+			AND ($9 = '' OR disposition = $9)
+			AND ($10::timestamptz IS NULL OR created_at >= $10)
+			AND ($11::timestamptz IS NULL OR created_at <= $11)
 		ORDER BY id DESC
-		LIMIT $10 OFFSET $11`,
-		filter.SiteID, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
+		LIMIT $12 OFFSET $13`,
+		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
 		nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
 	if err != nil {
 		return nil, err
@@ -51,7 +53,7 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 	var items []model.AccessLog
 	for rows.Next() {
 		var item model.AccessLog
-		if err := rows.Scan(&item.ID, &item.RequestID, &item.SiteID, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus, &item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Disposition, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus, &item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Disposition, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
@@ -64,7 +66,7 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 	createdAt := nullableTime(item.CreatedAt)
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO waf_events (
-			request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
+			request_id, site_id, listener_port, scheme, host, event_type, rule_id, rule_type, target, action, disposition,
 			client_ip, method, uri, summary, rate_limit_id,
 			module, category, rule_name, attack_type, group_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
@@ -73,9 +75,9 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 			challenge_mode, challenge_result, bot_result, bot_reason, device_signal,
 			created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, COALESCE($39::timestamptz, now()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, COALESCE($42::timestamptz, now()))
 		RETURNING id, created_at`,
-		item.RequestID, item.SiteID, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition,
+		item.RequestID, item.SiteID, item.ListenerPort, item.Scheme, item.Host, item.EventType, item.RuleID, item.RuleType, item.Target, item.Action, item.Disposition,
 		item.ClientIP, item.Method, item.URI, item.Summary, item.RateLimitID,
 		item.Module, item.Category, item.RuleName, item.AttackType, item.GroupName, item.Counter, item.WindowSec,
 		item.AdvancedTarget, item.NormalizedValue, item.Score, item.Threshold, item.MatchedRuleIDs,
@@ -101,7 +103,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, request_id, site_id, event_type, rule_id, rule_type, target, action, disposition,
+		SELECT id, request_id, site_id, listener_port, scheme, host, event_type, rule_id, rule_type, target, action, disposition,
 			client_ip, method, uri, summary, rate_limit_id,
 			module, category, rule_name, attack_type, group_name, counter, window_sec,
 			advanced_target, normalized_value, score, threshold, matched_rule_ids,
@@ -111,23 +113,26 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			created_at
 		FROM waf_events
 		WHERE ($1::bigint = 0 OR site_id = $1)
-			AND ($2 = '' OR client_ip = $2)
-			AND ($3::bigint = 0 OR rule_id = $3)
-			AND ($4 = '' OR action = $4)
-			AND ($5 = '' OR disposition = $5)
-			AND ($6 = '' OR event_type = $6)
-			AND ($7 = '' OR module = $7)
-			AND ($8 = '' OR attack_type = $8)
-			AND ($9 = '' OR advanced_target = $9 OR target = $9)
-			AND ($10 = '' OR challenge_result = $10)
-			AND ($11::integer = 0 OR score >= $11)
-			AND ($12 = '' OR advanced_target = $12)
-			AND ($13 = '' OR bot_result = $13)
-			AND ($14::timestamptz IS NULL OR created_at >= $14)
-			AND ($15::timestamptz IS NULL OR created_at <= $15)
+			AND ($2::integer = 0 OR listener_port = $2)
+			AND ($3 = '' OR scheme = $3)
+			AND ($4 = '' OR host = $4)
+			AND ($5 = '' OR client_ip = $5)
+			AND ($6::bigint = 0 OR rule_id = $6)
+			AND ($7 = '' OR action = $7)
+			AND ($8 = '' OR disposition = $8)
+			AND ($9 = '' OR event_type = $9)
+			AND ($10 = '' OR module = $10)
+			AND ($11 = '' OR attack_type = $11)
+			AND ($12 = '' OR advanced_target = $12 OR target = $12)
+			AND ($13 = '' OR challenge_result = $13)
+			AND ($14::integer = 0 OR score >= $14)
+			AND ($15 = '' OR advanced_target = $15)
+			AND ($16 = '' OR bot_result = $16)
+			AND ($17::timestamptz IS NULL OR created_at >= $17)
+			AND ($18::timestamptz IS NULL OR created_at <= $18)
 		ORDER BY id DESC
-		LIMIT $16 OFFSET $17`,
-		filter.SiteID, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
+		LIMIT $19 OFFSET $20`,
+		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
 		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, filter.DynamicResult, filter.BotResult, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
 	if err != nil {
 		return nil, err
@@ -137,7 +142,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 	for rows.Next() {
 		var item model.WAFEvent
 		if err := rows.Scan(
-			&item.ID, &item.RequestID, &item.SiteID, &item.EventType, &item.RuleID, &item.RuleType, &item.Target, &item.Action, &item.Disposition,
+			&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.EventType, &item.RuleID, &item.RuleType, &item.Target, &item.Action, &item.Disposition,
 			&item.ClientIP, &item.Method, &item.URI, &item.Summary, &item.RateLimitID,
 			&item.Module, &item.Category, &item.RuleName, &item.AttackType, &item.GroupName, &item.Counter, &item.WindowSec,
 			&item.AdvancedTarget, &item.NormalizedValue, &item.Score, &item.Threshold, &item.MatchedRuleIDs,
@@ -236,15 +241,17 @@ func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.Dynami
 		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, site_id, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
+		SELECT id, site_id, listener_port, scheme, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
 			ban_remaining_sec, status, revision, created_at, expires_at, cleared_at, updated_at
 		FROM dynamic_bans
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2 = '' OR client_ip = $2)
 			AND ($3::bigint = 0 OR revision > $3)
+			AND ($4::integer = 0 OR listener_port = $4)
+			AND ($5 = '' OR scheme = $5)
 		ORDER BY updated_at DESC, id DESC
-		LIMIT $4 OFFSET $5`,
-		filter.SiteID, filter.ClientIP, filter.MinRevision, limit, offset)
+		LIMIT $6 OFFSET $7`,
+		filter.SiteID, filter.ClientIP, filter.MinRevision, filter.ListenerPort, filter.Scheme, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -291,8 +298,13 @@ func (s *PostgresStore) ClearDynamicBan(ctx context.Context, request model.Dynam
 		message = "dynamic ban clear recorded"
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO dynamic_ban_clears (site_id, client_ip, status, revision, actor, message, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		INSERT INTO dynamic_ban_clears (site_id, listener_port, scheme, client_ip, status, revision, actor, message, created_at)
+		SELECT site_id, listener_port, scheme, client_ip, $3, $4, $5, $6, $7
+		FROM dynamic_bans
+		WHERE site_id = $1 AND client_ip = $2
+		UNION ALL
+		SELECT $1, 0, '', $2, $3, $4, $5, $6, $7
+		WHERE NOT EXISTS (SELECT 1 FROM dynamic_bans WHERE site_id = $1 AND client_ip = $2)`,
 		request.SiteID, request.ClientIP, status, revision, request.Actor, message, now); err != nil {
 		return model.DynamicBanClearResult{}, err
 	}
@@ -316,14 +328,16 @@ func (s *PostgresStore) ListDynamicBanClears(ctx context.Context, filter model.D
 		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT site_id, client_ip, status, revision, created_at, message
+		SELECT site_id, listener_port, scheme, client_ip, status, revision, created_at, message
 		FROM dynamic_ban_clears
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2 = '' OR client_ip = $2)
 			AND ($3::bigint = 0 OR revision > $3)
+			AND ($4::integer = 0 OR listener_port = $4)
+			AND ($5 = '' OR scheme = $5)
 		ORDER BY revision ASC
-		LIMIT $4 OFFSET $5`,
-		filter.SiteID, filter.ClientIP, filter.MinRevision, limit, offset)
+		LIMIT $6 OFFSET $7`,
+		filter.SiteID, filter.ClientIP, filter.MinRevision, filter.ListenerPort, filter.Scheme, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +345,7 @@ func (s *PostgresStore) ListDynamicBanClears(ctx context.Context, filter model.D
 	items := []model.DynamicBanClearResult{}
 	for rows.Next() {
 		var item model.DynamicBanClearResult
-		if err := rows.Scan(&item.SiteID, &item.ClientIP, &item.Status, &item.Revision, &item.ClearedAt, &item.Message); err != nil {
+		if err := rows.Scan(&item.SiteID, &item.ListenerPort, &item.Scheme, &item.ClientIP, &item.Status, &item.Revision, &item.ClearedAt, &item.Message); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -361,11 +375,11 @@ func (s *PostgresStore) projectDynamicBanEvent(ctx context.Context, item model.W
 	expiresAt := createdAt.Add(time.Duration(remaining) * time.Second)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO dynamic_bans (
-			site_id, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
+			site_id, listener_port, scheme, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
 			ban_remaining_sec, status, created_at, expires_at, cleared_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $9, NULL, $8)
-		ON CONFLICT (site_id, client_ip) DO UPDATE SET
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, NULL, $9)
+		ON CONFLICT (site_id, listener_port, scheme, client_ip) DO UPDATE SET
 			ban_reason = EXCLUDED.ban_reason,
 			source = EXCLUDED.source,
 			source_event_id = EXCLUDED.source_event_id,
@@ -376,7 +390,7 @@ func (s *PostgresStore) projectDynamicBanEvent(ctx context.Context, item model.W
 			expires_at = EXCLUDED.expires_at,
 			cleared_at = NULL,
 			updated_at = EXCLUDED.updated_at`,
-		item.SiteID, item.ClientIP, item.BanReason, dynamicBanSource(item), item.ID,
+		item.SiteID, item.ListenerPort, item.Scheme, item.ClientIP, item.BanReason, dynamicBanSource(item), item.ID,
 		duration, remaining, createdAt, expiresAt)
 	return err
 }
@@ -389,7 +403,7 @@ func scanDynamicBan(row dynamicBanScanner) (model.DynamicBan, error) {
 	var item model.DynamicBan
 	var clearedAt sql.NullTime
 	err := row.Scan(
-		&item.ID, &item.SiteID, &item.ClientIP, &item.BanReason, &item.Source, &item.SourceEventID,
+		&item.ID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.ClientIP, &item.BanReason, &item.Source, &item.SourceEventID,
 		&item.BanDurationSec, &item.BanRemainingSec, &item.Status, &item.Revision,
 		&item.CreatedAt, &item.ExpiresAt, &clearedAt, &item.UpdatedAt,
 	)

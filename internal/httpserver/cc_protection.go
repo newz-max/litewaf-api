@@ -140,7 +140,8 @@ func (h handlers) deleteCCProtectionRule(w http.ResponseWriter, r *http.Request)
 }
 
 type ccProtectionPreviewRequest struct {
-	SiteID          int64   `json:"site_id"`
+	SiteID          int64   `json:"application_id"`
+	LegacySiteID    int64   `json:"site_id"`
 	Path            string  `json:"path"`
 	Method          string  `json:"method"`
 	ClientIP        string  `json:"client_ip"`
@@ -194,6 +195,9 @@ func (h handlers) previewCCProtection(w http.ResponseWriter, r *http.Request) {
 }
 
 func (r *ccProtectionPreviewRequest) normalize() {
+	if r.SiteID == 0 {
+		r.SiteID = r.LegacySiteID
+	}
 	r.Path = strings.TrimSpace(r.Path)
 	r.Method = strings.ToUpper(strings.TrimSpace(r.Method))
 	r.ClientIP = strings.TrimSpace(r.ClientIP)
@@ -350,15 +354,16 @@ func ccPreviewCounterKey(rule model.ProtectionRule, input ccProtectionPreviewReq
 }
 
 type ccProtectionRequest struct {
-	Name     string                     `json:"name"`
-	SiteID   int64                      `json:"site_id"`
-	Enabled  *bool                      `json:"enabled"`
-	Priority int                        `json:"priority"`
-	Match    model.ProtectionRuleMatch  `json:"match"`
-	Limit    model.ProtectionRuleLimit  `json:"limit"`
-	Action   model.ProtectionRuleAction `json:"action"`
-	Module   string                     `json:"module"`
-	Category string                     `json:"category"`
+	Name         string                     `json:"name"`
+	SiteID       int64                      `json:"application_id"`
+	LegacySiteID int64                      `json:"site_id"`
+	Enabled      *bool                      `json:"enabled"`
+	Priority     int                        `json:"priority"`
+	Match        model.ProtectionRuleMatch  `json:"match"`
+	Limit        model.ProtectionRuleLimit  `json:"limit"`
+	Action       model.ProtectionRuleAction `json:"action"`
+	Module       string                     `json:"module"`
+	Category     string                     `json:"category"`
 }
 
 func (r ccProtectionRequest) toRateLimit() (model.RateLimitRule, error) {
@@ -389,6 +394,9 @@ func (r ccProtectionRequest) toProtectionRule() (model.ProtectionRule, error) {
 }
 
 func (r *ccProtectionRequest) normalize() {
+	if r.SiteID == 0 {
+		r.SiteID = r.LegacySiteID
+	}
 	r.Name = strings.TrimSpace(r.Name)
 	r.Module = strings.TrimSpace(r.Module)
 	r.Category = strings.TrimSpace(r.Category)
@@ -525,13 +533,9 @@ func broadCCGlob(value string) bool {
 func parseCCProtectionFilter(w http.ResponseWriter, r *http.Request) (ccProtectionFilter, bool) {
 	query := r.URL.Query()
 	filter := ccProtectionFilter{}
-	if value := strings.TrimSpace(query.Get("site_id")); value != "" {
-		id, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || id < 0 {
-			writeError(w, http.StatusBadRequest, "invalid site_id filter")
-			return ccProtectionFilter{}, false
-		}
-		filter.SiteID = id
+	var ok bool
+	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
+		return ccProtectionFilter{}, false
 	}
 	if value := strings.TrimSpace(query.Get("enabled")); value != "" {
 		enabled, err := parseBoolFilter(value)

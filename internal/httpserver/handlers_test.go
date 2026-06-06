@@ -2,14 +2,23 @@ package httpserver
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"litewaf-api/internal/app"
 	"litewaf-api/internal/auth"
@@ -31,6 +40,42 @@ func testServer(t *testing.T) http.Handler {
 		AuthTokenTTL:          3600000000000,
 		GatewayIngestionToken: "gateway-secret",
 		MetricsEnabled:        true,
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	dataStore := store.NewMemoryStore()
+	hash, err := auth.HashPassword("secret123")
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := dataStore.EnsureUser(t.Context(), model.User{
+		Username:     "admin",
+		PasswordHash: hash,
+		Role:         "admin",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	application := app.New(cfg, dataStore)
+	mux := http.NewServeMux()
+	registerRoutes(mux, logger, application)
+	return mux
+}
+
+func testServerWithConfig(t *testing.T, configure func(*config.Config)) http.Handler {
+	t.Helper()
+	cfg := config.Config{
+		AppName:               "LiteWaf API",
+		Env:                   "test",
+		HTTPAddr:              ":0",
+		GatewayConfigPath:     t.TempDir() + "/active.json",
+		PublishOperator:       "test",
+		AuthTokenSecret:       "test-secret",
+		AuthTokenTTL:          3600000000000,
+		GatewayIngestionToken: "gateway-secret",
+		MetricsEnabled:        true,
+	}
+	if configure != nil {
+		configure(&cfg)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	dataStore := store.NewMemoryStore()
@@ -78,19 +123,19 @@ func withToken(req *http.Request, token string) *http.Request {
 	return req
 }
 
-func TestSiteCRUD(t *testing.T) {
+func TestApplicationCRUD(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Example","host":"example.test","upstream":"http://upstream:8080","mode":"protect"}`)
-	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/sites", body), token)
+	body := bytes.NewBufferString(`{"name":"Example","mode":"protect","hosts":[{"host":"example.test","is_primary":true}],"listeners":[{"port":80,"protocol":"http","enabled":true}],"upstreams":[{"name":"primary","url":"http://upstream:8080","weight":1,"enabled":true}]}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d body=%s", rec.Code, rec.Body.String())
 	}
 
-	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil), token)
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/applications", nil), token)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -103,15 +148,15 @@ func TestSiteCRUD(t *testing.T) {
 		t.Fatalf("decode list: %v", err)
 	}
 	if len(response.Items) != 1 {
-		t.Fatalf("expected 1 site, got %d", len(response.Items))
+		t.Fatalf("expected 1 application, got %d", len(response.Items))
 	}
 }
 
-func TestCreateSiteValidation(t *testing.T) {
+func TestCreateApplicationValidation(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
-	body := bytes.NewBufferString(`{"name":"Bad","host":"","upstream":"nope","mode":"protect"}`)
-	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/sites", body), token)
+	body := bytes.NewBufferString(`{"name":"Bad","mode":"protect","hosts":[],"listeners":[{"port":443,"protocol":"https","enabled":true}],"upstreams":[{"url":"nope","enabled":true}]}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -122,7 +167,7 @@ func TestCreateSiteValidation(t *testing.T) {
 func TestNotFound(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
-	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/sites/404", nil), token)
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/applications/404", nil), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
@@ -132,12 +177,517 @@ func TestNotFound(t *testing.T) {
 
 func TestProtectedEndpointRequiresToken(t *testing.T) {
 	handler := testServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/applications", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d", rec.Code)
 	}
+}
+
+func TestSitesRouteRemoved(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/sites", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected removed sites route to return 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCertificateUploadRedactsPrivateKey(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	certPEM, keyPEM := testHTTPServerCertificatePEM(t, "app.example.test")
+	payload, _ := json.Marshal(map[string]string{
+		"name":     "App cert",
+		"cert_pem": certPEM,
+		"key_pem":  keyPEM,
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/certificates", bytes.NewReader(payload)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("certificate response leaked private key: %s", rec.Body.String())
+	}
+	assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/certificates", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "PRIVATE KEY") {
+		t.Fatalf("certificate list leaked private key: %s", rec.Body.String())
+	}
+	assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/certificates/validate", bytes.NewReader(payload)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("validate status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=certificate", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("audit status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode certificate audit: %v", err)
+	}
+	if len(auditResponse.Items) < 2 {
+		t.Fatalf("expected upload and validate certificate audit entries: %+v", auditResponse.Items)
+	}
+	hasValidate := false
+	for _, item := range auditResponse.Items {
+		if item.Action == "validate" {
+			hasValidate = true
+		}
+	}
+	if !hasValidate {
+		t.Fatalf("expected certificate validate audit entry: %+v", auditResponse.Items)
+	}
+}
+
+func TestPublishPreviewSummarizesApplicationsAndCertificateRisks(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	certPEM, keyPEM := testHTTPServerCertificatePEM(t, "other.example.test")
+	certPayload, _ := json.Marshal(map[string]string{
+		"name":     "Other cert",
+		"cert_pem": certPEM,
+		"key_pem":  keyPEM,
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/certificates", bytes.NewReader(certPayload)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload cert status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var certResponse struct {
+		Item model.Certificate `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&certResponse); err != nil {
+		t.Fatalf("decode cert: %v", err)
+	}
+
+	appPayload, _ := json.Marshal(map[string]any{
+		"name":    "Example",
+		"mode":    "protect",
+		"enabled": true,
+		"hosts": []map[string]any{
+			{"host": "app.example.test", "is_primary": true},
+		},
+		"listeners": []map[string]any{
+			{"port": 80, "protocol": "http", "enabled": true},
+			{"port": 443, "protocol": "https", "certificate_id": certResponse.Item.ID, "enabled": true},
+		},
+		"upstreams": []map[string]any{
+			{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true},
+		},
+	})
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(appPayload)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create app status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/releases/preview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Summary map[string]any `json:"summary"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	if int(response.Summary["applications"].(float64)) != 1 ||
+		int(response.Summary["application_hosts"].(float64)) != 1 ||
+		int(response.Summary["application_listeners"].(float64)) != 2 ||
+		int(response.Summary["https_listeners"].(float64)) != 1 ||
+		int(response.Summary["certificates"].(float64)) != 1 ||
+		int(response.Summary["enabled_upstreams"].(float64)) != 1 {
+		t.Fatalf("unexpected application preview summary: %+v", response.Summary)
+	}
+	if _, ok := response.Summary["sites"]; ok {
+		t.Fatalf("preview must not expose legacy sites count: %+v", response.Summary)
+	}
+	validation, ok := response.Summary["application_validation"].(map[string]any)
+	if !ok || int(validation["warnings"].(float64)) != 1 {
+		t.Fatalf("expected certificate-domain warning: %+v", response.Summary)
+	}
+	issues, ok := validation["issues"].([]any)
+	if !ok || len(issues) != 1 {
+		t.Fatalf("expected one validation issue: %+v", validation)
+	}
+	issue, ok := issues[0].(map[string]any)
+	if !ok || issue["category"] != "certificate-domain-mismatch" || issue["severity"] != "warning" {
+		t.Fatalf("unexpected validation issue: %+v", issues[0])
+	}
+}
+
+func TestCertificateMaterialRedactedFromPreviewReleaseAndAudit(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	certPEM, keyPEM := testHTTPServerCertificatePEM(t, "app.example.test")
+	certPayload, _ := json.Marshal(map[string]string{
+		"name":     "App TLS",
+		"cert_pem": certPEM,
+		"key_pem":  keyPEM,
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/certificates", bytes.NewReader(certPayload)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create certificate status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var certResponse struct {
+		Item model.Certificate `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&certResponse); err != nil {
+		t.Fatalf("decode certificate: %v", err)
+	}
+
+	appPayload, _ := json.Marshal(map[string]any{
+		"name":    "TLS app",
+		"mode":    "protect",
+		"enabled": true,
+		"hosts":   []map[string]any{{"host": "app.example.test", "is_primary": true}},
+		"listeners": []map[string]any{
+			{"port": 443, "protocol": "https", "certificate_id": certResponse.Item.ID, "enabled": true},
+		},
+		"upstreams": []map[string]any{{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true}},
+	})
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(appPayload)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create tls app status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	for _, path := range []string{"/api/v1/releases/preview", "/api/v1/audit-logs"} {
+		req = withToken(httptest.NewRequest(http.MethodGet, path, nil), token)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("publish tls app status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post-publish audit status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	assertNoCertificateMaterial(t, rec.Body.String(), certPEM, keyPEM)
+}
+
+func TestPublishPreviewReportsBridgeListenerDeploymentMode(t *testing.T) {
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayListenerMode = "bridge-range"
+		cfg.GatewayBridgePortRange = "80,443,9000-9002"
+	})
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/releases/preview", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Summary map[string]any `json:"summary"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode preview: %v", err)
+	}
+	deployment, ok := response.Summary["listener_deployment_mode"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing listener deployment mode: %+v", response.Summary)
+	}
+	if deployment["mode"] != "bridge-range" || deployment["bridge_range_config"] != true || deployment["raw_port_range"] != "80,443,9000-9002" {
+		t.Fatalf("unexpected deployment summary: %+v", deployment)
+	}
+	ports, ok := deployment["port_range"].([]any)
+	if !ok || len(ports) != 5 {
+		t.Fatalf("unexpected deployment ports: %+v", deployment["port_range"])
+	}
+}
+
+func TestCreateReleaseBlocksBridgeRangeListenerOutsideMappedPorts(t *testing.T) {
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayListenerMode = "bridge-range"
+		cfg.GatewayBridgePortRange = "80,443,9000-9002"
+	})
+	token := adminToken(t, handler)
+
+	appPayload, _ := json.Marshal(map[string]any{
+		"name":    "Bridge Range App",
+		"mode":    "protect",
+		"enabled": true,
+		"hosts": []map[string]any{
+			{"host": "bridge.example.test", "is_primary": true},
+		},
+		"listeners": []map[string]any{
+			{"port": 9443, "protocol": "http", "enabled": true},
+		},
+		"upstreams": []map[string]any{
+			{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true},
+		},
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(appPayload)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create app status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", bytes.NewBufferString(`{"operator":"admin"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("release status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "outside configured bridge port range") {
+		t.Fatalf("release error did not explain bridge range: %s", rec.Body.String())
+	}
+}
+
+func TestReleaseRecordIncludesListenerActivationAndRollbackTarget(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	appPayload, _ := json.Marshal(map[string]any{
+		"name":    "Example",
+		"mode":    "protect",
+		"enabled": true,
+		"hosts": []map[string]any{
+			{"host": "app.example.test", "is_primary": true},
+		},
+		"listeners": []map[string]any{
+			{"port": 80, "protocol": "http", "enabled": true},
+		},
+		"upstreams": []map[string]any{
+			{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true},
+		},
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(appPayload)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create app status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", bytes.NewBufferString(`{"note":"manual publish"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("publish status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var publishResponse struct {
+		Item model.PublishRecord `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&publishResponse); err != nil {
+		t.Fatalf("decode publish record: %v", err)
+	}
+	if publishResponse.Item.Activation == nil {
+		t.Fatalf("expected activation summary: %+v", publishResponse.Item)
+	}
+	activation := publishResponse.Item.Activation
+	if activation.Applications != 1 || activation.ListenerCount != 1 || activation.HTTPSListenerCount != 0 || activation.ReloadStatus != "not-configured" || len(activation.ValidationErrors) != 0 {
+		t.Fatalf("unexpected activation summary: %+v", activation)
+	}
+	if !strings.Contains(publishResponse.Item.Note, model.PublishActivationNotePrefix) {
+		t.Fatalf("expected activation metadata in note: %s", publishResponse.Item.Note)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/releases", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list releases status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.PublishRecord `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode release list: %v", err)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].Activation == nil || listResponse.Items[0].Activation.ListenerCount != 1 {
+		t.Fatalf("release list missing activation summary: %+v", listResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases/"+publishResponse.Item.Version+"/rollback", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("rollback status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var rollbackResponse struct {
+		Item model.PublishRecord `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&rollbackResponse); err != nil {
+		t.Fatalf("decode rollback record: %v", err)
+	}
+	if rollbackResponse.Item.Activation == nil || rollbackResponse.Item.Activation.RollbackTarget != publishResponse.Item.Version {
+		t.Fatalf("rollback record missing target: %+v", rollbackResponse.Item)
+	}
+	listenerConf, err := os.ReadFile(filepath.Join(filepath.Dir(publishResponse.Item.ConfigPath), "listeners", "applications.conf"))
+	if err != nil {
+		t.Fatalf("read rolled back listener config: %v", err)
+	}
+	if !bytes.Contains(listenerConf, []byte("listen 80;")) {
+		t.Fatalf("rollback did not restore listener artifact: %s", listenerConf)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=release", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("release audit status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var auditResponse struct {
+		Items []model.AuditLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&auditResponse); err != nil {
+		t.Fatalf("decode release audit: %v", err)
+	}
+	hasPublish := false
+	hasRollback := false
+	for _, item := range auditResponse.Items {
+		if item.Action == "publish" && strings.Contains(item.Message, "reload_status=not-configured") {
+			hasPublish = true
+		}
+		if item.Action == "rollback" && strings.Contains(item.Message, "rollback_target="+publishResponse.Item.Version) {
+			hasRollback = true
+		}
+	}
+	if !hasPublish || !hasRollback {
+		t.Fatalf("expected publish and rollback audit summaries: %+v", auditResponse.Items)
+	}
+}
+
+func TestReleaseRecordIncludesGatewayReloadResult(t *testing.T) {
+	successScript := writeReloadScript(t, "reload-ok", "reload ok", 0)
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayReloadCommand = successScript
+	})
+	token := adminToken(t, handler)
+	createApplicationForRelease(t, handler, token)
+
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("publish status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.PublishRecord `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode publish: %v", err)
+	}
+	if response.Item.Activation == nil || response.Item.Activation.ReloadStatus != "reloaded" || response.Item.Activation.ReloadMessage != "reload ok" {
+		t.Fatalf("unexpected reload activation: %+v", response.Item.Activation)
+	}
+}
+
+func TestReleaseRecordBoundsGatewayReloadFailure(t *testing.T) {
+	longMessage := strings.Repeat("reload failed ", 80)
+	failureScript := writeReloadScript(t, "reload-fail", longMessage, 1)
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayReloadCommand = failureScript
+	})
+	token := adminToken(t, handler)
+	createApplicationForRelease(t, handler, token)
+
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("publish status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.PublishRecord `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode publish: %v", err)
+	}
+	if response.Item.Activation == nil || response.Item.Activation.ReloadStatus != "failed" {
+		t.Fatalf("expected failed reload activation: %+v", response.Item.Activation)
+	}
+	if len(response.Item.Activation.ReloadMessage) > 480 {
+		t.Fatalf("reload message was not bounded: %d", len(response.Item.Activation.ReloadMessage))
+	}
+}
+
+func createApplicationForRelease(t *testing.T, handler http.Handler, token string) {
+	t.Helper()
+	appPayload, _ := json.Marshal(map[string]any{
+		"name":    "Example",
+		"mode":    "protect",
+		"enabled": true,
+		"hosts": []map[string]any{
+			{"host": "app.example.test", "is_primary": true},
+		},
+		"listeners": []map[string]any{
+			{"port": 80, "protocol": "http", "enabled": true},
+		},
+		"upstreams": []map[string]any{
+			{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true},
+		},
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(appPayload)), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create app status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func writeReloadScript(t *testing.T, name string, message string, exitCode int) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(t.TempDir(), name+".bat")
+		body := "@echo off\necho " + message + "\nexit /b " + strconv.Itoa(exitCode) + "\n"
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write reload script: %v", err)
+		}
+		return path
+	}
+	path := filepath.Join(t.TempDir(), name+".sh")
+	body := "#!/bin/sh\necho " + strconv.Quote(message) + "\nexit " + strconv.Itoa(exitCode) + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
+		t.Fatalf("write reload script: %v", err)
+	}
+	return path
 }
 
 func TestVersionEndpointUsesBuildVersion(t *testing.T) {
@@ -218,6 +768,225 @@ func TestObservabilityIngestionAndQueries(t *testing.T) {
 	}
 	if len(attackResponse.Items) != 1 || attackResponse.Items[0].RuleID != 7 {
 		t.Fatalf("unexpected attack logs: %+v", attackResponse.Items)
+	}
+}
+
+func TestApplicationScopedFieldsUseApplicationIDContract(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	appBody := bytes.NewBufferString(`{"name":"Scoped App","mode":"protect","hosts":[{"host":"scoped.example.test","is_primary":true}],"listeners":[{"port":8080,"protocol":"http","enabled":true}],"upstreams":[{"name":"primary","url":"http://upstream:8080","weight":1,"enabled":true}]}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", appBody), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create application status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var appResponse struct {
+		Item model.Application `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&appResponse); err != nil {
+		t.Fatalf("decode application: %v", err)
+	}
+
+	ruleBody := bytes.NewBufferString(`{"name":"SQLi","type":"sqli","target":"args","action":"block","expression":"select","score":100}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rules", ruleBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rule status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var ruleResponse struct {
+		Item model.Rule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&ruleResponse); err != nil {
+		t.Fatalf("decode rule: %v", err)
+	}
+
+	policyBody := bytes.NewBufferString(`{"name":"Default","application_ids":[` + strconv.FormatInt(appResponse.Item.ID, 10) + `],"rule_ids":[` + strconv.FormatInt(ruleResponse.Item.ID, 10) + `]}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/policies", policyBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create policy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `"site_ids"`) {
+		t.Fatalf("policy response leaked site_ids: %s", body)
+	}
+	var policyResponse struct {
+		Item model.Policy `json:"item"`
+	}
+	if err := json.NewDecoder(strings.NewReader(body)).Decode(&policyResponse); err != nil {
+		t.Fatalf("decode policy: %v", err)
+	}
+	if len(policyResponse.Item.SiteIDs) != 1 || policyResponse.Item.SiteIDs[0] != appResponse.Item.ID {
+		t.Fatalf("unexpected policy application_ids: %+v", policyResponse.Item)
+	}
+
+	ccBody := bytes.NewBufferString(`{"name":"API limit","application_id":` + strconv.FormatInt(appResponse.Item.ID, 10) + `,"match":{"path":"/api","path_match":"prefix","methods":["GET"]},"limit":{"counter":"client_ip","threshold":10,"window_sec":60},"action":{"type":"block"}}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/cc-protection/rules", ccBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create cc with application_id status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"site_id"`) {
+		t.Fatalf("cc response leaked site_id: %s", rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/cc-protection/rules?application_id="+strconv.FormatInt(appResponse.Item.ID, 10), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list cc with application_id status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var ccList struct {
+		Items []model.ProtectionRule `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&ccList); err != nil {
+		t.Fatalf("decode cc list: %v", err)
+	}
+	if len(ccList.Items) != 1 || ccList.Items[0].SiteID != appResponse.Item.ID {
+		t.Fatalf("unexpected cc list: %+v", ccList.Items)
+	}
+
+	ipBody := bytes.NewBufferString(`{"name":"Office","kind":"allow","target":"ip","value":"203.0.113.10","application_id":` + strconv.FormatInt(appResponse.Item.ID, 10) + `}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/ip-access-lists", ipBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create ip access with application_id status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"site_id"`) {
+		t.Fatalf("ip access response leaked site_id: %s", rec.Body.String())
+	}
+}
+
+func TestObservabilityApplicationListenerFields(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(`{"request_id":"req-app-listener","application_id":5,"listener_port":8443,"scheme":"https","host":"App.EXAMPLE.test","method":"GET","uri":"/","status":200,"duration_ms":7,"client_ip":"192.0.2.70","user_agent":"curl","disposition":"proxied"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest access application fields status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"site_id"`) {
+		t.Fatalf("access response leaked site_id: %s", rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"waf-app-listener","application_id":5,"listener_port":8443,"scheme":"https","host":"App.EXAMPLE.test","event_type":"rule","rule_id":17,"rule_type":"xss","target":"args","action":"block","disposition":"blocked","client_ip":"192.0.2.70","method":"GET","uri":"/search","summary":"matched"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest waf application fields status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"site_id"`) {
+		t.Fatalf("waf response leaked site_id: %s", rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-logs?application_id=5&listener_port=8443&scheme=https&host=app.example.test", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list access application fields status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var accessResponse struct {
+		Items []model.AccessLog `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&accessResponse); err != nil {
+		t.Fatalf("decode application access logs: %v", err)
+	}
+	if len(accessResponse.Items) != 1 || accessResponse.Items[0].SiteID != 5 || accessResponse.Items[0].ListenerPort != 8443 || accessResponse.Items[0].Scheme != "https" || accessResponse.Items[0].Host != "app.example.test" {
+		t.Fatalf("unexpected application access logs: %+v", accessResponse.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/attack-logs?application_id=5&listener_port=8443&scheme=https&host=app.example.test", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list waf application fields status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var wafResponse struct {
+		Items []model.WAFEvent `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&wafResponse); err != nil {
+		t.Fatalf("decode application waf logs: %v", err)
+	}
+	if len(wafResponse.Items) != 1 || wafResponse.Items[0].SiteID != 5 || wafResponse.Items[0].ListenerPort != 8443 || wafResponse.Items[0].Scheme != "https" || wafResponse.Items[0].Host != "app.example.test" {
+		t.Fatalf("unexpected application waf logs: %+v", wafResponse.Items)
+	}
+}
+
+func TestDynamicBanApplicationIDContract(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"ban-app","application_id":9,"listener_port":443,"scheme":"https","event_type":"dynamic-ban","rule_id":3,"rule_type":"cc","target":"path","module":"cc-protection","category":"rate-limit","rule_name":"Login ban","action":"block","disposition":"blocked","client_ip":"198.51.100.90","method":"POST","uri":"/api/login","summary":"temporary ban created","ban_reason":"cc-protection:3","ban_duration_sec":600,"ban_remaining_sec":600}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest dynamic ban application_id status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-bans?application_id=9&status=active", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list dynamic bans application_id status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listResponse struct {
+		Items []model.DynamicBan `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listResponse); err != nil {
+		t.Fatalf("decode application dynamic bans: %v", err)
+	}
+	if len(listResponse.Items) != 1 || listResponse.Items[0].SiteID != 9 || listResponse.Items[0].ListenerPort != 443 || listResponse.Items[0].Scheme != "https" {
+		t.Fatalf("unexpected application dynamic bans: %+v", listResponse.Items)
+	}
+	if strings.Contains(rec.Body.String(), `"site_id"`) {
+		t.Fatalf("dynamic ban list leaked site_id: %s", rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-bans/unban", bytes.NewBufferString(`{"application_id":9,"client_ip":"198.51.100.90"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unban dynamic ban application_id status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"site_id"`) {
+		t.Fatalf("dynamic ban clear leaked site_id: %s", rec.Body.String())
+	}
+	var clearResponse struct {
+		Item model.DynamicBanClearResult `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&clearResponse); err != nil {
+		t.Fatalf("decode application clear result: %v", err)
+	}
+	if clearResponse.Item.SiteID != 9 || clearResponse.Item.Status != "cleared" {
+		t.Fatalf("unexpected application clear result: %+v", clearResponse.Item)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/dynamic-bans/clears?application_id=9&listener_port=443&scheme=https&since_revision=0", nil)
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear feed application listener status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var feedResponse struct {
+		Items []model.DynamicBanClearResult `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&feedResponse); err != nil {
+		t.Fatalf("decode application clear feed: %v", err)
+	}
+	if len(feedResponse.Items) != 1 || feedResponse.Items[0].SiteID != 9 || feedResponse.Items[0].ListenerPort != 443 || feedResponse.Items[0].Scheme != "https" {
+		t.Fatalf("unexpected application listener clear feed: %+v", feedResponse.Items)
 	}
 }
 
@@ -2302,4 +3071,44 @@ func moduleExists(items []model.ProtectionModuleOverview, key string) bool {
 		}
 	}
 	return false
+}
+
+func assertNoCertificateMaterial(t *testing.T, body string, certPEM string, keyPEM string) {
+	t.Helper()
+	for _, leaked := range []string{
+		strings.TrimSpace(certPEM),
+		strings.TrimSpace(keyPEM),
+		"BEGIN CERTIFICATE",
+		"BEGIN RSA PRIVATE KEY",
+		"BEGIN PRIVATE KEY",
+		"PRIVATE KEY",
+	} {
+		if leaked != "" && strings.Contains(body, leaked) {
+			t.Fatalf("response leaked certificate material %q in body: %s", leaked, body)
+		}
+	}
+}
+
+func testHTTPServerCertificatePEM(t *testing.T, dnsName string) (string, string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: dnsName},
+		DNSNames:     []string{dnsName},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	return certPEM, keyPEM
 }

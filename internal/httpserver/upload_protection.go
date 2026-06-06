@@ -3,7 +3,6 @@ package httpserver
 import (
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"litewaf-api/internal/model"
@@ -138,15 +137,16 @@ func (h handlers) deleteUploadProtectionRule(w http.ResponseWriter, r *http.Requ
 }
 
 type uploadProtectionRequest struct {
-	Name     string                      `json:"name"`
-	SiteID   int64                       `json:"site_id"`
-	Enabled  *bool                       `json:"enabled"`
-	Priority int                         `json:"priority"`
-	Match    model.ProtectionRuleMatch   `json:"match"`
-	Upload   *model.ProtectionRuleUpload `json:"upload"`
-	Action   model.ProtectionRuleAction  `json:"action"`
-	Module   string                      `json:"module"`
-	Category string                      `json:"category"`
+	Name         string                      `json:"name"`
+	SiteID       int64                       `json:"application_id"`
+	LegacySiteID int64                       `json:"site_id"`
+	Enabled      *bool                       `json:"enabled"`
+	Priority     int                         `json:"priority"`
+	Match        model.ProtectionRuleMatch   `json:"match"`
+	Upload       *model.ProtectionRuleUpload `json:"upload"`
+	Action       model.ProtectionRuleAction  `json:"action"`
+	Module       string                      `json:"module"`
+	Category     string                      `json:"category"`
 }
 
 func (r uploadProtectionRequest) toModel() (model.UploadProtectionRule, error) {
@@ -177,6 +177,9 @@ func (r uploadProtectionRequest) toProtectionRule() (model.ProtectionRule, error
 }
 
 func (r *uploadProtectionRequest) normalize() {
+	if r.SiteID == 0 {
+		r.SiteID = r.LegacySiteID
+	}
 	r.Name = strings.TrimSpace(r.Name)
 	r.Module = strings.TrimSpace(r.Module)
 	r.Category = strings.TrimSpace(r.Category)
@@ -249,13 +252,9 @@ func (r uploadProtectionRequest) validate() error {
 func parseUploadProtectionFilter(w http.ResponseWriter, r *http.Request) (uploadProtectionFilter, bool) {
 	query := r.URL.Query()
 	filter := uploadProtectionFilter{}
-	if value := strings.TrimSpace(query.Get("site_id")); value != "" {
-		id, err := strconv.ParseInt(value, 10, 64)
-		if err != nil || id < 0 {
-			writeError(w, http.StatusBadRequest, "invalid site_id filter")
-			return uploadProtectionFilter{}, false
-		}
-		filter.SiteID = id
+	var ok bool
+	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
+		return uploadProtectionFilter{}, false
 	}
 	if value := strings.TrimSpace(query.Get("enabled")); value != "" {
 		enabled, err := parseBoolFilter(value)

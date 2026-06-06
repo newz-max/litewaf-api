@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 type Site struct {
 	ID        int64     `json:"id"`
@@ -69,23 +73,78 @@ type Policy struct {
 	DynamicBanTriggerCount     int       `json:"dynamic_ban_trigger_count"`
 	DynamicBanWindowSec        int       `json:"dynamic_ban_window_sec"`
 	Enabled                    bool      `json:"enabled"`
-	SiteIDs                    []int64   `json:"site_ids"`
+	SiteIDs                    []int64   `json:"application_ids"`
 	RuleIDs                    []int64   `json:"rule_ids"`
 	CreatedAt                  time.Time `json:"created_at"`
 	UpdatedAt                  time.Time `json:"updated_at"`
 }
 
 type PublishRecord struct {
-	ID         int64     `json:"id"`
-	Version    string    `json:"version"`
-	Operator   string    `json:"operator"`
-	Status     string    `json:"status"`
-	ConfigPath string    `json:"config_path"`
-	Checksum   string    `json:"checksum"`
-	Note       string    `json:"note"`
-	ConfigJSON string    `json:"-"`
-	CreatedAt  time.Time `json:"created_at"`
-	Time       string    `json:"time"`
+	ID         int64                     `json:"id"`
+	Version    string                    `json:"version"`
+	Operator   string                    `json:"operator"`
+	Status     string                    `json:"status"`
+	ConfigPath string                    `json:"config_path"`
+	Checksum   string                    `json:"checksum"`
+	Note       string                    `json:"note"`
+	ConfigJSON string                    `json:"-"`
+	Activation *PublishActivationSummary `json:"activation,omitempty"`
+	CreatedAt  time.Time                 `json:"created_at"`
+	Time       string                    `json:"time"`
+}
+
+type PublishActivationSummary struct {
+	Applications       int      `json:"applications"`
+	ListenerCount      int      `json:"listener_count"`
+	HTTPSListenerCount int      `json:"https_listener_count"`
+	CertificateIDs     []int64  `json:"certificate_ids"`
+	ReloadStatus       string   `json:"reload_status"`
+	ReloadMessage      string   `json:"reload_message,omitempty"`
+	ValidationErrors   []string `json:"validation_errors"`
+	RollbackTarget     string   `json:"rollback_target,omitempty"`
+}
+
+const PublishActivationNotePrefix = "activation="
+
+func AttachPublishActivation(record PublishRecord) PublishRecord {
+	if record.Activation != nil {
+		return record
+	}
+	if activation, ok := ParsePublishActivation(record.Note); ok {
+		record.Activation = &activation
+	}
+	return record
+}
+
+func FormatPublishNote(note string, activation PublishActivationSummary) string {
+	trimmed := strings.TrimSpace(note)
+	payload, err := json.Marshal(activation)
+	if err != nil {
+		if trimmed == "" {
+			return ""
+		}
+		return trimmed
+	}
+	summary := PublishActivationNotePrefix + string(payload)
+	if trimmed == "" {
+		return summary
+	}
+	return trimmed + " | " + summary
+}
+
+func ParsePublishActivation(note string) (PublishActivationSummary, bool) {
+	for _, part := range strings.Split(note, "|") {
+		part = strings.TrimSpace(part)
+		if !strings.HasPrefix(part, PublishActivationNotePrefix) {
+			continue
+		}
+		var activation PublishActivationSummary
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(part, PublishActivationNotePrefix)), &activation); err != nil {
+			return PublishActivationSummary{}, false
+		}
+		return activation, true
+	}
+	return PublishActivationSummary{}, false
 }
 
 type User struct {
@@ -131,7 +190,9 @@ type AccessLog struct {
 	Event          string    `json:"event,omitempty"`
 	ID             int64     `json:"id"`
 	RequestID      string    `json:"request_id"`
-	SiteID         int64     `json:"site_id"`
+	SiteID         int64     `json:"application_id"`
+	ListenerPort   int       `json:"listener_port,omitempty"`
+	Scheme         string    `json:"scheme,omitempty"`
 	Host           string    `json:"host"`
 	Method         string    `json:"method"`
 	URI            string    `json:"uri"`
@@ -145,24 +206,46 @@ type AccessLog struct {
 	Time           string    `json:"time"`
 }
 
+func (item *AccessLog) UnmarshalJSON(data []byte) error {
+	type alias AccessLog
+	aux := struct {
+		*alias
+		LegacySiteID int64 `json:"site_id"`
+	}{
+		alias: (*alias)(item),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if item.SiteID == 0 {
+		item.SiteID = aux.LegacySiteID
+	}
+	return nil
+}
+
 type AccessLogFilter struct {
-	SiteID      int64
-	Host        string
-	ClientIP    string
-	Method      string
-	URI         string
-	Status      int
-	Disposition string
-	Since       time.Time
-	Until       time.Time
-	Pagination  Pagination
+	SiteID       int64
+	ListenerPort int
+	Scheme       string
+	Host         string
+	ClientIP     string
+	Method       string
+	URI          string
+	Status       int
+	Disposition  string
+	Since        time.Time
+	Until        time.Time
+	Pagination   Pagination
 }
 
 type WAFEvent struct {
 	Event           string    `json:"event,omitempty"`
 	ID              int64     `json:"id"`
 	RequestID       string    `json:"request_id"`
-	SiteID          int64     `json:"site_id"`
+	SiteID          int64     `json:"application_id"`
+	ListenerPort    int       `json:"listener_port,omitempty"`
+	Scheme          string    `json:"scheme,omitempty"`
+	Host            string    `json:"host,omitempty"`
 	EventType       string    `json:"event_type"`
 	RuleID          int64     `json:"rule_id"`
 	RuleType        string    `json:"rule_type"`
@@ -206,8 +289,28 @@ type WAFEvent struct {
 	Time            string    `json:"time"`
 }
 
+func (item *WAFEvent) UnmarshalJSON(data []byte) error {
+	type alias WAFEvent
+	aux := struct {
+		*alias
+		LegacySiteID int64 `json:"site_id"`
+	}{
+		alias: (*alias)(item),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if item.SiteID == 0 {
+		item.SiteID = aux.LegacySiteID
+	}
+	return nil
+}
+
 type WAFEventFilter struct {
 	SiteID          int64
+	ListenerPort    int
+	Scheme          string
+	Host            string
 	ClientIP        string
 	RuleID          int64
 	Action          string
@@ -227,7 +330,9 @@ type WAFEventFilter struct {
 
 type DynamicBan struct {
 	ID              int64     `json:"id"`
-	SiteID          int64     `json:"site_id"`
+	SiteID          int64     `json:"application_id"`
+	ListenerPort    int       `json:"listener_port,omitempty"`
+	Scheme          string    `json:"scheme,omitempty"`
 	ClientIP        string    `json:"client_ip"`
 	BanReason       string    `json:"ban_reason"`
 	Source          string    `json:"source"`
@@ -244,26 +349,47 @@ type DynamicBan struct {
 }
 
 type DynamicBanFilter struct {
-	SiteID      int64
-	ClientIP    string
-	Status      string
-	MinRevision int64
-	Pagination  Pagination
+	SiteID       int64
+	ListenerPort int
+	Scheme       string
+	ClientIP     string
+	Status       string
+	MinRevision  int64
+	Pagination   Pagination
 }
 
 type DynamicBanClearRequest struct {
-	SiteID   int64  `json:"site_id"`
+	SiteID   int64  `json:"application_id"`
 	ClientIP string `json:"client_ip"`
 	Actor    string `json:"actor,omitempty"`
 }
 
+func (item *DynamicBanClearRequest) UnmarshalJSON(data []byte) error {
+	type alias DynamicBanClearRequest
+	aux := struct {
+		*alias
+		LegacySiteID int64 `json:"site_id"`
+	}{
+		alias: (*alias)(item),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if item.SiteID == 0 {
+		item.SiteID = aux.LegacySiteID
+	}
+	return nil
+}
+
 type DynamicBanClearResult struct {
-	SiteID    int64     `json:"site_id"`
-	ClientIP  string    `json:"client_ip"`
-	Status    string    `json:"status"`
-	Revision  int64     `json:"revision"`
-	ClearedAt time.Time `json:"cleared_at"`
-	Message   string    `json:"message"`
+	SiteID       int64     `json:"application_id"`
+	ListenerPort int       `json:"listener_port,omitempty"`
+	Scheme       string    `json:"scheme,omitempty"`
+	ClientIP     string    `json:"client_ip"`
+	Status       string    `json:"status"`
+	Revision     int64     `json:"revision"`
+	ClearedAt    time.Time `json:"cleared_at"`
+	Message      string    `json:"message"`
 }
 
 type ObservabilitySummary struct {
@@ -445,7 +571,7 @@ type IPAccessListEntry struct {
 	NormalizedValue string    `json:"normalized_value"`
 	IPFamily        string    `json:"ip_family"`
 	PrefixLength    int       `json:"prefix_length"`
-	SiteID          int64     `json:"site_id"`
+	SiteID          int64     `json:"application_id"`
 	Enabled         bool      `json:"enabled"`
 	Priority        int       `json:"priority"`
 	ConflictKey     string    `json:"conflict_key"`
@@ -468,7 +594,7 @@ type RateLimitRule struct {
 	BanDuration        int       `json:"ban_duration_sec"`
 	ViolationThreshold int       `json:"violation_threshold"`
 	ViolationWindowSec int       `json:"violation_window_sec"`
-	SiteID             int64     `json:"site_id"`
+	SiteID             int64     `json:"application_id"`
 	Enabled            bool      `json:"enabled"`
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
@@ -479,7 +605,7 @@ type ProtectionRule struct {
 	Name            string                   `json:"name"`
 	Module          string                   `json:"module"`
 	Category        string                   `json:"category"`
-	SiteID          int64                    `json:"site_id"`
+	SiteID          int64                    `json:"application_id"`
 	Enabled         bool                     `json:"enabled"`
 	Priority        int                      `json:"priority"`
 	Match           ProtectionRuleMatch      `json:"match"`
@@ -559,7 +685,7 @@ type UploadProtectionRule struct {
 	Extensions []string  `json:"extensions"`
 	MaxBytes   int       `json:"max_bytes"`
 	Action     string    `json:"action"`
-	SiteID     int64     `json:"site_id"`
+	SiteID     int64     `json:"application_id"`
 	Enabled    bool      `json:"enabled"`
 	Priority   int       `json:"priority"`
 	CreatedAt  time.Time `json:"created_at"`
@@ -575,7 +701,7 @@ type BotProtectionRule struct {
 	ChallengeMode string    `json:"challenge_mode"`
 	VerifyTTL     int       `json:"verify_ttl_sec"`
 	FailureAction string    `json:"failure_action"`
-	SiteID        int64     `json:"site_id"`
+	SiteID        int64     `json:"application_id"`
 	Enabled       bool      `json:"enabled"`
 	Priority      int       `json:"priority"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -598,7 +724,7 @@ type DynamicProtectionRule struct {
 	AdmissionTTL     int       `json:"admission_ttl_sec"`
 	RetryInterval    int       `json:"retry_interval_sec"`
 	OverflowAction   string    `json:"overflow_action"`
-	SiteID           int64     `json:"site_id"`
+	SiteID           int64     `json:"application_id"`
 	Enabled          bool      `json:"enabled"`
 	Priority         int       `json:"priority"`
 	CreatedAt        time.Time `json:"created_at"`

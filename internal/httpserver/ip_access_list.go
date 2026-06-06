@@ -8,23 +8,28 @@ import (
 )
 
 type ipAccessListRequest struct {
-	Name        string `json:"name"`
-	Kind        string `json:"kind"`
-	Target      string `json:"target"`
-	Value       string `json:"value"`
-	SiteID      int64  `json:"site_id"`
-	Enabled     *bool  `json:"enabled"`
-	Priority    int    `json:"priority"`
-	Description string `json:"description"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Target       string `json:"target"`
+	Value        string `json:"value"`
+	SiteID       int64  `json:"application_id"`
+	LegacySiteID int64  `json:"site_id"`
+	Enabled      *bool  `json:"enabled"`
+	Priority     int    `json:"priority"`
+	Description  string `json:"description"`
 }
 
 func (r ipAccessListRequest) toModel() model.IPAccessListEntry {
+	siteID := r.SiteID
+	if siteID == 0 {
+		siteID = r.LegacySiteID
+	}
 	return model.IPAccessListEntry{
 		Name:        r.Name,
 		Kind:        r.Kind,
 		Target:      r.Target,
 		Value:       r.Value,
-		SiteID:      r.SiteID,
+		SiteID:      siteID,
 		Enabled:     boolValue(r.Enabled, true),
 		Priority:    r.Priority,
 		Description: r.Description,

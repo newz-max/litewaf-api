@@ -1,0 +1,12 @@
+services:
+  waf-api:
+    environment:
+      GATEWAY_LISTENER_MODE: bridge-range
+      GATEWAY_BRIDGE_PORT_RANGE: ${GATEWAY_BRIDGE_PORT_RANGE:-80,443,9000-9099}
+
+  gateway:
+    network_mode: ""
+    ports:
+      - "80:80"
+      - "443:443"
+      - "9000-9099:9000-9099"

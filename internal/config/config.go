@@ -11,21 +11,24 @@ import (
 )
 
 type Config struct {
-	AppName               string
-	Env                   string
-	HTTPAddr              string
-	LogLevel              slog.Level
-	DatabaseURL           string
-	RedisAddr             string
-	GatewayConfigPath     string
-	PublishOperator       string
-	AuthTokenSecret       string
-	AuthTokenTTL          time.Duration
-	AdminUsername         string
-	AdminPassword         string
-	AdminRole             string
-	GatewayIngestionToken string
-	MetricsEnabled        bool
+	AppName                string
+	Env                    string
+	HTTPAddr               string
+	LogLevel               slog.Level
+	DatabaseURL            string
+	RedisAddr              string
+	GatewayConfigPath      string
+	GatewayReloadCommand   string
+	GatewayListenerMode    string
+	GatewayBridgePortRange string
+	PublishOperator        string
+	AuthTokenSecret        string
+	AuthTokenTTL           time.Duration
+	AdminUsername          string
+	AdminPassword          string
+	AdminRole              string
+	GatewayIngestionToken  string
+	MetricsEnabled         bool
 }
 
 func Load() Config {
@@ -40,14 +43,17 @@ func Load() Config {
 			"GATEWAY_CONFIG_PATH",
 			"/var/lib/litewaf/gateway/active.json",
 		),
-		PublishOperator:       getEnv("PUBLISH_OPERATOR", "system"),
-		AuthTokenSecret:       getEnv("AUTH_TOKEN_SECRET", "dev-litewaf-change-me"),
-		AuthTokenTTL:          getEnvDuration("AUTH_TOKEN_TTL_MINUTES", 12*time.Hour),
-		AdminUsername:         getEnv("LITEWAF_ADMIN_USERNAME", "admin"),
-		AdminPassword:         getEnv("LITEWAF_ADMIN_PASSWORD", "admin123456"),
-		AdminRole:             getEnv("LITEWAF_ADMIN_ROLE", "admin"),
-		GatewayIngestionToken: getEnv("GATEWAY_INGESTION_TOKEN", ""),
-		MetricsEnabled:        getEnvBool("METRICS_ENABLED", false),
+		GatewayReloadCommand:   getEnv("GATEWAY_RELOAD_COMMAND", ""),
+		GatewayListenerMode:    normalizeGatewayListenerMode(getEnv("GATEWAY_LISTENER_MODE", "host-network")),
+		GatewayBridgePortRange: getEnv("GATEWAY_BRIDGE_PORT_RANGE", ""),
+		PublishOperator:        getEnv("PUBLISH_OPERATOR", "system"),
+		AuthTokenSecret:        getEnv("AUTH_TOKEN_SECRET", "dev-litewaf-change-me"),
+		AuthTokenTTL:           getEnvDuration("AUTH_TOKEN_TTL_MINUTES", 12*time.Hour),
+		AdminUsername:          getEnv("LITEWAF_ADMIN_USERNAME", "admin"),
+		AdminPassword:          getEnv("LITEWAF_ADMIN_PASSWORD", "admin123456"),
+		AdminRole:              getEnv("LITEWAF_ADMIN_ROLE", "admin"),
+		GatewayIngestionToken:  getEnv("GATEWAY_INGESTION_TOKEN", ""),
+		MetricsEnabled:         getEnvBool("METRICS_ENABLED", false),
 	}
 }
 
@@ -101,6 +107,17 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func normalizeGatewayListenerMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "bridge", "bridge-range", "fixed-range", "fixed-port-range":
+		return "bridge-range"
+	case "host", "host-network", "host_network":
+		return "host-network"
+	default:
+		return "host-network"
+	}
 }
 
 func parseLogLevel(value string) slog.Level {

@@ -44,6 +44,83 @@ func TestMemoryStoreSiteCreateAndList(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreApplicationAndCertificateCRUD(t *testing.T) {
+	ctx := context.Background()
+	dataStore := NewMemoryStore()
+
+	cert, err := dataStore.CreateCertificate(ctx, model.Certificate{
+		Name:        "App cert",
+		Domains:     []string{"app.example.test"},
+		CertPEM:     "cert",
+		KeyPEM:      "key",
+		NotBefore:   time.Now().UTC().Add(-time.Hour),
+		NotAfter:    time.Now().UTC().Add(time.Hour),
+		Fingerprint: "abc123",
+	})
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	created, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Example App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts: []model.ApplicationHost{
+			{Host: "app.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+			{Port: 443, Protocol: model.ListenerProtocolHTTPS, CertificateID: cert.ID, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create application: %v", err)
+	}
+	if created.ID == 0 || len(created.Hosts) != 1 || len(created.Listeners) != 2 || len(created.Upstreams) != 1 {
+		t.Fatalf("unexpected created application: %+v", created)
+	}
+
+	inUse, err := dataStore.CertificateInUse(ctx, cert.ID)
+	if err != nil {
+		t.Fatalf("certificate in use: %v", err)
+	}
+	if !inUse {
+		t.Fatal("expected certificate to be in use")
+	}
+	if err := dataStore.DeleteCertificate(ctx, cert.ID); err == nil {
+		t.Fatal("expected in-use certificate delete to fail")
+	}
+
+	loaded, err := dataStore.GetApplication(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get application: %v", err)
+	}
+	if loaded.Hosts[0].Host != "app.example.test" || loaded.Listeners[1].CertificateID != cert.ID {
+		t.Fatalf("unexpected loaded application: %+v", loaded)
+	}
+}
+
+func TestMemoryStoreApplicationValidation(t *testing.T) {
+	ctx := context.Background()
+	dataStore := NewMemoryStore()
+	_, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Bad HTTPS",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts:   []model.ApplicationHost{{Host: "bad.example.test"}},
+		Listeners: []model.ApplicationListener{
+			{Port: 443, Protocol: model.ListenerProtocolHTTPS, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{{URL: "http://127.0.0.1:9000", Enabled: true}},
+	})
+	if err == nil {
+		t.Fatal("expected https listener without certificate to fail")
+	}
+}
+
 func TestMemoryStorePolicyRejectsMissingBindings(t *testing.T) {
 	ctx := context.Background()
 	dataStore := NewMemoryStore()

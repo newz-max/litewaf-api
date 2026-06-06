@@ -23,6 +23,18 @@ type Store interface {
 	UpdateSite(context.Context, int64, model.Site) (model.Site, error)
 	DeleteSite(context.Context, int64) error
 
+	ListApplications(context.Context) ([]model.Application, error)
+	GetApplication(context.Context, int64) (model.Application, error)
+	CreateApplication(context.Context, model.Application) (model.Application, error)
+	UpdateApplication(context.Context, int64, model.Application) (model.Application, error)
+	DeleteApplication(context.Context, int64) error
+
+	ListCertificates(context.Context) ([]model.Certificate, error)
+	GetCertificate(context.Context, int64) (model.Certificate, error)
+	CreateCertificate(context.Context, model.Certificate) (model.Certificate, error)
+	DeleteCertificate(context.Context, int64) error
+	CertificateInUse(context.Context, int64) (bool, error)
+
 	ListRules(context.Context) ([]model.Rule, error)
 	GetRule(context.Context, int64) (model.Rule, error)
 	CreateRule(context.Context, model.Rule) (model.Rule, error)

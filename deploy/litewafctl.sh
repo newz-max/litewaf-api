@@ -15,6 +15,7 @@ Usage: ./litewafctl.sh <command> [args]
 Commands:
   validate                  Check Docker, Compose, env, ports, and compose config.
   install                   Pull prebuilt images, start services, and wait for health.
+  diagnose                  Report listener mode, mapped ranges, ports, and reload status.
   backup [output-dir]       Create a timestamped backup archive.
   restore <archive>         Restore a backup archive into this deployment.
   upgrade <image-tag>       Backup, switch image tag, pull, start, and verify health.
@@ -122,7 +123,15 @@ ensure_env() {
   ensure_env_key LITEWAF_ADMIN_USERNAME admin "$ENV_FILE"
   ensure_env_key LITEWAF_ADMIN_ROLE admin "$ENV_FILE"
   ensure_env_key DASHBOARD_PORT 18080 "$ENV_FILE"
-  ensure_env_key GATEWAY_PORT 18081 "$ENV_FILE"
+  ensure_env_key GATEWAY_LISTENER_MODE host-network "$ENV_FILE"
+  ensure_env_key GATEWAY_BRIDGE_PORT_RANGE "" "$ENV_FILE"
+  ensure_env_key GATEWAY_RELOAD_COMMAND "" "$ENV_FILE"
+  ensure_env_key API_LOOPBACK_ADDR 127.0.0.1 "$ENV_FILE"
+  ensure_env_key API_LOOPBACK_PORT 18081 "$ENV_FILE"
+  ensure_env_key LITEWAF_INGESTION_URL http://127.0.0.1:18081 "$ENV_FILE"
+  if grep -Eq '^GATEWAY_PORT=(18081|8081)$' "$ENV_FILE"; then
+    warn "GATEWAY_PORT is ignored by production listener mode; application listeners now bind their own ports"
+  fi
 
   for key in POSTGRES_PASSWORD AUTH_TOKEN_SECRET GATEWAY_INGESTION_TOKEN LITEWAF_ADMIN_PASSWORD; do
     value="$(env_value "$key")"
@@ -148,6 +157,51 @@ check_port_free() {
   else
     warn "cannot check $name=$port because ss/netstat is unavailable"
   fi
+}
+
+http_url() {
+  host="$1"
+  port="$2"
+  if [ "$port" = "80" ]; then
+    printf 'http://%s/' "$host"
+  else
+    printf 'http://%s:%s/' "$host" "$port"
+  fi
+}
+
+listener_mode() {
+  mode="$(env_value GATEWAY_LISTENER_MODE)"
+  case "$mode" in
+    bridge|bridge-range|fixed-range|fixed-port-range)
+      printf 'bridge-range'
+      ;;
+    *)
+      printf 'host-network'
+      ;;
+  esac
+}
+
+listener_ports_to_check() {
+  mode="$(listener_mode)"
+  if [ "$mode" = "bridge-range" ]; then
+    range="$(env_value GATEWAY_BRIDGE_PORT_RANGE)"
+    if [ -n "$range" ]; then
+      printf '%s\n' "$range" | tr ',' '\n' | while IFS= read -r item; do
+        item="$(printf '%s' "$item" | tr -d ' ')"
+        [ -n "$item" ] || continue
+        case "$item" in
+          *-*)
+            printf '%s\n' "${item%%-*}"
+            ;;
+          *)
+            printf '%s\n' "$item"
+            ;;
+        esac
+      done
+      return
+    fi
+  fi
+  printf '80\n443\n'
 }
 
 validate_env_secrets() {
@@ -184,7 +238,11 @@ validate() {
   running="$(compose ps -q 2>/dev/null | wc -l | tr -d ' ')"
   if [ "$running" = "0" ]; then
     check_port_free DASHBOARD_PORT "$(env_value DASHBOARD_PORT)"
-    check_port_free GATEWAY_PORT "$(env_value GATEWAY_PORT)"
+    check_port_free API_LOOPBACK_PORT "$(env_value API_LOOPBACK_PORT)"
+    listener_ports_to_check | while IFS= read -r port; do
+      [ -n "$port" ] || continue
+      check_port_free GATEWAY_LISTENER_PORT "$port"
+    done
   else
     warn "existing $PROJECT_NAME containers found; skipping host port availability checks"
   fi
@@ -235,10 +293,45 @@ install_stack() {
   compose up -d --no-build --remove-orphans
   wait_health
   compose ps
-  info "Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${DASHBOARD_PORT:-$(env_value DASHBOARD_PORT)}/"
-  info "Gateway:   http://$(hostname -I 2>/dev/null | awk '{print $1}'):${GATEWAY_PORT:-$(env_value GATEWAY_PORT)}/"
+  host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  dashboard_port="${DASHBOARD_PORT:-$(env_value DASHBOARD_PORT)}"
+  info "Dashboard: $(http_url "$host_ip" "$dashboard_port")"
+  info "Gateway listener mode: $(listener_mode)"
+  info "Application listeners are opened by published protected applications."
   info "Admin username: $(env_value LITEWAF_ADMIN_USERNAME)"
   info "Admin password: $(env_value LITEWAF_ADMIN_PASSWORD)"
+}
+
+diagnose_stack() {
+  ensure_env
+  info "listener_mode=$(listener_mode)"
+  info "bridge_port_range=$(env_value GATEWAY_BRIDGE_PORT_RANGE)"
+  info "dashboard_port=$(env_value DASHBOARD_PORT)"
+  info "api_loopback=$(env_value API_LOOPBACK_ADDR):$(env_value API_LOOPBACK_PORT)"
+  if [ -n "$(env_value GATEWAY_PORT)" ]; then
+    warn "GATEWAY_PORT is present but ignored by production application-listener mode"
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    for port in $(listener_ports_to_check); do
+      [ -n "$port" ] || continue
+      if ss -ltn "sport = :$port" | grep -q LISTEN; then
+        info "port $port: listening"
+      else
+        warn "port $port: not listening yet or no published listener"
+      fi
+    done
+  else
+    warn "cannot inspect listener ports because ss is unavailable"
+  fi
+  cid="$(compose ps -q gateway 2>/dev/null || true)"
+  if [ -n "$cid" ]; then
+    info "gateway_container=$cid"
+    docker exec "$cid" /bin/sh -c 'test -f /var/lib/litewaf/runtime/reload-status.json && cat /var/lib/litewaf/runtime/reload-status.json || true' 2>/dev/null || true
+    docker exec "$cid" /bin/sh -c 'find /etc/litewaf/listeners -maxdepth 1 -type f -name "*.conf" -printf "%f\n" 2>/dev/null || true' 2>/dev/null || true
+    docker exec "$cid" /bin/sh -c 'find /etc/litewaf/certificates -maxdepth 2 -type f \( -name "*.crt" -o -name "*.pem" -o -name "*.key" \) -printf "%p\n" 2>/dev/null | sed "s#privkey[^/]*#privkey(redacted)#g; s#\\.key$#.key(redacted)#g" || true' 2>/dev/null || true
+  else
+    warn "gateway container is not running"
+  fi
 }
 
 backup_stack() {
@@ -376,6 +469,9 @@ case "$cmd" in
     ;;
   install)
     install_stack
+    ;;
+  diagnose)
+    diagnose_stack
     ;;
   backup)
     shift

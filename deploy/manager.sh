@@ -83,6 +83,16 @@ download_deploy_file() {
   die "failed to download $file"
 }
 
+http_url() {
+  host="$1"
+  port="$2"
+  if [ "$port" = "80" ]; then
+    printf 'http://%s/' "$host"
+  else
+    printf 'http://%s:%s/' "$host" "$port"
+  fi
+}
+
 set_env_key() {
   key="$1"
   value="$2"
@@ -200,8 +210,15 @@ step "Checking service health"
 
 step "Printing access information"
 info "LiteWaf installation complete"
-printf 'Dashboard: http://SERVER_IP:%s\n' "$($SUDO grep '^DASHBOARD_PORT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
-printf 'Gateway:   http://SERVER_IP:%s\n' "$($SUDO grep '^GATEWAY_PORT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
+dashboard_port="$($SUDO grep '^DASHBOARD_PORT=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
+gateway_listener_mode="$($SUDO grep '^GATEWAY_LISTENER_MODE=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
+gateway_bridge_range="$($SUDO grep '^GATEWAY_BRIDGE_PORT_RANGE=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
+printf 'Dashboard: %s\n' "$(http_url SERVER_IP "$dashboard_port")"
+if [ "$gateway_listener_mode" = "bridge-range" ] && [ -n "$gateway_bridge_range" ]; then
+  printf 'Gateway listeners: bridge-range %s\n' "$gateway_bridge_range"
+else
+  printf 'Gateway listeners: %s\n' "${gateway_listener_mode:-host-network}"
+fi
 printf 'Admin username: %s\n' "$($SUDO grep '^LITEWAF_ADMIN_USERNAME=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
 printf 'Admin password: %s\n' "$($SUDO grep '^LITEWAF_ADMIN_PASSWORD=' "$INSTALL_DIR/.env" | tail -n 1 | cut -d= -f2-)"
 printf 'Config:    %s/.env\n' "$INSTALL_DIR"

@@ -12,6 +12,58 @@ CREATE TABLE IF NOT EXISTS sites (
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS certificates (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	domains TEXT NOT NULL DEFAULT '',
+	cert_pem TEXT NOT NULL,
+	key_pem TEXT NOT NULL,
+	not_before TIMESTAMPTZ NOT NULL,
+	not_after TIMESTAMPTZ NOT NULL,
+	fingerprint TEXT NOT NULL UNIQUE,
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS applications (
+	id BIGSERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	mode TEXT NOT NULL DEFAULT 'monitor',
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	description TEXT NOT NULL DEFAULT '',
+	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS application_hosts (
+	id BIGSERIAL PRIMARY KEY,
+	application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+	host TEXT NOT NULL,
+	is_primary BOOLEAN NOT NULL DEFAULT false,
+	UNIQUE (application_id, host)
+);
+
+CREATE TABLE IF NOT EXISTS application_listeners (
+	id BIGSERIAL PRIMARY KEY,
+	application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+	port INTEGER NOT NULL,
+	protocol TEXT NOT NULL,
+	certificate_id BIGINT NOT NULL DEFAULT 0,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	UNIQUE (application_id, port, protocol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_listeners_certificate_id ON application_listeners (certificate_id);
+
+CREATE TABLE IF NOT EXISTS application_upstreams (
+	id BIGSERIAL PRIMARY KEY,
+	application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+	name TEXT NOT NULL DEFAULT '',
+	url TEXT NOT NULL,
+	weight INTEGER NOT NULL DEFAULT 1,
+	enabled BOOLEAN NOT NULL DEFAULT true
+);
+
 CREATE TABLE IF NOT EXISTS rules (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,
@@ -162,6 +214,8 @@ CREATE TABLE IF NOT EXISTS access_logs (
 	id BIGSERIAL PRIMARY KEY,
 	request_id TEXT NOT NULL DEFAULT '',
 	site_id BIGINT NOT NULL DEFAULT 0,
+	listener_port INTEGER NOT NULL DEFAULT 0,
+	scheme TEXT NOT NULL DEFAULT '',
 	host TEXT NOT NULL DEFAULT '',
 	method TEXT NOT NULL DEFAULT '',
 	uri TEXT NOT NULL DEFAULT '',
@@ -174,8 +228,12 @@ CREATE TABLE IF NOT EXISTS access_logs (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS listener_port INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS scheme TEXT NOT NULL DEFAULT '';
+
 CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_access_logs_site_id ON access_logs (site_id);
+CREATE INDEX IF NOT EXISTS idx_access_logs_listener ON access_logs (site_id, listener_port, scheme);
 CREATE INDEX IF NOT EXISTS idx_access_logs_client_ip ON access_logs (client_ip);
 CREATE INDEX IF NOT EXISTS idx_access_logs_status ON access_logs (status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_disposition ON access_logs (disposition);
@@ -184,6 +242,9 @@ CREATE TABLE IF NOT EXISTS waf_events (
 	id BIGSERIAL PRIMARY KEY,
 	request_id TEXT NOT NULL DEFAULT '',
 	site_id BIGINT NOT NULL DEFAULT 0,
+	listener_port INTEGER NOT NULL DEFAULT 0,
+	scheme TEXT NOT NULL DEFAULT '',
+	host TEXT NOT NULL DEFAULT '',
 	event_type TEXT NOT NULL DEFAULT '',
 	rule_id BIGINT NOT NULL DEFAULT 0,
 	rule_type TEXT NOT NULL DEFAULT '',
@@ -227,6 +288,9 @@ CREATE TABLE IF NOT EXISTS waf_events (
 );
 
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS module TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS listener_port INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS scheme TEXT NOT NULL DEFAULT '';
+ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS host TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS rule_name TEXT NOT NULL DEFAULT '';
 ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS attack_type TEXT NOT NULL DEFAULT '';
@@ -258,6 +322,7 @@ ALTER TABLE waf_events ADD COLUMN IF NOT EXISTS package_rule_id TEXT NOT NULL DE
 
 CREATE INDEX IF NOT EXISTS idx_waf_events_created_at ON waf_events (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_waf_events_site_id ON waf_events (site_id);
+CREATE INDEX IF NOT EXISTS idx_waf_events_listener ON waf_events (site_id, listener_port, scheme);
 CREATE INDEX IF NOT EXISTS idx_waf_events_client_ip ON waf_events (client_ip);
 CREATE INDEX IF NOT EXISTS idx_waf_events_rule_id ON waf_events (rule_id);
 CREATE INDEX IF NOT EXISTS idx_waf_events_action ON waf_events (action);
@@ -271,6 +336,8 @@ CREATE SEQUENCE IF NOT EXISTS dynamic_ban_clear_revision_seq;
 CREATE TABLE IF NOT EXISTS dynamic_bans (
 	id BIGSERIAL PRIMARY KEY,
 	site_id BIGINT NOT NULL DEFAULT 0,
+	listener_port INTEGER NOT NULL DEFAULT 0,
+	scheme TEXT NOT NULL DEFAULT '',
 	client_ip TEXT NOT NULL DEFAULT '',
 	ban_reason TEXT NOT NULL DEFAULT '',
 	source TEXT NOT NULL DEFAULT '',
@@ -283,9 +350,11 @@ CREATE TABLE IF NOT EXISTS dynamic_bans (
 	expires_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	cleared_at TIMESTAMPTZ,
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	UNIQUE (site_id, client_ip)
+	UNIQUE (site_id, listener_port, scheme, client_ip)
 );
 
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS listener_port INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS scheme TEXT NOT NULL DEFAULT '';
 ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT '';
 ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS source_event_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS ban_duration_sec INTEGER NOT NULL DEFAULT 0;
@@ -294,6 +363,8 @@ ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '
 ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE dynamic_bans ADD COLUMN IF NOT EXISTS cleared_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_dynamic_bans_site_ip ON dynamic_bans (site_id, client_ip);
+ALTER TABLE dynamic_bans DROP CONSTRAINT IF EXISTS dynamic_bans_site_id_client_ip_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dynamic_bans_application_listener_ip ON dynamic_bans (site_id, listener_port, scheme, client_ip);
 CREATE INDEX IF NOT EXISTS idx_dynamic_bans_status ON dynamic_bans (status);
 CREATE INDEX IF NOT EXISTS idx_dynamic_bans_expires_at ON dynamic_bans (expires_at);
 CREATE INDEX IF NOT EXISTS idx_dynamic_bans_revision ON dynamic_bans (revision);
@@ -301,6 +372,8 @@ CREATE INDEX IF NOT EXISTS idx_dynamic_bans_revision ON dynamic_bans (revision);
 CREATE TABLE IF NOT EXISTS dynamic_ban_clears (
 	id BIGSERIAL PRIMARY KEY,
 	site_id BIGINT NOT NULL DEFAULT 0,
+	listener_port INTEGER NOT NULL DEFAULT 0,
+	scheme TEXT NOT NULL DEFAULT '',
 	client_ip TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT '',
 	revision BIGINT NOT NULL DEFAULT nextval('dynamic_ban_clear_revision_seq'),
@@ -309,12 +382,15 @@ CREATE TABLE IF NOT EXISTS dynamic_ban_clears (
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS listener_port INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS scheme TEXT NOT NULL DEFAULT '';
 ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT '';
 ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT nextval('dynamic_ban_clear_revision_seq');
 ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS actor TEXT NOT NULL DEFAULT '';
 ALTER TABLE dynamic_ban_clears ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_revision ON dynamic_ban_clears (revision);
 CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_site_ip ON dynamic_ban_clears (site_id, client_ip);
+CREATE INDEX IF NOT EXISTS idx_dynamic_ban_clears_listener ON dynamic_ban_clears (site_id, listener_port, scheme, client_ip);
 
 CREATE TABLE IF NOT EXISTS ip_access_list_entries (
 	id BIGSERIAL PRIMARY KEY,

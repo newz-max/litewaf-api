@@ -44,6 +44,31 @@ function Invoke-Native {
     }
 }
 
+function Format-HttpUrl {
+    param(
+        [string]$HostValue,
+        [string]$PortValue
+    )
+
+    if ($PortValue -eq "80") {
+        return "http://${HostValue}"
+    }
+    return "http://${HostValue}:$PortValue"
+}
+
+function Format-GatewayListenerInfo {
+    param(
+        [hashtable]$Values
+    )
+
+    $Mode = if ($Values.ContainsKey("GATEWAY_LISTENER_MODE")) { $Values["GATEWAY_LISTENER_MODE"] } else { "host-network" }
+    $Range = if ($Values.ContainsKey("GATEWAY_BRIDGE_PORT_RANGE")) { $Values["GATEWAY_BRIDGE_PORT_RANGE"] } else { "" }
+    if ($Mode -eq "bridge-range" -and $Range) {
+        return "Gateway listeners: bridge-range $Range"
+    }
+    return "Gateway listeners: $Mode"
+}
+
 Require-Command ssh
 Require-Command scp
 Require-Command tar
@@ -158,7 +183,7 @@ fi
 
 echo "Deployed to `$REMOTE_CURRENT"
 echo "Dashboard: http://`$(hostname -I | awk '{print `$1}'):`$(grep '^DASHBOARD_PORT=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)/"
-echo "Gateway:   http://`$(hostname -I | awk '{print `$1}'):`$(grep '^GATEWAY_PORT=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)/"
+echo "Gateway listener mode: `$(grep '^GATEWAY_LISTENER_MODE=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)"
 echo "Admin username: `$(grep '^LITEWAF_ADMIN_USERNAME=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)"
 echo "Admin password: `$(grep '^LITEWAF_ADMIN_PASSWORD=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)"
 "@
@@ -166,7 +191,7 @@ echo "Admin password: `$(grep '^LITEWAF_ADMIN_PASSWORD=' "`$REMOTE_SHARED/.env" 
 Write-Host "==> Installing LiteWaf on remote host..."
 Invoke-Native ssh @SshArgs $RemoteScript
 
-$RemoteEnvOutput = & ssh @SshArgs "grep -E '^(DASHBOARD_PORT|GATEWAY_PORT|LITEWAF_ADMIN_USERNAME|LITEWAF_ADMIN_PASSWORD)=' '$RemoteShared/.env' || true"
+$RemoteEnvOutput = & ssh @SshArgs "grep -E '^(DASHBOARD_PORT|GATEWAY_LISTENER_MODE|GATEWAY_BRIDGE_PORT_RANGE|LITEWAF_ADMIN_USERNAME|LITEWAF_ADMIN_PASSWORD)=' '$RemoteShared/.env' || true"
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to read remote ports from $RemoteShared/.env"
 }
@@ -180,7 +205,6 @@ foreach ($Line in $RemoteEnvOutput) {
 }
 
 $DashboardPort = if ($RemotePorts.ContainsKey("DASHBOARD_PORT")) { $RemotePorts["DASHBOARD_PORT"] } else { "<DASHBOARD_PORT>" }
-$GatewayPort = if ($RemotePorts.ContainsKey("GATEWAY_PORT")) { $RemotePorts["GATEWAY_PORT"] } else { "<GATEWAY_PORT>" }
 $AdminUsername = if ($RemotePorts.ContainsKey("LITEWAF_ADMIN_USERNAME")) { $RemotePorts["LITEWAF_ADMIN_USERNAME"] } else { "<LITEWAF_ADMIN_USERNAME>" }
 $AdminPassword = if ($RemotePorts.ContainsKey("LITEWAF_ADMIN_PASSWORD")) { $RemotePorts["LITEWAF_ADMIN_PASSWORD"] } else { "<LITEWAF_ADMIN_PASSWORD>" }
 
@@ -189,8 +213,8 @@ Remove-Item -LiteralPath $ArchivePath -Force
 
 Write-Host ""
 Write-Host "Deployment finished."
-Write-Host "Dashboard: http://${DisplayHost}:$DashboardPort"
-Write-Host "Gateway:   http://${DisplayHost}:$GatewayPort"
+Write-Host "Dashboard: $(Format-HttpUrl -HostValue $DisplayHost -PortValue $DashboardPort)"
+Write-Host "$(Format-GatewayListenerInfo -Values $RemotePorts)"
 Write-Host "Admin username: $AdminUsername"
 Write-Host "Admin password: $AdminPassword"
 Write-Host ""

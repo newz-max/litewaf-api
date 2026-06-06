@@ -21,8 +21,10 @@ bash -c "$(curl -fSL https://raw.githubusercontent.com/newz-max/litewaf-api/mast
 默认入口：
 
 - Dashboard: `http://服务器IP:18080`
-- Gateway: `http://服务器IP:18081`
+- Gateway: `http://服务器IP`
 - API: Dashboard 反代 `/api/`，容器内地址为 `waf-api:8080`
+
+Gateway 默认是 HTTP 入口。HTTPS 站点需要由 CDN、负载均衡或宿主机反向代理先在 `443` 终止 TLS，再转发到 Gateway。
 
 ## 升级
 

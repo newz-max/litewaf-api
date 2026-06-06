@@ -8,7 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"regexp"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -412,6 +415,82 @@ func (h handlers) listReleases(w http.ResponseWriter, r *http.Request) {
 	h.writeList(w, items, err)
 }
 
+func publishActivationSummary(applications []model.Application, artifacts publish.RuntimeArtifacts, validationErrors []string, rollbackTarget string) model.PublishActivationSummary {
+	return model.PublishActivationSummary{
+		Applications:       countEnabledApplications(applications),
+		ListenerCount:      artifacts.ListenerCount,
+		HTTPSListenerCount: artifacts.HTTPSListenerCount,
+		CertificateIDs:     append([]int64(nil), artifacts.CertificateIDs...),
+		ReloadStatus:       "not-configured",
+		ReloadMessage:      "gateway reload coordination is pending",
+		ValidationErrors:   append([]string(nil), validationErrors...),
+		RollbackTarget:     rollbackTarget,
+	}
+}
+
+func applyReloadResult(activation *model.PublishActivationSummary, result gatewayReloadResult) {
+	activation.ReloadStatus = result.Status
+	activation.ReloadMessage = result.Message
+}
+
+func activationAuditSummary(activation model.PublishActivationSummary) string {
+	return boundedSummary(fmt.Sprintf("applications=%d listeners=%d https_listeners=%d certificates=%v reload_status=%s reload_message=%s rollback_target=%s validation_errors=%d",
+		activation.Applications, activation.ListenerCount, activation.HTTPSListenerCount, activation.CertificateIDs,
+		activation.ReloadStatus, activation.ReloadMessage, activation.RollbackTarget, len(activation.ValidationErrors)), 512)
+}
+
+type gatewayReloadResult struct {
+	Status  string
+	Message string
+}
+
+func runGatewayReload(ctx context.Context, command string) gatewayReloadResult {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return gatewayReloadResult{
+			Status:  "not-configured",
+			Message: "gateway reload coordination is pending",
+		}
+	}
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.CommandContext(ctx, "cmd", "/C", command)
+	} else {
+		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+	}
+	output, err := cmd.CombinedOutput()
+	message := boundedReloadMessage(string(output))
+	if err != nil {
+		if message == "" {
+			message = err.Error()
+		}
+		return gatewayReloadResult{Status: "failed", Message: boundedReloadMessage(message)}
+	}
+	if message == "" {
+		message = "gateway reload completed"
+	}
+	return gatewayReloadResult{Status: "reloaded", Message: message}
+}
+
+func boundedReloadMessage(message string) string {
+	message = strings.Join(strings.Fields(message), " ")
+	const maxLen = 480
+	if len(message) > maxLen {
+		return message[:maxLen]
+	}
+	return message
+}
+
+func countEnabledApplications(applications []model.Application) int {
+	count := 0
+	for _, application := range applications {
+		if application.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
 func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Operator string `json:"operator"`
@@ -435,6 +514,18 @@ func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version := fmt.Sprintf("ruleset-%04d", next)
+	applications, applicationIssues, err := h.applicationPreviewContext(r.Context())
+	if err != nil {
+		h.audit(r, "publish", "release", 0, "failure", err)
+		h.writeServerError(w, err)
+		return
+	}
+	if validationErrors := blockingApplicationMessages(applicationIssues); len(validationErrors) > 0 {
+		err := fmt.Errorf("%s", strings.Join(validationErrors, "; "))
+		h.audit(r, "publish", "release", 0, "failure", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	_, payload, checksum, err := publish.GenerateExtended(r.Context(), h.app.Store, version)
 	if err != nil {
 		h.audit(r, "publish", "release", 0, "failure", err)
@@ -446,25 +537,43 @@ func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 		h.writeServerError(w, err)
 		return
 	}
+	artifacts, err := publish.WriteRuntimeArtifacts(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath)
+	if err != nil {
+		h.audit(r, "publish", "release", 0, "failure", err)
+		h.writeServerError(w, err)
+		return
+	}
+	activation := publishActivationSummary(applications, artifacts, []string{}, "")
+	applyReloadResult(&activation, runGatewayReload(r.Context(), h.app.Config.GatewayReloadCommand))
 	record, err := h.app.Store.CreatePublishRecord(r.Context(), model.PublishRecord{
 		Version:    version,
 		Operator:   operator,
 		Status:     "success",
 		ConfigPath: h.app.Config.GatewayConfigPath,
 		Checksum:   checksum,
-		Note:       strings.TrimSpace(input.Note),
+		Note:       model.FormatPublishNote(input.Note, activation),
 		ConfigJSON: string(payload),
+		Activation: &activation,
 	})
-	h.audit(r, "publish", "release", record.ID, resultFromErr(err), err)
+	h.auditMessage(r, "publish", "release", record.ID, resultFromErr(err), activationAuditSummary(activation), err)
 	h.writeCreated(w, record, err)
 }
 
 func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
+	publishValidationErrors := []string{}
 	if err := publish.Validate(r.Context(), h.app.Store); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		publishValidationErrors = append(publishValidationErrors, err.Error())
+	}
+	applications, applicationIssues, err := h.applicationPreviewContext(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
 		return
 	}
-	sites, _ := h.app.Store.ListSites(r.Context())
+	certificates, err := h.app.Store.ListCertificates(r.Context())
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
 	rules, _ := h.app.Store.ListRules(r.Context())
 	policies, _ := h.app.Store.ListPolicies(r.Context())
 	ipAccessLists, _ := h.app.Store.ListIPAccessListEntries(r.Context())
@@ -501,7 +610,18 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	)
 	writeJSON(w, http.StatusOK, envelope{
 		"summary": envelope{
-			"sites":                     len(sites),
+			"applications":              len(applications),
+			"application_hosts":         countApplicationHosts(applications),
+			"application_listeners":     countApplicationListeners(applications),
+			"listener_ports":            applicationListenerPorts(applications),
+			"listener_protocols":        applicationListenerProtocols(applications),
+			"http_listeners":            countApplicationListenersByProtocol(applications, model.ListenerProtocolHTTP),
+			"https_listeners":           countApplicationListenersByProtocol(applications, model.ListenerProtocolHTTPS),
+			"certificates":              len(certificates),
+			"upstreams":                 countApplicationUpstreams(applications),
+			"enabled_upstreams":         countEnabledApplicationUpstreams(applications),
+			"application_validation":    applicationValidationSummary(applicationIssues, publishValidationErrors),
+			"listener_deployment_mode":  listenerDeploymentModeSummary(h.app.Config.GatewayListenerMode, h.app.Config.GatewayBridgePortRange),
 			"rules":                     len(rules),
 			"policies":                  len(policies),
 			"ip_access_list":            ipAccessSummary,
@@ -589,6 +709,190 @@ func (h handlers) buildProtectionOverview(ctx context.Context, filter model.Obse
 		Modules: modules,
 		Risks:   protectionRisks(modules),
 	}, nil
+}
+
+func (h handlers) applicationPreviewContext(ctx context.Context) ([]model.Application, []publish.ApplicationValidationIssue, error) {
+	applications, err := h.app.Store.ListApplications(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(applications) == 0 {
+		sites, err := h.app.Store.ListSites(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		applications = publish.ApplicationsFromSites(sites)
+	}
+	issues, err := publish.ValidateApplicationReadinessWithDeployment(ctx, h.app.Store, publish.GatewayListenerDeployment{
+		Mode:            h.app.Config.GatewayListenerMode,
+		BridgePortRange: h.app.Config.GatewayBridgePortRange,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return applications, issues, nil
+}
+
+func countApplicationHosts(applications []model.Application) int {
+	total := 0
+	for _, application := range applications {
+		total += len(application.Hosts)
+	}
+	return total
+}
+
+func countApplicationListeners(applications []model.Application) int {
+	total := 0
+	for _, application := range applications {
+		total += len(application.Listeners)
+	}
+	return total
+}
+
+func countApplicationListenersByProtocol(applications []model.Application, protocol string) int {
+	total := 0
+	for _, application := range applications {
+		for _, listener := range application.Listeners {
+			if listener.Enabled && listener.Protocol == protocol {
+				total++
+			}
+		}
+	}
+	return total
+}
+
+func applicationListenerPorts(applications []model.Application) []int {
+	seen := map[int]bool{}
+	for _, application := range applications {
+		for _, listener := range application.Listeners {
+			if listener.Enabled {
+				seen[listener.Port] = true
+			}
+		}
+	}
+	ports := make([]int, 0, len(seen))
+	for port := range seen {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+func applicationListenerProtocols(applications []model.Application) envelope {
+	counts := map[string]int{}
+	for _, application := range applications {
+		for _, listener := range application.Listeners {
+			if listener.Enabled {
+				counts[listener.Protocol]++
+			}
+		}
+	}
+	out := envelope{}
+	for protocol, count := range counts {
+		out[protocol] = count
+	}
+	return out
+}
+
+func countApplicationUpstreams(applications []model.Application) int {
+	total := 0
+	for _, application := range applications {
+		total += len(application.Upstreams)
+	}
+	return total
+}
+
+func countEnabledApplicationUpstreams(applications []model.Application) int {
+	total := 0
+	for _, application := range applications {
+		for _, upstream := range application.Upstreams {
+			if upstream.Enabled {
+				total++
+			}
+		}
+	}
+	return total
+}
+
+func applicationValidationSummary(issues []publish.ApplicationValidationIssue, validationErrors []string) envelope {
+	errorCount := 0
+	warningCount := 0
+	for _, issue := range issues {
+		if issue.Severity == "error" {
+			errorCount++
+		}
+		if issue.Severity == "warning" {
+			warningCount++
+		}
+	}
+	return envelope{
+		"errors":            errorCount,
+		"warnings":          warningCount,
+		"issues":            issues,
+		"blocking_messages": validationErrors,
+	}
+}
+
+func blockingApplicationMessages(issues []publish.ApplicationValidationIssue) []string {
+	var messages []string
+	for _, issue := range issues {
+		if issue.Severity == "error" {
+			messages = append(messages, issue.Message)
+		}
+	}
+	return messages
+}
+
+func listenerDeploymentModeSummary(mode string, rangeValue string) envelope {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "bridge-range" {
+		mode = "host-network"
+	}
+	ports := listenerDeploymentPorts(rangeValue)
+	warnings := []string{}
+	if mode == "bridge-range" && len(ports) == 0 {
+		warnings = append(warnings, "bridge-range mode is selected but GATEWAY_BRIDGE_PORT_RANGE is empty or invalid")
+	}
+	return envelope{
+		"mode":                mode,
+		"bridge_range_config": mode == "bridge-range",
+		"port_range":          ports,
+		"raw_port_range":      strings.TrimSpace(rangeValue),
+		"warnings":            warnings,
+	}
+}
+
+func listenerDeploymentPorts(value string) []int {
+	seen := map[int]bool{}
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if strings.Contains(item, "-") {
+			parts := strings.SplitN(item, "-", 2)
+			start, errStart := strconv.Atoi(strings.TrimSpace(parts[0]))
+			end, errEnd := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if errStart != nil || errEnd != nil || start <= 0 || end > 65535 || start > end {
+				continue
+			}
+			for port := start; port <= end; port++ {
+				seen[port] = true
+			}
+			continue
+		}
+		port, err := strconv.Atoi(item)
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		seen[port] = true
+	}
+	ports := make([]int, 0, len(seen))
+	for port := range seen {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	return ports
 }
 
 func protectionModuleMatrix(cc, attack, ipList, access, upload, bot, dynamic, ecosystem envelope, summary model.ObservabilitySummary) []model.ProtectionModuleOverview {
@@ -1389,16 +1693,31 @@ func (h handlers) rollbackRelease(w http.ResponseWriter, r *http.Request) {
 		h.writeServerError(w, err)
 		return
 	}
+	artifacts, err := publish.WriteRuntimeArtifactsFromConfig(r.Context(), h.app.Store, []byte(record.ConfigJSON), h.app.Config.GatewayConfigPath)
+	if err != nil {
+		h.audit(r, "rollback", "release", record.ID, "failure", err)
+		h.writeServerError(w, err)
+		return
+	}
+	applications, err := publish.ApplicationsFromConfigJSON([]byte(record.ConfigJSON))
+	if err != nil {
+		h.audit(r, "rollback", "release", record.ID, "failure", err)
+		h.writeServerError(w, err)
+		return
+	}
+	activation := publishActivationSummary(applications, artifacts, []string{}, record.Version)
+	applyReloadResult(&activation, runGatewayReload(r.Context(), h.app.Config.GatewayReloadCommand))
 	rollback, err := h.app.Store.CreatePublishRecord(r.Context(), model.PublishRecord{
 		Version:    fmt.Sprintf("%s-rollback-%d", record.Version, time.Now().UTC().Unix()),
 		Operator:   currentActor(r).Username,
 		Status:     "success",
 		ConfigPath: h.app.Config.GatewayConfigPath,
 		Checksum:   record.Checksum,
-		Note:       "rollback to " + record.Version,
+		Note:       model.FormatPublishNote("rollback to "+record.Version, activation),
 		ConfigJSON: record.ConfigJSON,
+		Activation: &activation,
 	})
-	h.audit(r, "rollback", "release", rollback.ID, resultFromErr(err), err)
+	h.auditMessage(r, "rollback", "release", rollback.ID, resultFromErr(err), activationAuditSummary(activation), err)
 	h.writeCreated(w, rollback, err)
 }
 
@@ -1568,11 +1887,16 @@ type policyRequest struct {
 	DynamicBanTriggerCount     int      `json:"dynamic_ban_trigger_count"`
 	DynamicBanWindowSec        int      `json:"dynamic_ban_window_sec"`
 	Enabled                    *bool    `json:"enabled"`
-	SiteIDs                    []int64  `json:"site_ids"`
+	SiteIDs                    []int64  `json:"application_ids"`
+	LegacySiteIDs              []int64  `json:"site_ids"`
 	RuleIDs                    []int64  `json:"rule_ids"`
 }
 
 func (r policyRequest) toModel() model.Policy {
+	siteIDs := r.SiteIDs
+	if len(siteIDs) == 0 {
+		siteIDs = r.LegacySiteIDs
+	}
 	return model.Policy{
 		Name:                       r.Name,
 		RiskThreshold:              r.RiskThreshold,
@@ -1593,7 +1917,7 @@ func (r policyRequest) toModel() model.Policy {
 		DynamicBanScoreThreshold:   r.DynamicBanScoreThreshold,
 		DynamicBanTriggerCount:     r.DynamicBanTriggerCount,
 		DynamicBanWindowSec:        r.DynamicBanWindowSec,
-		SiteIDs:                    cloneIDs(r.SiteIDs),
+		SiteIDs:                    cloneIDs(siteIDs),
 		RuleIDs:                    cloneIDs(r.RuleIDs),
 	}
 }
@@ -1611,11 +1935,16 @@ type rateLimitRequest struct {
 	BanDuration        int      `json:"ban_duration_sec"`
 	ViolationThreshold int      `json:"violation_threshold"`
 	ViolationWindowSec int      `json:"violation_window_sec"`
-	SiteID             int64    `json:"site_id"`
+	SiteID             int64    `json:"application_id"`
+	LegacySiteID       int64    `json:"site_id"`
 	Enabled            *bool    `json:"enabled"`
 }
 
 func (r rateLimitRequest) toModel() model.RateLimitRule {
+	siteID := r.SiteID
+	if siteID == 0 {
+		siteID = r.LegacySiteID
+	}
 	return model.RateLimitRule{
 		Name:               r.Name,
 		Scope:              r.Scope,
@@ -1629,7 +1958,7 @@ func (r rateLimitRequest) toModel() model.RateLimitRule {
 		BanDuration:        r.BanDuration,
 		ViolationThreshold: r.ViolationThreshold,
 		ViolationWindowSec: r.ViolationWindowSec,
-		SiteID:             r.SiteID,
+		SiteID:             siteID,
 	}
 }
 
@@ -1898,7 +2227,7 @@ func validatePolicy(policy model.Policy) error {
 		return errors.New("policy dynamic_ban_window_sec must be between 1 and 86400")
 	}
 	if len(policy.SiteIDs) == 0 {
-		return errors.New("policy site_ids is required")
+		return errors.New("policy application_ids is required")
 	}
 	if len(policy.RuleIDs) == 0 {
 		return errors.New("policy rule_ids is required")
@@ -2020,8 +2349,11 @@ func resultFromErr(err error) string {
 }
 
 func (h handlers) audit(r *http.Request, action string, resourceType string, resourceID int64, result string, operationErr error) {
+	h.auditMessage(r, action, resourceType, resourceID, result, "", operationErr)
+}
+
+func (h handlers) auditMessage(r *http.Request, action string, resourceType string, resourceID int64, result string, message string, operationErr error) {
 	current := currentActor(r)
-	message := ""
 	if operationErr != nil {
 		message = operationErr.Error()
 	}

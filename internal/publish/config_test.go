@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/protectionrules"
@@ -64,18 +67,24 @@ func TestGenerateGatewayConfig(t *testing.T) {
 	if checksum == "" {
 		t.Fatal("expected checksum")
 	}
-	if len(config.Sites) != 1 {
-		t.Fatalf("expected 1 site, got %d", len(config.Sites))
+	if len(config.Applications) != 1 {
+		t.Fatalf("expected 1 application, got %d", len(config.Applications))
 	}
-	if len(config.Sites[0].Rules) != 1 {
-		t.Fatalf("expected 1 rule, got %d", len(config.Sites[0].Rules))
+	if len(config.Applications[0].Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(config.Applications[0].Rules))
 	}
-	if config.Sites[0].Policy.RiskThreshold != 100 {
-		t.Fatalf("expected published policy threshold, got %+v", config.Sites[0].Policy)
+	if config.Applications[0].Policy.RiskThreshold != 100 {
+		t.Fatalf("expected published policy threshold, got %+v", config.Applications[0].Policy)
 	}
 	var decoded GatewayConfig
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		t.Fatalf("payload json: %v", err)
+	}
+	if len(decoded.Applications) != 1 {
+		t.Fatalf("expected payload applications, got %+v", decoded.Applications)
+	}
+	if bytes.Contains(payload, []byte(`"sites"`)) {
+		t.Fatalf("payload must not include legacy sites field: %s", payload)
 	}
 }
 
@@ -115,14 +124,14 @@ func TestGenerateExtendedGatewayConfigIncludesAdvancedProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate extended: %v", err)
 	}
-	if !config.Sites[0].Policy.BodyInspectionEnabled || !config.Sites[0].Policy.DynamicBanEnabled {
-		t.Fatalf("expected advanced policy settings: %+v", config.Sites[0].Policy)
+	if !config.Applications[0].Policy.BodyInspectionEnabled || !config.Applications[0].Policy.DynamicBanEnabled {
+		t.Fatalf("expected advanced policy settings: %+v", config.Applications[0].Policy)
 	}
-	if config.Sites[0].Rules[0].Target != "body_json" {
-		t.Fatalf("expected advanced rule target, got %+v", config.Sites[0].Rules[0])
+	if config.Applications[0].Rules[0].Target != "body_json" {
+		t.Fatalf("expected advanced rule target, got %+v", config.Applications[0].Rules[0])
 	}
-	if config.Sites[0].Rules[0].Module != "attack-protection" || config.Sites[0].Rules[0].AttackType != "xss" {
-		t.Fatalf("expected attack protection metadata, got %+v", config.Sites[0].Rules[0])
+	if config.Applications[0].Rules[0].Module != "attack-protection" || config.Applications[0].Rules[0].AttackType != "xss" {
+		t.Fatalf("expected attack protection metadata, got %+v", config.Applications[0].Rules[0])
 	}
 	if config.RateLimits[0].ViolationThreshold != 3 {
 		t.Fatalf("expected repeated violation settings, got %+v", config.RateLimits[0])
@@ -178,10 +187,10 @@ func TestGenerateExtendedGatewayConfigIncludesAttackProtectionMetadata(t *testin
 	if err != nil {
 		t.Fatalf("generate extended: %v", err)
 	}
-	if len(config.Sites) != 1 || len(config.Sites[0].Rules) != 4 {
-		t.Fatalf("unexpected attack protection rules: %+v", config.Sites)
+	if len(config.Applications) != 1 || len(config.Applications[0].Rules) != 4 {
+		t.Fatalf("unexpected attack protection rules: %+v", config.Applications)
 	}
-	for _, rule := range config.Sites[0].Rules {
+	for _, rule := range config.Applications[0].Rules {
 		if rule.Module != "attack-protection" || rule.Category != "managed" || rule.AttackType == "" || rule.Group == "" || rule.Priority <= 0 {
 			t.Fatalf("missing attack protection metadata: %+v", rule)
 		}
@@ -603,6 +612,321 @@ func TestValidateRejectsInvalidAttackProtectionMetadata(t *testing.T) {
 	}
 }
 
+func TestValidateApplicationReadinessReportsCertificateDomainMismatch(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	cert, err := dataStore.CreateCertificate(ctx, model.Certificate{
+		Name:        "Other cert",
+		Domains:     []string{"other.example.test"},
+		CertPEM:     "cert",
+		KeyPEM:      "key",
+		NotBefore:   time.Now().UTC().Add(-time.Hour),
+		NotAfter:    time.Now().UTC().Add(time.Hour),
+		Fingerprint: "abc123",
+	})
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	_, err = dataStore.CreateApplication(ctx, model.Application{
+		Name:    "App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts: []model.ApplicationHost{
+			{Host: "app.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 443, Protocol: model.ListenerProtocolHTTPS, CertificateID: cert.ID, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	issues, err := ValidateApplicationReadiness(ctx, dataStore)
+	if err != nil {
+		t.Fatalf("validate readiness: %v", err)
+	}
+	if len(issues) != 1 || issues[0].Severity != "warning" || issues[0].Category != "certificate-domain-mismatch" {
+		t.Fatalf("unexpected readiness issues: %+v", issues)
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-warning"); err != nil {
+		t.Fatalf("domain warning must not block publish generation: %v", err)
+	}
+}
+
+func TestValidateApplicationReadinessBlocksListenerAndReferenceRisks(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	disabledApp, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Disabled App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: false,
+		Hosts: []model.ApplicationHost{
+			{Host: "disabled.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create disabled app: %v", err)
+	}
+	rule, err := dataStore.CreateRule(ctx, model.Rule{Name: "SQLi", Type: "sqli", Target: "args", Action: "block", Expression: "select", Score: 100, Enabled: true})
+	if err != nil {
+		t.Fatalf("create rule: %v", err)
+	}
+	if _, err := dataStore.CreatePolicy(ctx, model.Policy{Name: "disabled binding", SiteIDs: []int64{disabledApp.ID}, RuleIDs: []int64{rule.ID}, Enabled: true}); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	if _, err := dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name: "Disabled app CC", Module: "cc-protection", Category: "rate-limit", SiteID: disabledApp.ID, Enabled: true, Priority: 100,
+		Match:  model.ProtectionRuleMatch{Path: "/", PathMatch: "prefix"},
+		Limit:  model.ProtectionRuleLimit{Counter: "client_ip", Threshold: 10, WindowSec: 60},
+		Action: model.ProtectionRuleAction{Type: "block"},
+	}); err != nil {
+		t.Fatalf("create protection rule: %v", err)
+	}
+
+	_, err = dataStore.CreateApplication(ctx, model.Application{
+		Name:    "No Active Listener",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts: []model.ApplicationHost{
+			{Host: "nolisten.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 8080, Protocol: model.ListenerProtocolHTTP, Enabled: false},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9001", Weight: 1, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create no-listener app: %v", err)
+	}
+
+	issues, err := ValidateApplicationReadiness(ctx, dataStore)
+	if err != nil {
+		t.Fatalf("validate readiness: %v", err)
+	}
+	categories := readinessCategories(issues)
+	for _, category := range []string{"disabled-application-reference", "no-enabled-listener"} {
+		if categories[category] == 0 {
+			t.Fatalf("expected readiness category %s in %+v", category, issues)
+		}
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-invalid-readiness"); err == nil {
+		t.Fatal("expected blocking readiness issues to stop publish generation")
+	}
+}
+
+func TestValidateApplicationReadinessReportsListenerConflict(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	for _, name := range []string{"App One", "App Two"} {
+		if _, err := dataStore.CreateApplication(ctx, model.Application{
+			Name:    name,
+			Mode:    model.ApplicationModeProtect,
+			Enabled: true,
+			Hosts: []model.ApplicationHost{
+				{Host: "shared.example.test", IsPrimary: true},
+			},
+			Listeners: []model.ApplicationListener{
+				{Port: 9443, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+			},
+			Upstreams: []model.ApplicationUpstream{
+				{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+			},
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	issues, err := ValidateApplicationReadiness(ctx, dataStore)
+	if err != nil {
+		t.Fatalf("validate readiness: %v", err)
+	}
+	categories := readinessCategories(issues)
+	if categories["listener-port-conflict"] == 0 {
+		t.Fatalf("expected listener conflict issue: %+v", issues)
+	}
+	if _, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-listener-conflict"); err == nil {
+		t.Fatal("expected listener conflict to block publish generation")
+	}
+}
+
+func TestValidateApplicationReadinessBlocksBridgeRangePort(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	if _, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Bridge App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts: []model.ApplicationHost{
+			{Host: "bridge.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 9443, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+		},
+	}); err != nil {
+		t.Fatalf("create bridge app: %v", err)
+	}
+	issues, err := ValidateApplicationReadinessWithDeployment(ctx, dataStore, GatewayListenerDeployment{
+		Mode:            "bridge-range",
+		BridgePortRange: "80,443,9000-9099",
+	})
+	if err != nil {
+		t.Fatalf("validate readiness: %v", err)
+	}
+	categories := readinessCategories(issues)
+	if categories["deployment-mode-port"] == 0 {
+		t.Fatalf("expected deployment mode issue: %+v", issues)
+	}
+	if issues[0].Severity != "error" {
+		t.Fatalf("expected bridge range issue to block activation: %+v", issues[0])
+	}
+}
+
+func readinessCategories(issues []ApplicationValidationIssue) map[string]int {
+	out := map[string]int{}
+	for _, issue := range issues {
+		out[issue.Category]++
+	}
+	return out
+}
+
+func TestWriteRuntimeArtifactsWritesListenersAndCertificates(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	cert, err := dataStore.CreateCertificate(ctx, model.Certificate{
+		Name:        "App cert",
+		Domains:     []string{"app.example.test"},
+		CertPEM:     "CERTIFICATE-PEM",
+		KeyPEM:      "PRIVATE-KEY-PEM",
+		NotBefore:   time.Now().UTC().Add(-time.Hour),
+		NotAfter:    time.Now().UTC().Add(time.Hour),
+		Fingerprint: "def456",
+	})
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	_, err = dataStore.CreateApplication(ctx, model.Application{
+		Name:    "App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts: []model.ApplicationHost{
+			{Host: "app.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+			{Port: 443, Protocol: model.ListenerProtocolHTTPS, CertificateID: cert.ID, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+
+	base := t.TempDir()
+	artifacts, err := WriteRuntimeArtifacts(ctx, dataStore, filepath.Join(base, "active.json"))
+	if err != nil {
+		t.Fatalf("write artifacts: %v", err)
+	}
+	if artifacts.ListenerCount != 2 || artifacts.HTTPSListenerCount != 1 || len(artifacts.CertificateIDs) != 1 {
+		t.Fatalf("unexpected artifact summary: %+v", artifacts)
+	}
+	listenerConf, err := os.ReadFile(filepath.Join(base, "listeners", "applications.conf"))
+	if err != nil {
+		t.Fatalf("read listener conf: %v", err)
+	}
+	if !bytes.Contains(listenerConf, []byte("listen 80;")) ||
+		!bytes.Contains(listenerConf, []byte("listen 443 ssl;")) ||
+		!bytes.Contains(listenerConf, []byte("ssl_certificate /etc/litewaf/certificates/1.crt;")) {
+		t.Fatalf("listener config missing expected listeners: %s", listenerConf)
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(base, "certificates", "1.key"))
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	if string(keyPEM) != "PRIVATE-KEY-PEM\n" {
+		t.Fatalf("unexpected key material written: %q", keyPEM)
+	}
+}
+
+func TestWriteRuntimeArtifactsFromConfigRestoresHistoricalListeners(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	cert, err := dataStore.CreateCertificate(ctx, model.Certificate{
+		Name:        "Historical cert",
+		Domains:     []string{"old.example.test"},
+		CertPEM:     "OLD-CERTIFICATE-PEM",
+		KeyPEM:      "OLD-PRIVATE-KEY-PEM",
+		NotBefore:   time.Now().UTC().Add(-time.Hour),
+		NotAfter:    time.Now().UTC().Add(time.Hour),
+		Fingerprint: "historical-cert",
+	})
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	config := ExtendedGatewayConfig{
+		Version:     "historical",
+		GeneratedAt: time.Now().UTC(),
+		Applications: []GatewayApplication{
+			{
+				ID:      99,
+				Name:    "Historical",
+				Mode:    model.ApplicationModeProtect,
+				Enabled: true,
+				Hosts:   []string{"old.example.test"},
+				Listeners: []GatewayApplicationListener{
+					{Port: 8080, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+					{Port: 9443, Protocol: model.ListenerProtocolHTTPS, CertificateID: cert.ID, Enabled: true},
+				},
+				Upstreams: []GatewayApplicationUpstream{
+					{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+				},
+			},
+		},
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+
+	base := t.TempDir()
+	artifacts, err := WriteRuntimeArtifactsFromConfig(ctx, dataStore, payload, filepath.Join(base, "active.json"))
+	if err != nil {
+		t.Fatalf("write historical artifacts: %v", err)
+	}
+	if artifacts.ListenerCount != 2 || artifacts.HTTPSListenerCount != 1 || len(artifacts.CertificateIDs) != 1 {
+		t.Fatalf("unexpected historical artifact summary: %+v", artifacts)
+	}
+	listenerConf, err := os.ReadFile(filepath.Join(base, "listeners", "applications.conf"))
+	if err != nil {
+		t.Fatalf("read listener conf: %v", err)
+	}
+	if !bytes.Contains(listenerConf, []byte("listen 8080;")) || !bytes.Contains(listenerConf, []byte("listen 9443 ssl;")) {
+		t.Fatalf("listener config did not restore historical ports: %s", listenerConf)
+	}
+	keyPEM, err := os.ReadFile(filepath.Join(base, "certificates", "1.key"))
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	if string(keyPEM) != "OLD-PRIVATE-KEY-PEM\n" {
+		t.Fatalf("unexpected restored key material: %q", keyPEM)
+	}
+}
+
 func TestGenerateGatewayConfigEmptyState(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
@@ -611,8 +935,8 @@ func TestGenerateGatewayConfigEmptyState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate empty: %v", err)
 	}
-	if len(config.Sites) != 0 {
-		t.Fatalf("expected no sites, got %d", len(config.Sites))
+	if len(config.Applications) != 0 {
+		t.Fatalf("expected no applications, got %d", len(config.Applications))
 	}
 }
 
@@ -640,10 +964,10 @@ func TestGenerateKeepsPackageOriginMetadataGatewayCompatible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	if len(config.Sites) != 1 || len(config.Sites[0].Rules) != 1 {
-		t.Fatalf("expected published package rule, got %+v", config.Sites)
+	if len(config.Applications) != 1 || len(config.Applications[0].Rules) != 1 {
+		t.Fatalf("expected published package rule, got %+v", config.Applications)
 	}
-	published := config.Sites[0].Rules[0]
+	published := config.Applications[0].Rules[0]
 	if published.PackageID != "community-baseline" || published.PackageRuleID != "xss-query" {
 		t.Fatalf("missing package metadata: %+v", published)
 	}
@@ -753,10 +1077,10 @@ func TestGenerateDoesNotLeakRuleProviderControlPlaneState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	if len(config.Sites) != 1 || len(config.Sites[0].Rules) != 1 {
-		t.Fatalf("expected provider-origin rule in gateway config, got %+v", config.Sites)
+	if len(config.Applications) != 1 || len(config.Applications[0].Rules) != 1 {
+		t.Fatalf("expected provider-origin rule in gateway config, got %+v", config.Applications)
 	}
-	published := config.Sites[0].Rules[0]
+	published := config.Applications[0].Rules[0]
 	if published.PackageID != "provider-pack" || published.PackageRuleID != "provider-sqli" {
 		t.Fatalf("expected package identity only, got %+v", published)
 	}

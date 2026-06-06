@@ -81,7 +81,7 @@ func (h handlers) clearDynamicBan(w http.ResponseWriter, r *http.Request) {
 	}
 	input.ClientIP = strings.TrimSpace(input.ClientIP)
 	if input.SiteID <= 0 {
-		writeError(w, http.StatusBadRequest, "site_id is required")
+		writeError(w, http.StatusBadRequest, "application_id is required")
 		return
 	}
 	if input.ClientIP == "" {
@@ -117,6 +117,7 @@ func normalizeAccessLog(item *model.AccessLog) {
 	item.Host = strings.ToLower(strings.TrimSpace(item.Host))
 	item.Method = strings.ToUpper(strings.TrimSpace(item.Method))
 	item.URI = strings.TrimSpace(item.URI)
+	item.Scheme = strings.ToLower(strings.TrimSpace(item.Scheme))
 	item.ClientIP = strings.TrimSpace(item.ClientIP)
 	item.UserAgent = strings.TrimSpace(item.UserAgent)
 	item.Disposition = strings.ToLower(strings.TrimSpace(item.Disposition))
@@ -149,6 +150,8 @@ func normalizeWAFEvent(item *model.WAFEvent) {
 	item.AdvancedTarget = strings.ToLower(strings.TrimSpace(item.AdvancedTarget))
 	item.Action = strings.ToLower(strings.TrimSpace(item.Action))
 	item.Disposition = strings.ToLower(strings.TrimSpace(item.Disposition))
+	item.Host = strings.ToLower(strings.TrimSpace(item.Host))
+	item.Scheme = strings.ToLower(strings.TrimSpace(item.Scheme))
 	item.ClientIP = strings.TrimSpace(item.ClientIP)
 	item.Method = strings.ToUpper(strings.TrimSpace(item.Method))
 	item.URI = strings.TrimSpace(item.URI)
@@ -207,15 +210,21 @@ func parseAccessLogFilter(w http.ResponseWriter, r *http.Request) (model.AccessL
 	query := r.URL.Query()
 	filter := model.AccessLogFilter{
 		Host:        strings.ToLower(strings.TrimSpace(query.Get("host"))),
+		Scheme:      strings.ToLower(strings.TrimSpace(query.Get("scheme"))),
 		ClientIP:    strings.TrimSpace(query.Get("client_ip")),
 		Method:      strings.ToUpper(strings.TrimSpace(query.Get("method"))),
 		URI:         strings.TrimSpace(query.Get("uri")),
 		Disposition: strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
 	}
 	var ok bool
-	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {
+	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
 		return model.AccessLogFilter{}, false
 	}
+	listenerPort, ok := parseOptionalInt64(w, query.Get("listener_port"), "listener_port")
+	if !ok {
+		return model.AccessLogFilter{}, false
+	}
+	filter.ListenerPort = int(listenerPort)
 	status, ok := parseOptionalInt64(w, query.Get("status"), "status")
 	if !ok {
 		return model.AccessLogFilter{}, false
@@ -230,9 +239,23 @@ func parseAccessLogFilter(w http.ResponseWriter, r *http.Request) (model.AccessL
 	return filter, true
 }
 
+func parseApplicationIDQuery(w http.ResponseWriter, query map[string][]string) (int64, bool) {
+	value := ""
+	field := "application_id"
+	if values := query["application_id"]; len(values) > 0 {
+		value = values[0]
+	} else if values := query["site_id"]; len(values) > 0 {
+		value = values[0]
+		field = "site_id"
+	}
+	return parseOptionalInt64(w, value, field)
+}
+
 func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEventFilter, bool) {
 	query := r.URL.Query()
 	filter := model.WAFEventFilter{
+		Host:            strings.ToLower(strings.TrimSpace(query.Get("host"))),
+		Scheme:          strings.ToLower(strings.TrimSpace(query.Get("scheme"))),
 		ClientIP:        strings.TrimSpace(query.Get("client_ip")),
 		Action:          strings.ToLower(strings.TrimSpace(query.Get("action"))),
 		Disposition:     strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
@@ -245,9 +268,14 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 		DynamicResult:   strings.ToLower(strings.TrimSpace(query.Get("dynamic_result"))),
 	}
 	var ok bool
-	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {
+	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
 		return model.WAFEventFilter{}, false
 	}
+	listenerPort, ok := parseOptionalInt64(w, query.Get("listener_port"), "listener_port")
+	if !ok {
+		return model.WAFEventFilter{}, false
+	}
+	filter.ListenerPort = int(listenerPort)
 	if filter.RuleID, ok = parseOptionalInt64(w, query.Get("rule_id"), "rule_id"); !ok {
 		return model.WAFEventFilter{}, false
 	}
@@ -268,13 +296,19 @@ func parseWAFEventFilter(w http.ResponseWriter, r *http.Request) (model.WAFEvent
 func parseDynamicBanFilter(w http.ResponseWriter, r *http.Request) (model.DynamicBanFilter, bool) {
 	query := r.URL.Query()
 	filter := model.DynamicBanFilter{
+		Scheme:   strings.ToLower(strings.TrimSpace(query.Get("scheme"))),
 		ClientIP: strings.TrimSpace(query.Get("client_ip")),
 		Status:   strings.ToLower(strings.TrimSpace(query.Get("status"))),
 	}
 	var ok bool
-	if filter.SiteID, ok = parseOptionalInt64(w, query.Get("site_id"), "site_id"); !ok {
+	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
 		return model.DynamicBanFilter{}, false
 	}
+	listenerPort, ok := parseOptionalInt64(w, query.Get("listener_port"), "listener_port")
+	if !ok {
+		return model.DynamicBanFilter{}, false
+	}
+	filter.ListenerPort = int(listenerPort)
 	if filter.MinRevision, ok = parseOptionalInt64(w, query.Get("since_revision"), "since_revision"); !ok {
 		return model.DynamicBanFilter{}, false
 	}

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,125 +16,139 @@ import (
 )
 
 type MemoryStore struct {
-	mu                     sync.RWMutex
-	nextSiteID             int64
-	nextRuleID             int64
-	nextPolicyID           int64
-	nextPublishID          int64
-	nextUserID             int64
-	nextAuditID            int64
-	nextIPAccessListID     int64
-	nextRateID             int64
-	nextUploadID           int64
-	nextBotID              int64
-	nextDynamicID          int64
-	nextProtectionRuleID   int64
-	nextCatalogID          int64
-	nextCatalogPackageID   int64
-	nextTrustKeyID         int64
-	nextProviderID         int64
-	nextProviderPackageID  int64
-	nextAccountSourceID    int64
-	nextContributionID     int64
-	nextPushAttemptID      int64
-	nextReviewQueueID      int64
-	nextFeedbackID         int64
-	nextSuggestionID       int64
-	nextAccessLogID        int64
-	nextWAFEventID         int64
-	nextDynamicBanID       int64
-	nextDynamicBanRevision int64
-	sites                  map[int64]model.Site
-	rules                  map[int64]model.Rule
-	policies               map[int64]model.Policy
-	publishes              map[int64]model.PublishRecord
-	users                  map[int64]model.User
-	audits                 map[int64]model.AuditLog
-	ipAccessLists          map[int64]model.IPAccessListEntry
-	rateLimits             map[int64]model.RateLimitRule
-	uploadRules            map[int64]model.UploadProtectionRule
-	botRules               map[int64]model.BotProtectionRule
-	dynamicRules           map[int64]model.DynamicProtectionRule
-	protectionRules        map[int64]model.ProtectionRule
-	catalogSources         map[int64]model.RuleCatalogSource
-	catalogPackages        map[int64]model.RuleCatalogPackage
-	trustKeys              map[int64]model.RuleTrustKey
-	providers              map[int64]model.RuleProviderAdapter
-	providerSecrets        map[int64]string
-	providerPackages       map[int64]model.RuleProviderPackage
-	accountSources         map[int64]model.RuleCommunityAccountSource
-	accountSecrets         map[int64]string
-	contributionTargets    map[int64]model.RuleContributionTarget
-	contributionSecrets    map[int64]string
-	pushAttempts           map[int64]model.RuleContributionPushAttempt
-	reviewQueue            map[int64]model.RuleReviewQueueItem
-	feedback               map[int64]model.RuleFeedback
-	feedbackSuggestions    map[int64]model.RuleFeedbackSuggestion
-	accessLogs             map[int64]model.AccessLog
-	wafEvents              map[int64]model.WAFEvent
-	dynamicBans            map[string]model.DynamicBan
-	dynamicBanClears       map[int64]model.DynamicBanClearResult
+	mu                        sync.RWMutex
+	nextSiteID                int64
+	nextApplicationID         int64
+	nextApplicationHostID     int64
+	nextApplicationListenerID int64
+	nextApplicationUpstreamID int64
+	nextCertificateID         int64
+	nextRuleID                int64
+	nextPolicyID              int64
+	nextPublishID             int64
+	nextUserID                int64
+	nextAuditID               int64
+	nextIPAccessListID        int64
+	nextRateID                int64
+	nextUploadID              int64
+	nextBotID                 int64
+	nextDynamicID             int64
+	nextProtectionRuleID      int64
+	nextCatalogID             int64
+	nextCatalogPackageID      int64
+	nextTrustKeyID            int64
+	nextProviderID            int64
+	nextProviderPackageID     int64
+	nextAccountSourceID       int64
+	nextContributionID        int64
+	nextPushAttemptID         int64
+	nextReviewQueueID         int64
+	nextFeedbackID            int64
+	nextSuggestionID          int64
+	nextAccessLogID           int64
+	nextWAFEventID            int64
+	nextDynamicBanID          int64
+	nextDynamicBanRevision    int64
+	sites                     map[int64]model.Site
+	applications              map[int64]model.Application
+	certificates              map[int64]model.Certificate
+	rules                     map[int64]model.Rule
+	policies                  map[int64]model.Policy
+	publishes                 map[int64]model.PublishRecord
+	users                     map[int64]model.User
+	audits                    map[int64]model.AuditLog
+	ipAccessLists             map[int64]model.IPAccessListEntry
+	rateLimits                map[int64]model.RateLimitRule
+	uploadRules               map[int64]model.UploadProtectionRule
+	botRules                  map[int64]model.BotProtectionRule
+	dynamicRules              map[int64]model.DynamicProtectionRule
+	protectionRules           map[int64]model.ProtectionRule
+	catalogSources            map[int64]model.RuleCatalogSource
+	catalogPackages           map[int64]model.RuleCatalogPackage
+	trustKeys                 map[int64]model.RuleTrustKey
+	providers                 map[int64]model.RuleProviderAdapter
+	providerSecrets           map[int64]string
+	providerPackages          map[int64]model.RuleProviderPackage
+	accountSources            map[int64]model.RuleCommunityAccountSource
+	accountSecrets            map[int64]string
+	contributionTargets       map[int64]model.RuleContributionTarget
+	contributionSecrets       map[int64]string
+	pushAttempts              map[int64]model.RuleContributionPushAttempt
+	reviewQueue               map[int64]model.RuleReviewQueueItem
+	feedback                  map[int64]model.RuleFeedback
+	feedbackSuggestions       map[int64]model.RuleFeedbackSuggestion
+	accessLogs                map[int64]model.AccessLog
+	wafEvents                 map[int64]model.WAFEvent
+	dynamicBans               map[string]model.DynamicBan
+	dynamicBanClears          map[string]model.DynamicBanClearResult
 }
 
 func NewMemoryStore() *MemoryStore {
 	store := &MemoryStore{
-		nextSiteID:             1,
-		nextRuleID:             1,
-		nextPolicyID:           1,
-		nextPublishID:          1,
-		nextUserID:             1,
-		nextAuditID:            1,
-		nextIPAccessListID:     1,
-		nextRateID:             1,
-		nextUploadID:           1,
-		nextBotID:              1,
-		nextDynamicID:          1,
-		nextProtectionRuleID:   1,
-		nextCatalogID:          1,
-		nextCatalogPackageID:   1,
-		nextTrustKeyID:         1,
-		nextProviderID:         1,
-		nextProviderPackageID:  1,
-		nextAccountSourceID:    1,
-		nextContributionID:     1,
-		nextPushAttemptID:      1,
-		nextReviewQueueID:      1,
-		nextFeedbackID:         1,
-		nextSuggestionID:       1,
-		nextAccessLogID:        1,
-		nextWAFEventID:         1,
-		nextDynamicBanID:       1,
-		nextDynamicBanRevision: 1,
-		sites:                  map[int64]model.Site{},
-		rules:                  map[int64]model.Rule{},
-		policies:               map[int64]model.Policy{},
-		publishes:              map[int64]model.PublishRecord{},
-		users:                  map[int64]model.User{},
-		audits:                 map[int64]model.AuditLog{},
-		ipAccessLists:          map[int64]model.IPAccessListEntry{},
-		rateLimits:             map[int64]model.RateLimitRule{},
-		uploadRules:            map[int64]model.UploadProtectionRule{},
-		botRules:               map[int64]model.BotProtectionRule{},
-		dynamicRules:           map[int64]model.DynamicProtectionRule{},
-		protectionRules:        map[int64]model.ProtectionRule{},
-		catalogSources:         map[int64]model.RuleCatalogSource{},
-		catalogPackages:        map[int64]model.RuleCatalogPackage{},
-		trustKeys:              map[int64]model.RuleTrustKey{},
-		providers:              map[int64]model.RuleProviderAdapter{},
-		providerSecrets:        map[int64]string{},
-		providerPackages:       map[int64]model.RuleProviderPackage{},
-		accountSources:         map[int64]model.RuleCommunityAccountSource{},
-		accountSecrets:         map[int64]string{},
-		contributionTargets:    map[int64]model.RuleContributionTarget{},
-		contributionSecrets:    map[int64]string{},
-		pushAttempts:           map[int64]model.RuleContributionPushAttempt{},
-		reviewQueue:            map[int64]model.RuleReviewQueueItem{},
-		feedback:               map[int64]model.RuleFeedback{},
-		feedbackSuggestions:    map[int64]model.RuleFeedbackSuggestion{},
-		accessLogs:             map[int64]model.AccessLog{},
-		wafEvents:              map[int64]model.WAFEvent{},
-		dynamicBans:            map[string]model.DynamicBan{},
-		dynamicBanClears:       map[int64]model.DynamicBanClearResult{},
+		nextSiteID:                1,
+		nextApplicationID:         1,
+		nextApplicationHostID:     1,
+		nextApplicationListenerID: 1,
+		nextApplicationUpstreamID: 1,
+		nextCertificateID:         1,
+		nextRuleID:                1,
+		nextPolicyID:              1,
+		nextPublishID:             1,
+		nextUserID:                1,
+		nextAuditID:               1,
+		nextIPAccessListID:        1,
+		nextRateID:                1,
+		nextUploadID:              1,
+		nextBotID:                 1,
+		nextDynamicID:             1,
+		nextProtectionRuleID:      1,
+		nextCatalogID:             1,
+		nextCatalogPackageID:      1,
+		nextTrustKeyID:            1,
+		nextProviderID:            1,
+		nextProviderPackageID:     1,
+		nextAccountSourceID:       1,
+		nextContributionID:        1,
+		nextPushAttemptID:         1,
+		nextReviewQueueID:         1,
+		nextFeedbackID:            1,
+		nextSuggestionID:          1,
+		nextAccessLogID:           1,
+		nextWAFEventID:            1,
+		nextDynamicBanID:          1,
+		nextDynamicBanRevision:    1,
+		sites:                     map[int64]model.Site{},
+		applications:              map[int64]model.Application{},
+		certificates:              map[int64]model.Certificate{},
+		rules:                     map[int64]model.Rule{},
+		policies:                  map[int64]model.Policy{},
+		publishes:                 map[int64]model.PublishRecord{},
+		users:                     map[int64]model.User{},
+		audits:                    map[int64]model.AuditLog{},
+		ipAccessLists:             map[int64]model.IPAccessListEntry{},
+		rateLimits:                map[int64]model.RateLimitRule{},
+		uploadRules:               map[int64]model.UploadProtectionRule{},
+		botRules:                  map[int64]model.BotProtectionRule{},
+		dynamicRules:              map[int64]model.DynamicProtectionRule{},
+		protectionRules:           map[int64]model.ProtectionRule{},
+		catalogSources:            map[int64]model.RuleCatalogSource{},
+		catalogPackages:           map[int64]model.RuleCatalogPackage{},
+		trustKeys:                 map[int64]model.RuleTrustKey{},
+		providers:                 map[int64]model.RuleProviderAdapter{},
+		providerSecrets:           map[int64]string{},
+		providerPackages:          map[int64]model.RuleProviderPackage{},
+		accountSources:            map[int64]model.RuleCommunityAccountSource{},
+		accountSecrets:            map[int64]string{},
+		contributionTargets:       map[int64]model.RuleContributionTarget{},
+		contributionSecrets:       map[int64]string{},
+		pushAttempts:              map[int64]model.RuleContributionPushAttempt{},
+		reviewQueue:               map[int64]model.RuleReviewQueueItem{},
+		feedback:                  map[int64]model.RuleFeedback{},
+		feedbackSuggestions:       map[int64]model.RuleFeedbackSuggestion{},
+		accessLogs:                map[int64]model.AccessLog{},
+		wafEvents:                 map[int64]model.WAFEvent{},
+		dynamicBans:               map[string]model.DynamicBan{},
+		dynamicBanClears:          map[string]model.DynamicBanClearResult{},
 	}
 	store.seedRules()
 	return store
@@ -209,6 +224,132 @@ func (s *MemoryStore) DeleteSite(_ context.Context, id int64) error {
 	}
 	delete(s.sites, id)
 	return nil
+}
+
+func (s *MemoryStore) ListApplications(context.Context) ([]model.Application, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.Application, 0, len(s.applications))
+	for _, item := range s.applications {
+		items = append(items, cloneApplication(item))
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetApplication(_ context.Context, id int64) (model.Application, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.applications[id]
+	if !ok {
+		return model.Application{}, ErrNotFound
+	}
+	return cloneApplication(item), nil
+}
+
+func (s *MemoryStore) CreateApplication(_ context.Context, app model.Application) (model.Application, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	model.NormalizeApplication(&app)
+	if err := model.ValidateApplication(app, s.certificateExistsLocked); err != nil {
+		return model.Application{}, err
+	}
+	now := time.Now().UTC()
+	app.ID = s.nextApplicationID
+	app.CreatedAt = now
+	app.UpdatedAt = now
+	s.nextApplicationID++
+	s.assignApplicationChildIDsLocked(&app)
+	s.applications[app.ID] = cloneApplication(app)
+	return cloneApplication(app), nil
+}
+
+func (s *MemoryStore) UpdateApplication(_ context.Context, id int64, app model.Application) (model.Application, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.applications[id]
+	if !ok {
+		return model.Application{}, ErrNotFound
+	}
+	model.NormalizeApplication(&app)
+	if err := model.ValidateApplication(app, s.certificateExistsLocked); err != nil {
+		return model.Application{}, err
+	}
+	app.ID = id
+	app.CreatedAt = existing.CreatedAt
+	app.UpdatedAt = time.Now().UTC()
+	s.assignApplicationChildIDsLocked(&app)
+	s.applications[id] = cloneApplication(app)
+	return cloneApplication(app), nil
+}
+
+func (s *MemoryStore) DeleteApplication(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.applications[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.applications, id)
+	return nil
+}
+
+func (s *MemoryStore) ListCertificates(context.Context) ([]model.Certificate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]model.Certificate, 0, len(s.certificates))
+	for _, item := range s.certificates {
+		items = append(items, cloneCertificate(item))
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	return items, nil
+}
+
+func (s *MemoryStore) GetCertificate(_ context.Context, id int64) (model.Certificate, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	item, ok := s.certificates[id]
+	if !ok {
+		return model.Certificate{}, ErrNotFound
+	}
+	return cloneCertificate(item), nil
+}
+
+func (s *MemoryStore) CreateCertificate(_ context.Context, cert model.Certificate) (model.Certificate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := model.ValidateCertificate(cert); err != nil {
+		return model.Certificate{}, err
+	}
+	now := time.Now().UTC()
+	cert.ID = s.nextCertificateID
+	cert.CreatedAt = now
+	cert.UpdatedAt = now
+	cert.Domains = cloneStrings(cert.Domains)
+	s.certificates[cert.ID] = cloneCertificate(cert)
+	s.nextCertificateID++
+	return cloneCertificate(cert), nil
+}
+
+func (s *MemoryStore) DeleteCertificate(_ context.Context, id int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.certificates[id]; !ok {
+		return ErrNotFound
+	}
+	if s.certificateInUseLocked(id) {
+		return errors.New("certificate is used by enabled application listeners")
+	}
+	delete(s.certificates, id)
+	return nil
+}
+
+func (s *MemoryStore) CertificateInUse(_ context.Context, id int64) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if _, ok := s.certificates[id]; !ok {
+		return false, ErrNotFound
+	}
+	return s.certificateInUseLocked(id), nil
 }
 
 func (s *MemoryStore) ListRules(context.Context) ([]model.Rule, error) {
@@ -343,7 +484,7 @@ func (s *MemoryStore) ListPublishRecords(context.Context) ([]model.PublishRecord
 	defer s.mu.RUnlock()
 	items := make([]model.PublishRecord, 0, len(s.publishes))
 	for _, item := range s.publishes {
-		items = append(items, item)
+		items = append(items, model.AttachPublishActivation(item))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
 	return items, nil
@@ -355,6 +496,7 @@ func (s *MemoryStore) CreatePublishRecord(_ context.Context, record model.Publis
 	record.ID = s.nextPublishID
 	record.CreatedAt = time.Now().UTC()
 	record.Time = record.CreatedAt.Format(time.RFC3339)
+	record = model.AttachPublishActivation(record)
 	s.publishes[record.ID] = record
 	s.nextPublishID++
 	return record, nil
@@ -371,7 +513,7 @@ func (s *MemoryStore) GetPublishRecordByVersion(_ context.Context, version strin
 	defer s.mu.RUnlock()
 	for _, item := range s.publishes {
 		if item.Version == version {
-			return item, nil
+			return model.AttachPublishActivation(item), nil
 		}
 	}
 	return model.PublishRecord{}, ErrNotFound
@@ -515,8 +657,11 @@ func (s *MemoryStore) ClearDynamicBan(_ context.Context, request model.DynamicBa
 	s.nextDynamicBanRevision++
 	status := "no-op"
 	message := "dynamic ban was already cleared, expired, or not found"
-	key := dynamicBanKey(request.SiteID, request.ClientIP)
-	if item, ok := s.dynamicBans[key]; ok {
+	wroteClear := false
+	for key, item := range s.dynamicBans {
+		if item.SiteID != request.SiteID || item.ClientIP != request.ClientIP {
+			continue
+		}
 		item = dynamicBanWithStatus(item, now)
 		if item.Status == "active" {
 			status = "cleared"
@@ -529,6 +674,18 @@ func (s *MemoryStore) ClearDynamicBan(_ context.Context, request model.DynamicBa
 		item.BanRemainingSec = 0
 		item.Time = item.CreatedAt.Format(time.RFC3339)
 		s.dynamicBans[key] = item
+		clear := model.DynamicBanClearResult{
+			SiteID:       item.SiteID,
+			ListenerPort: item.ListenerPort,
+			Scheme:       item.Scheme,
+			ClientIP:     item.ClientIP,
+			Status:       status,
+			Revision:     revision,
+			ClearedAt:    now,
+			Message:      message,
+		}
+		s.dynamicBanClears[dynamicBanClearKey(clear)] = clear
+		wroteClear = true
 	}
 	result := model.DynamicBanClearResult{
 		SiteID:    request.SiteID,
@@ -538,7 +695,9 @@ func (s *MemoryStore) ClearDynamicBan(_ context.Context, request model.DynamicBa
 		ClearedAt: now,
 		Message:   message,
 	}
-	s.dynamicBanClears[revision] = result
+	if !wroteClear {
+		s.dynamicBanClears[dynamicBanClearKey(result)] = result
+	}
 	return result, nil
 }
 
@@ -554,6 +713,12 @@ func (s *MemoryStore) ListDynamicBanClears(_ context.Context, filter model.Dynam
 			continue
 		}
 		if filter.MinRevision > 0 && item.Revision <= filter.MinRevision {
+			continue
+		}
+		if filter.ListenerPort > 0 && item.ListenerPort != filter.ListenerPort {
+			continue
+		}
+		if filter.Scheme != "" && item.Scheme != filter.Scheme {
 			continue
 		}
 		items = append(items, item)
@@ -1811,6 +1976,12 @@ func accessLogMatches(item model.AccessLog, filter model.AccessLogFilter) bool {
 	if filter.SiteID > 0 && item.SiteID != filter.SiteID {
 		return false
 	}
+	if filter.ListenerPort > 0 && item.ListenerPort != filter.ListenerPort {
+		return false
+	}
+	if filter.Scheme != "" && item.Scheme != filter.Scheme {
+		return false
+	}
 	if filter.Host != "" && item.Host != filter.Host {
 		return false
 	}
@@ -1834,6 +2005,15 @@ func accessLogMatches(item model.AccessLog, filter model.AccessLogFilter) bool {
 
 func wafEventMatches(item model.WAFEvent, filter model.WAFEventFilter) bool {
 	if filter.SiteID > 0 && item.SiteID != filter.SiteID {
+		return false
+	}
+	if filter.ListenerPort > 0 && item.ListenerPort != filter.ListenerPort {
+		return false
+	}
+	if filter.Scheme != "" && item.Scheme != filter.Scheme {
+		return false
+	}
+	if filter.Host != "" && item.Host != filter.Host {
 		return false
 	}
 	if filter.ClientIP != "" && item.ClientIP != filter.ClientIP {
@@ -1890,7 +2070,7 @@ func (s *MemoryStore) projectDynamicBanEventLocked(item model.WAFEvent) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	key := dynamicBanKey(item.SiteID, item.ClientIP)
+	key := dynamicBanKey(item.SiteID, item.ListenerPort, item.Scheme, item.ClientIP)
 	existing, ok := s.dynamicBans[key]
 	if !ok {
 		existing.ID = s.nextDynamicBanID
@@ -1898,6 +2078,8 @@ func (s *MemoryStore) projectDynamicBanEventLocked(item model.WAFEvent) {
 		existing.CreatedAt = now
 	}
 	existing.SiteID = item.SiteID
+	existing.ListenerPort = item.ListenerPort
+	existing.Scheme = item.Scheme
 	existing.ClientIP = item.ClientIP
 	existing.BanReason = item.BanReason
 	existing.Source = dynamicBanSource(item)
@@ -1915,8 +2097,12 @@ func (s *MemoryStore) projectDynamicBanEventLocked(item model.WAFEvent) {
 	s.dynamicBans[key] = existing
 }
 
-func dynamicBanKey(siteID int64, clientIP string) string {
-	return strconv.FormatInt(siteID, 10) + "|" + clientIP
+func dynamicBanKey(siteID int64, listenerPort int, scheme string, clientIP string) string {
+	return strconv.FormatInt(siteID, 10) + "|" + strconv.Itoa(listenerPort) + "|" + scheme + "|" + clientIP
+}
+
+func dynamicBanClearKey(item model.DynamicBanClearResult) string {
+	return strconv.FormatInt(item.Revision, 10) + "|" + strconv.FormatInt(item.SiteID, 10) + "|" + strconv.Itoa(item.ListenerPort) + "|" + item.Scheme + "|" + item.ClientIP
 }
 
 func dynamicBanSource(item model.WAFEvent) string {
@@ -1954,6 +2140,12 @@ func dynamicBanMatches(item model.DynamicBan, filter model.DynamicBanFilter) boo
 		return false
 	}
 	if filter.ClientIP != "" && item.ClientIP != filter.ClientIP {
+		return false
+	}
+	if filter.ListenerPort > 0 && item.ListenerPort != filter.ListenerPort {
+		return false
+	}
+	if filter.Scheme != "" && item.Scheme != filter.Scheme {
 		return false
 	}
 	if filter.Status != "" && item.Status != filter.Status {
@@ -2045,7 +2237,9 @@ func stringsContains(value string, substr string) bool {
 
 func (s *MemoryStore) bindingsExistLocked(policy model.Policy) bool {
 	for _, id := range policy.SiteIDs {
-		if _, ok := s.sites[id]; !ok {
+		_, applicationExists := s.applications[id]
+		_, legacySiteExists := s.sites[id]
+		if !applicationExists && !legacySiteExists {
 			return false
 		}
 	}
@@ -2055,6 +2249,58 @@ func (s *MemoryStore) bindingsExistLocked(policy model.Policy) bool {
 		}
 	}
 	return true
+}
+
+func (s *MemoryStore) certificateExistsLocked(id int64) bool {
+	_, ok := s.certificates[id]
+	return ok
+}
+
+func (s *MemoryStore) certificateInUseLocked(id int64) bool {
+	for _, app := range s.applications {
+		for _, listener := range app.Listeners {
+			if listener.Enabled && listener.CertificateID == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) assignApplicationChildIDsLocked(app *model.Application) {
+	for i := range app.Hosts {
+		app.Hosts[i].ApplicationID = app.ID
+		if app.Hosts[i].ID == 0 {
+			app.Hosts[i].ID = s.nextApplicationHostID
+			s.nextApplicationHostID++
+		}
+	}
+	for i := range app.Listeners {
+		app.Listeners[i].ApplicationID = app.ID
+		if app.Listeners[i].ID == 0 {
+			app.Listeners[i].ID = s.nextApplicationListenerID
+			s.nextApplicationListenerID++
+		}
+	}
+	for i := range app.Upstreams {
+		app.Upstreams[i].ApplicationID = app.ID
+		if app.Upstreams[i].ID == 0 {
+			app.Upstreams[i].ID = s.nextApplicationUpstreamID
+			s.nextApplicationUpstreamID++
+		}
+	}
+}
+
+func cloneApplication(item model.Application) model.Application {
+	item.Hosts = append([]model.ApplicationHost(nil), item.Hosts...)
+	item.Listeners = append([]model.ApplicationListener(nil), item.Listeners...)
+	item.Upstreams = append([]model.ApplicationUpstream(nil), item.Upstreams...)
+	return item
+}
+
+func cloneCertificate(item model.Certificate) model.Certificate {
+	item.Domains = cloneStrings(item.Domains)
+	return item
 }
 
 func cloneIDs(ids []int64) []int64 {

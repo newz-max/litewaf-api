@@ -89,6 +89,8 @@ POST   /api/v1/cc-protection/preview
 
 ## 发布和网关执行
 
+新增、编辑、删除或启停 CC 防护规则后，必须在后台“发布记录”发布新版本，或调用 `POST /api/v1/releases`，网关才会加载新的 CC 规则。`POST /api/v1/cc-protection/preview` 只用于模拟命中和风险提示，不会更新发布配置、网关计数或活动规则。
+
 发布配置同时保留旧 `rate_limits` 字段，并输出：
 
 ```json

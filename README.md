@@ -32,7 +32,7 @@ sudo ./litewafctl.sh upgrade latest
 sudo ./litewafctl.sh health
 ```
 
-更完整的首次验证流程见 [快速开始](doc/快速开始.md)。
+更完整的首次验证流程见 [快速开始](doc/快速开始.md)，日常后台操作见 [使用说明](doc/使用说明.md)。
 
 ## 目录结构
 
@@ -55,14 +55,15 @@ litewaf-gateway      配套网关仓库
 
 ## 文档入口
 
+- [文档索引](doc/文档索引.md)
 - [快速开始](doc/快速开始.md)
+- [使用说明](doc/使用说明.md)
 - [架构说明](doc/架构说明.md)
 - [API 文档](doc/API文档.md)
 - [规则编写指南](doc/规则编写指南.md)
 - [贡献指南](doc/贡献指南.md)
 - [规则生态路线](doc/规则生态路线.md)
 - [Debian 12 minimal 部署说明](doc/Debian12部署说明.md)
-- [MVP 防护闭环验证](doc/MVP防护闭环验证.md)
 
 ## 开发命令
 

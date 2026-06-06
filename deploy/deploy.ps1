@@ -159,12 +159,14 @@ fi
 echo "Deployed to `$REMOTE_CURRENT"
 echo "Dashboard: http://`$(hostname -I | awk '{print `$1}'):`$(grep '^DASHBOARD_PORT=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)/"
 echo "Gateway:   http://`$(hostname -I | awk '{print `$1}'):`$(grep '^GATEWAY_PORT=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)/"
+echo "Admin username: `$(grep '^LITEWAF_ADMIN_USERNAME=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)"
+echo "Admin password: `$(grep '^LITEWAF_ADMIN_PASSWORD=' "`$REMOTE_SHARED/.env" | tail -n 1 | cut -d= -f2-)"
 "@
 
 Write-Host "==> Installing LiteWaf on remote host..."
 Invoke-Native ssh @SshArgs $RemoteScript
 
-$RemoteEnvOutput = & ssh @SshArgs "grep -E '^(DASHBOARD_PORT|GATEWAY_PORT)=' '$RemoteShared/.env' || true"
+$RemoteEnvOutput = & ssh @SshArgs "grep -E '^(DASHBOARD_PORT|GATEWAY_PORT|LITEWAF_ADMIN_USERNAME|LITEWAF_ADMIN_PASSWORD)=' '$RemoteShared/.env' || true"
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to read remote ports from $RemoteShared/.env"
 }
@@ -179,6 +181,8 @@ foreach ($Line in $RemoteEnvOutput) {
 
 $DashboardPort = if ($RemotePorts.ContainsKey("DASHBOARD_PORT")) { $RemotePorts["DASHBOARD_PORT"] } else { "<DASHBOARD_PORT>" }
 $GatewayPort = if ($RemotePorts.ContainsKey("GATEWAY_PORT")) { $RemotePorts["GATEWAY_PORT"] } else { "<GATEWAY_PORT>" }
+$AdminUsername = if ($RemotePorts.ContainsKey("LITEWAF_ADMIN_USERNAME")) { $RemotePorts["LITEWAF_ADMIN_USERNAME"] } else { "<LITEWAF_ADMIN_USERNAME>" }
+$AdminPassword = if ($RemotePorts.ContainsKey("LITEWAF_ADMIN_PASSWORD")) { $RemotePorts["LITEWAF_ADMIN_PASSWORD"] } else { "<LITEWAF_ADMIN_PASSWORD>" }
 
 Write-Host "==> Cleaning local archive..."
 Remove-Item -LiteralPath $ArchivePath -Force
@@ -187,5 +191,7 @@ Write-Host ""
 Write-Host "Deployment finished."
 Write-Host "Dashboard: http://${DisplayHost}:$DashboardPort"
 Write-Host "Gateway:   http://${DisplayHost}:$GatewayPort"
+Write-Host "Admin username: $AdminUsername"
+Write-Host "Admin password: $AdminPassword"
 Write-Host ""
 Write-Host "Remote env file is preserved at: $RemoteShared/.env"

@@ -237,6 +237,8 @@ install_stack() {
   compose ps
   info "Dashboard: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${DASHBOARD_PORT:-$(env_value DASHBOARD_PORT)}/"
   info "Gateway:   http://$(hostname -I 2>/dev/null | awk '{print $1}'):${GATEWAY_PORT:-$(env_value GATEWAY_PORT)}/"
+  info "Admin username: $(env_value LITEWAF_ADMIN_USERNAME)"
+  info "Admin password: $(env_value LITEWAF_ADMIN_PASSWORD)"
 }
 
 backup_stack() {

@@ -2,6 +2,8 @@ ARG GO_BUILDER_IMAGE=golang:1.24-bookworm
 ARG API_RUNTIME_IMAGE=debian:12-slim
 FROM ${GO_BUILDER_IMAGE} AS builder
 
+ARG LITEWAF_VERSION=0.1.0
+
 WORKDIR /src
 ENV GOPROXY=https://goproxy.cn,direct
 
@@ -9,7 +11,7 @@ COPY go.mod ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/litewaf-api ./cmd/litewaf-api
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X litewaf-api/internal/app.Version=${LITEWAF_VERSION}" -o /out/litewaf-api ./cmd/litewaf-api
 
 FROM ${API_RUNTIME_IMAGE}
 

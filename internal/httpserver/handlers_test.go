@@ -140,6 +140,34 @@ func TestProtectedEndpointRequiresToken(t *testing.T) {
 	}
 }
 
+func TestVersionEndpointUsesBuildVersion(t *testing.T) {
+	originalVersion := app.Version
+	app.Version = "9.8.7-test"
+	t.Cleanup(func() {
+		app.Version = originalVersion
+	})
+
+	handler := testServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/version", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Env     string `json:"env"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode version: %v", err)
+	}
+	if response.Name != "LiteWaf API" || response.Version != "9.8.7-test" || response.Env != "test" {
+		t.Fatalf("unexpected version response: %+v", response)
+	}
+}
+
 func TestObservabilityIngestionAndQueries(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

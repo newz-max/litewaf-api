@@ -13,10 +13,16 @@ import (
 func (s *PostgresStore) CreateAccessLog(ctx context.Context, item model.AccessLog) (model.AccessLog, error) {
 	createdAt := nullableTime(item.CreatedAt)
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO access_logs (request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status, duration_ms, client_ip, user_agent, disposition, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14::timestamptz, now()))
+		INSERT INTO access_logs (
+			request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
+			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
+			geo_longitude, geo_latitude, disposition, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, COALESCE($20::timestamptz, now()))
 		RETURNING id, created_at`,
-		item.RequestID, item.SiteID, item.ListenerPort, item.Scheme, item.Host, item.Method, item.URI, item.Status, item.UpstreamStatus, item.DurationMS, item.ClientIP, item.UserAgent, item.Disposition, createdAt).
+		item.RequestID, item.SiteID, item.ListenerPort, item.Scheme, item.Host, item.Method, item.URI, item.Status, item.UpstreamStatus,
+		item.DurationMS, item.ClientIP, item.UserAgent, item.Referer, item.GeoCountry, item.GeoRegion, item.GeoCity,
+		item.GeoLongitude, item.GeoLatitude, item.Disposition, createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	return item, err
@@ -29,7 +35,9 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 		offset = 0
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status, duration_ms, client_ip, user_agent, disposition, created_at
+		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
+			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
+			geo_longitude, geo_latitude, disposition, created_at
 		FROM access_logs
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2::integer = 0 OR listener_port = $2)
@@ -53,7 +61,11 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 	var items []model.AccessLog
 	for rows.Next() {
 		var item model.AccessLog
-		if err := rows.Scan(&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus, &item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Disposition, &item.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus,
+			&item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Referer, &item.GeoCountry, &item.GeoRegion, &item.GeoCity,
+			&item.GeoLongitude, &item.GeoLatitude, &item.Disposition, &item.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)

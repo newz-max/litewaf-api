@@ -65,6 +65,15 @@ func (h handlers) observabilitySummary(w http.ResponseWriter, r *http.Request) {
 	h.writeItem(w, item, err)
 }
 
+func (h handlers) statisticsReport(w http.ResponseWriter, r *http.Request) {
+	filter, ok := parseStatisticsReportFilter(w, r)
+	if !ok {
+		return
+	}
+	item, err := h.app.Store.GetStatisticsReport(r.Context(), filter)
+	h.writeItem(w, item, err)
+}
+
 func (h handlers) listDynamicBans(w http.ResponseWriter, r *http.Request) {
 	filter, ok := parseDynamicBanFilter(w, r)
 	if !ok {
@@ -120,6 +129,10 @@ func normalizeAccessLog(item *model.AccessLog) {
 	item.Scheme = strings.ToLower(strings.TrimSpace(item.Scheme))
 	item.ClientIP = strings.TrimSpace(item.ClientIP)
 	item.UserAgent = strings.TrimSpace(item.UserAgent)
+	item.Referer = strings.TrimSpace(item.Referer)
+	item.GeoCountry = strings.TrimSpace(item.GeoCountry)
+	item.GeoRegion = strings.TrimSpace(item.GeoRegion)
+	item.GeoCity = strings.TrimSpace(item.GeoCity)
 	item.Disposition = strings.ToLower(strings.TrimSpace(item.Disposition))
 }
 
@@ -361,6 +374,84 @@ func parseSummaryFilter(w http.ResponseWriter, r *http.Request) (model.Observabi
 		return model.ObservabilitySummaryFilter{}, false
 	}
 	return model.ObservabilitySummaryFilter{Since: since, Until: until, Limit: int(limit)}, true
+}
+
+func parseStatisticsReportFilter(w http.ResponseWriter, r *http.Request) (model.StatisticsReportFilter, bool) {
+	query := r.URL.Query()
+	siteID, ok := parseApplicationIDQuery(w, query)
+	if !ok {
+		return model.StatisticsReportFilter{}, false
+	}
+	since, until, ok := parseTimeRange(w, r)
+	if !ok {
+		return model.StatisticsReportFilter{}, false
+	}
+	rangeValue := strings.ToLower(strings.TrimSpace(query.Get("range")))
+	if since.IsZero() && until.IsZero() {
+		until = time.Now().UTC()
+		duration, valid := statisticsRangeDuration(rangeValue)
+		if !valid {
+			writeError(w, http.StatusBadRequest, "invalid range")
+			return model.StatisticsReportFilter{}, false
+		}
+		since = until.Add(-duration)
+	}
+	limit, ok := parseOptionalInt64(w, query.Get("limit"), "limit")
+	if !ok {
+		return model.StatisticsReportFilter{}, false
+	}
+	scope := strings.ToLower(strings.TrimSpace(query.Get("scope")))
+	if scope == "" {
+		scope = "world"
+	}
+	if scope != "world" && scope != "china" {
+		writeError(w, http.StatusBadRequest, "invalid scope")
+		return model.StatisticsReportFilter{}, false
+	}
+	mapView := strings.ToLower(strings.TrimSpace(query.Get("map_view")))
+	if mapView == "" {
+		mapView = "3d"
+	}
+	if mapView != "3d" && mapView != "2d" {
+		writeError(w, http.StatusBadRequest, "invalid map_view")
+		return model.StatisticsReportFilter{}, false
+	}
+	if scope == "china" {
+		mapView = "2d"
+	}
+	metric := strings.ToLower(strings.TrimSpace(query.Get("metric")))
+	if metric == "" {
+		metric = "requests"
+	}
+	if metric != "requests" && metric != "blocked" {
+		writeError(w, http.StatusBadRequest, "invalid metric")
+		return model.StatisticsReportFilter{}, false
+	}
+	return model.StatisticsReportFilter{
+		SiteID:  siteID,
+		Since:   since,
+		Until:   until,
+		Range:   rangeValue,
+		Scope:   scope,
+		MapView: mapView,
+		Metric:  metric,
+		Limit:   int(limit),
+	}, true
+}
+
+func statisticsRangeDuration(value string) (time.Duration, bool) {
+	switch value {
+	case "", "24h":
+		return 24 * time.Hour, true
+	case "1h":
+		return time.Hour, true
+	case "7d":
+		return 7 * 24 * time.Hour, true
+	case "30d":
+		return 30 * 24 * time.Hour, true
+	default:
+		return 0, false
+	}
 }
 
 func parseTimeRange(w http.ResponseWriter, r *http.Request) (time.Time, time.Time, bool) {

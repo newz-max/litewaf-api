@@ -201,6 +201,12 @@ type AccessLog struct {
 	DurationMS     int64     `json:"duration_ms"`
 	ClientIP       string    `json:"client_ip"`
 	UserAgent      string    `json:"user_agent"`
+	Referer        string    `json:"referer,omitempty"`
+	GeoCountry     string    `json:"geo_country,omitempty"`
+	GeoRegion      string    `json:"geo_region,omitempty"`
+	GeoCity        string    `json:"geo_city,omitempty"`
+	GeoLongitude   float64   `json:"geo_longitude,omitempty"`
+	GeoLatitude    float64   `json:"geo_latitude,omitempty"`
 	Disposition    string    `json:"disposition"`
 	CreatedAt      time.Time `json:"created_at"`
 	Time           string    `json:"time"`
@@ -413,6 +419,72 @@ type ObservabilitySummary struct {
 	DynamicProtection []SummaryCount `json:"dynamic_protection"`
 }
 
+type StatisticsReport struct {
+	Cards       StatisticsReportCards   `json:"cards"`
+	QPS         []TimeSeriesPoint       `json:"qps"`
+	Visits      []TimeSeriesPoint       `json:"visits"`
+	Blocks      []TimeSeriesPoint       `json:"blocks"`
+	Geo         StatisticsGeoReport     `json:"geo"`
+	Clients     StatisticsClientReport  `json:"clients"`
+	Statuses    []SummaryCount          `json:"statuses"`
+	Referers    StatisticsRefererReport `json:"referers"`
+	Diagnostics []string                `json:"diagnostics,omitempty"`
+}
+
+type StatisticsReportCards struct {
+	Requests     int64   `json:"requests"`
+	PV           int64   `json:"pv"`
+	UV           int64   `json:"uv"`
+	UniqueIPs    int64   `json:"unique_ips"`
+	Blocked      int64   `json:"blocked"`
+	AttackIPs    int64   `json:"attack_ips"`
+	Errors4xx    int64   `json:"errors_4xx"`
+	ErrorRate4xx float64 `json:"error_rate_4xx"`
+	Blocked4xx   int64   `json:"blocked_4xx"`
+	BlockRate4xx float64 `json:"block_rate_4xx"`
+	Errors5xx    int64   `json:"errors_5xx"`
+	ErrorRate5xx float64 `json:"error_rate_5xx"`
+}
+
+type StatisticsGeoReport struct {
+	Scope       string     `json:"scope"`
+	MapView     string     `json:"map_view"`
+	Metric      string     `json:"metric"`
+	Ranking     []GeoRank  `json:"ranking"`
+	Points      []GeoPoint `json:"points"`
+	Diagnostics []string   `json:"diagnostics,omitempty"`
+}
+
+type GeoRank struct {
+	Code    string `json:"code"`
+	Name    string `json:"name"`
+	Count   int64  `json:"count"`
+	Blocked int64  `json:"blocked"`
+}
+
+type GeoPoint struct {
+	Name      string  `json:"name"`
+	Value     int64   `json:"value"`
+	Longitude float64 `json:"longitude"`
+	Latitude  float64 `json:"latitude"`
+}
+
+type StatisticsClientReport struct {
+	OS         []SummaryCount `json:"os"`
+	Browsers   []SummaryCount `json:"browsers"`
+	UserAgents []SummaryCount `json:"user_agents"`
+}
+
+type StatisticsRefererReport struct {
+	Domains []SummaryCount `json:"domains"`
+	Pages   []SummaryCount `json:"pages"`
+}
+
+type TimeSeriesPoint struct {
+	Time  string `json:"time"`
+	Value int64  `json:"value"`
+}
+
 type ProtectionOverview struct {
 	Modules []ProtectionModuleOverview `json:"modules"`
 	Risks   []ProtectionModuleRisk     `json:"risks"`
@@ -560,6 +632,17 @@ type ObservabilitySummaryFilter struct {
 	Since time.Time
 	Until time.Time
 	Limit int
+}
+
+type StatisticsReportFilter struct {
+	SiteID  int64
+	Since   time.Time
+	Until   time.Time
+	Range   string
+	Scope   string
+	MapView string
+	Metric  string
+	Limit   int
 }
 
 type IPAccessListEntry struct {

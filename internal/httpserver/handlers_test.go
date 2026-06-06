@@ -922,6 +922,87 @@ func TestObservabilityApplicationListenerFields(t *testing.T) {
 	}
 }
 
+func TestStatisticsReportAggregatesRealLogs(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	accessPayloads := []string{
+		`{"request_id":"report-1","application_id":5,"host":"app.example.test","method":"GET","uri":"/","status":200,"duration_ms":12,"client_ip":"198.51.100.10","user_agent":"Mozilla/5.0 (Windows NT 10.0) Chrome/120.0","referer":"https://search.example.com/result","geo_country":"中国","geo_region":"北京","geo_city":"北京","geo_longitude":116.4,"geo_latitude":39.9,"disposition":"proxied","created_at":"` + now + `"}`,
+		`{"request_id":"report-2","application_id":5,"host":"app.example.test","method":"GET","uri":"/static/app.js","status":404,"duration_ms":5,"client_ip":"198.51.100.11","user_agent":"curl/8.0","geo_country":"新加坡","geo_longitude":103.8,"geo_latitude":1.3,"disposition":"blocked","created_at":"` + now + `"}`,
+		`{"request_id":"report-other","application_id":6,"host":"other.example.test","method":"GET","uri":"/","status":200,"duration_ms":5,"client_ip":"198.51.100.12","user_agent":"curl/8.0","disposition":"proxied","created_at":"` + now + `"}`,
+	}
+	for _, payload := range accessPayloads {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer gateway-secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("ingest report access status = %d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"report-waf","application_id":5,"event_type":"rule","rule_id":7,"rule_type":"xss","target":"args","action":"block","disposition":"blocked","client_ip":"198.51.100.11","method":"GET","uri":"/static/app.js","summary":"blocked","created_at":"`+now+`"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest report waf status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/reports/statistics?application_id=5&range=30d&scope=world&map_view=3d", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statistics report status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.StatisticsReport `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode statistics report: %v", err)
+	}
+	if response.Item.Cards.Requests != 2 || response.Item.Cards.PV != 1 || response.Item.Cards.UniqueIPs != 2 || response.Item.Cards.AttackIPs != 1 {
+		t.Fatalf("unexpected report cards: %+v", response.Item.Cards)
+	}
+	if response.Item.Cards.Errors4xx != 1 || response.Item.Cards.Blocked4xx != 1 || response.Item.Cards.ErrorRate4xx != 50 {
+		t.Fatalf("unexpected 4xx metrics: %+v", response.Item.Cards)
+	}
+	if response.Item.Geo.Scope != "world" || response.Item.Geo.MapView != "3d" || len(response.Item.Geo.Ranking) != 2 {
+		t.Fatalf("unexpected world geo report: %+v", response.Item.Geo)
+	}
+	if len(response.Item.Referers.Domains) != 1 || response.Item.Referers.Domains[0].Key != "search.example.com" {
+		t.Fatalf("unexpected referers: %+v", response.Item.Referers)
+	}
+	if len(response.Item.Clients.Browsers) == 0 || len(response.Item.Statuses) == 0 || len(response.Item.QPS) == 0 {
+		t.Fatalf("expected report breakdowns: %+v", response.Item)
+	}
+}
+
+func TestStatisticsReportChinaScopeForces2D(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/reports/statistics?scope=china&map_view=3d", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statistics china report status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.StatisticsReport `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode statistics china report: %v", err)
+	}
+	if response.Item.Geo.Scope != "china" || response.Item.Geo.MapView != "2d" {
+		t.Fatalf("expected china scope to force 2d: %+v", response.Item.Geo)
+	}
+	if response.Item.Cards.Requests != 0 || len(response.Item.Geo.Ranking) != 0 {
+		t.Fatalf("expected empty real report state: %+v", response.Item)
+	}
+}
+
 func TestDynamicBanApplicationIDContract(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

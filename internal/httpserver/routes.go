@@ -94,6 +94,7 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("GET /api/v1/access-logs", handlers.require(permissionRead, handlers.listAccessLogs))
 	mux.HandleFunc("GET /api/v1/attack-logs", handlers.require(permissionRead, handlers.listAttackLogs))
 	mux.HandleFunc("GET /api/v1/observability/summary", handlers.require(permissionRead, handlers.observabilitySummary))
+	mux.HandleFunc("GET /api/v1/reports/statistics", handlers.require(permissionRead, handlers.statisticsReport))
 	mux.HandleFunc("GET /api/v1/dynamic-bans", handlers.require(permissionRead, handlers.listDynamicBans))
 	mux.HandleFunc("POST /api/v1/dynamic-bans/unban", handlers.require(permissionWrite, handlers.clearDynamicBan))
 	mux.HandleFunc("GET /api/v1/dynamic-bans/clears", handlers.requireGatewayIngestion(handlers.listDynamicBanClears))

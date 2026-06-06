@@ -63,6 +63,7 @@ type Store interface {
 	CreateWAFEvent(context.Context, model.WAFEvent) (model.WAFEvent, error)
 	ListWAFEvents(context.Context, model.WAFEventFilter) ([]model.WAFEvent, error)
 	GetObservabilitySummary(context.Context, model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error)
+	GetStatisticsReport(context.Context, model.StatisticsReportFilter) (model.StatisticsReport, error)
 	ListDynamicBans(context.Context, model.DynamicBanFilter) ([]model.DynamicBan, error)
 	ClearDynamicBan(context.Context, model.DynamicBanClearRequest) (model.DynamicBanClearResult, error)
 	ListDynamicBanClears(context.Context, model.DynamicBanFilter) ([]model.DynamicBanClearResult, error)

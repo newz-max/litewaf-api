@@ -652,7 +652,7 @@ CC 防护规则写入后需要发布，网关才会更新 `protection_rules` 中
     "name": "Community baseline",
     "version": "v1",
     "author": "LiteWaf Community",
-    "license": "PolyForm-Noncommercial-1.0.0",
+    "license": "Apache-2.0",
     "compatibility": "litewaf-rule-package-v1",
     "defaults": {
       "enabled": false,

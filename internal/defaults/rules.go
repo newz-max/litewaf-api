@@ -10,7 +10,7 @@ import (
 
 const RuleSetVersion = "litewaf-default-rules-v1"
 const RulePackageID = "litewaf-default-rules"
-const RulePackageLicense = "PolyForm-Noncommercial-1.0.0"
+const RulePackageLicense = "Apache-2.0"
 
 var DefaultRules = []model.Rule{
 	{

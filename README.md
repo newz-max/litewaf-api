@@ -242,4 +242,4 @@ docker build -t litewaf-gateway .
 
 ## 许可证
 
-本仓库采用 [PolyForm Noncommercial License 1.0.0](LICENSE)。非商业用途可按许可证使用、复制、分发和修改；任何商业使用都需要提前获得版权持有人的单独书面许可或商业授权。
+本仓库采用 [Apache License 2.0](LICENSE)。你可以按该许可证使用、复制、修改、分发和商业使用本项目。

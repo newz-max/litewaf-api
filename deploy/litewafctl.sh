@@ -294,7 +294,7 @@ install_stack() {
   wait_health
   compose ps
   host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  dashboard_port="${DASHBOARD_PORT:-$(env_value DASHBOARD_PORT)}"
+  dashboard_port="$(env_value DASHBOARD_PORT)"
   info "Dashboard: $(http_url "$host_ip" "$dashboard_port")"
   info "Gateway listener mode: $(listener_mode)"
   info "Application listeners are opened by published protected applications."

@@ -8,6 +8,7 @@ INSTALL_DIR="${LITEWAF_INSTALL_DIR:-/opt/litewaf}"
 IMAGE_PREFIX="${LITEWAF_IMAGE_PREFIX:-mmxiaozhi}"
 IMAGE_TAG="${LITEWAF_IMAGE_TAG:-latest}"
 PROJECT_NAME="${PROJECT_NAME:-litewaf}"
+DASHBOARD_PORT_OVERRIDE="${LITEWAF_DASHBOARD_PORT:-}"
 CONNECT_TIMEOUT_SECONDS="${LITEWAF_CONNECT_TIMEOUT_SECONDS:-15}"
 DOWNLOAD_RETRIES="${LITEWAF_DOWNLOAD_RETRIES:-2}"
 HEARTBEAT_SECONDS="${LITEWAF_HEARTBEAT_SECONDS:-15}"
@@ -39,6 +40,23 @@ step() {
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
+
+validate_port() {
+  name="$1"
+  port="$2"
+  case "$port" in
+    ""|*[!0-9]*)
+      die "$name must be a number between 1 and 65535"
+      ;;
+  esac
+  if [ "${#port}" -gt 5 ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+    die "$name must be a number between 1 and 65535"
+  fi
+}
+
+if [ -n "$DASHBOARD_PORT_OVERRIDE" ]; then
+  validate_port LITEWAF_DASHBOARD_PORT "$DASHBOARD_PORT_OVERRIDE"
+fi
 
 if [ "${LITEWAF_SKIP_SUDO:-}" = "1" ]; then
   SUDO=""
@@ -160,6 +178,9 @@ step "Preparing LiteWaf installer"
 info "install directory: $INSTALL_DIR"
 info "project name: $PROJECT_NAME"
 info "image: $IMAGE_PREFIX:$IMAGE_TAG"
+if [ -n "$DASHBOARD_PORT_OVERRIDE" ]; then
+  info "dashboard port override: $DASHBOARD_PORT_OVERRIDE"
+fi
 info "download source candidates: $BASE_URLS"
 info "heartbeat interval: ${HEARTBEAT_SECONDS}s"
 
@@ -183,17 +204,29 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
   $SUDO chmod 600 "$INSTALL_DIR/.env" 2>/dev/null || true
   set_env_key LITEWAF_IMAGE_PREFIX "$IMAGE_PREFIX" "$INSTALL_DIR/.env"
   set_env_key LITEWAF_IMAGE_TAG "$IMAGE_TAG" "$INSTALL_DIR/.env"
+  if [ -n "$DASHBOARD_PORT_OVERRIDE" ]; then
+    set_env_key DASHBOARD_PORT "$DASHBOARD_PORT_OVERRIDE" "$INSTALL_DIR/.env"
+  fi
   info "created $INSTALL_DIR/.env"
-elif [ -n "${LITEWAF_IMAGE_PREFIX:-}" ] || [ -n "${LITEWAF_IMAGE_TAG:-}" ]; then
+else
+  env_updated=0
   if [ -n "${LITEWAF_IMAGE_PREFIX:-}" ]; then
     set_env_key LITEWAF_IMAGE_PREFIX "$IMAGE_PREFIX" "$INSTALL_DIR/.env"
+    env_updated=1
   fi
   if [ -n "${LITEWAF_IMAGE_TAG:-}" ]; then
     set_env_key LITEWAF_IMAGE_TAG "$IMAGE_TAG" "$INSTALL_DIR/.env"
+    env_updated=1
   fi
-  info "updated image coordinates in $INSTALL_DIR/.env"
-else
-  info "preserving existing $INSTALL_DIR/.env"
+  if [ -n "$DASHBOARD_PORT_OVERRIDE" ]; then
+    set_env_key DASHBOARD_PORT "$DASHBOARD_PORT_OVERRIDE" "$INSTALL_DIR/.env"
+    env_updated=1
+  fi
+  if [ "$env_updated" = "1" ]; then
+    info "updated environment settings in $INSTALL_DIR/.env"
+  else
+    info "preserving existing $INSTALL_DIR/.env"
+  fi
 fi
 
 step "Running production install"

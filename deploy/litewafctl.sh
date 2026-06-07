@@ -3,10 +3,12 @@ set -eu
 
 PROJECT_NAME="${PROJECT_NAME:-litewaf}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+COMPOSE_FILES="${COMPOSE_FILES:-}"
 ENV_FILE="${ENV_FILE:-.env}"
 BACKUP_DIR="${BACKUP_DIR:-backups}"
 STATE_DIR="${STATE_DIR:-state}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-180}"
+SKIP_PULL="${LITEWAF_SKIP_PULL:-0}"
 
 usage() {
   cat <<'EOF'
@@ -25,9 +27,11 @@ Commands:
 Environment:
   PROJECT_NAME              Docker Compose project name, default litewaf.
   COMPOSE_FILE              Compose file path, default docker-compose.prod.yml.
+  COMPOSE_FILES             Space-separated Compose files. Overrides COMPOSE_FILE.
   ENV_FILE                  Environment file path, default .env.
   BACKUP_DIR                Backup output directory, default backups.
   STATE_DIR                 Upgrade state directory, default state.
+  LITEWAF_SKIP_PULL=1       Skip image pulls and start from already-loaded images.
 EOF
 }
 
@@ -49,7 +53,43 @@ need_cmd() {
 }
 
 compose() {
-  docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+  files="${COMPOSE_FILES:-$COMPOSE_FILE}"
+  file_args=""
+  for file in $files; do
+    file_args="$file_args -f $file"
+  done
+  docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" $file_args "$@"
+}
+
+local_images_available() {
+  missing=0
+  for image in $(compose config --images | sort -u); do
+    if ! docker image inspect "$image" >/dev/null 2>&1; then
+      warn "local image is missing: $image"
+      missing=1
+    fi
+  done
+  [ "$missing" -eq 0 ]
+}
+
+pull_images() {
+  if [ "$SKIP_PULL" = "1" ]; then
+    warn "skipping image pull because LITEWAF_SKIP_PULL=1"
+    return 0
+  fi
+
+  info "pulling prebuilt images"
+  if compose pull; then
+    return 0
+  fi
+
+  warn "image pull failed; checking whether all required images already exist locally"
+  if local_images_available; then
+    warn "all required images are available locally; continuing without fresh pull"
+    return 0
+  fi
+
+  die "image pull failed and one or more required images are missing locally"
 }
 
 env_value() {
@@ -287,8 +327,7 @@ wait_health() {
 
 install_stack() {
   validate
-  info "pulling prebuilt images"
-  compose pull
+  pull_images
   info "starting production stack"
   compose up -d --no-build --remove-orphans
   wait_health
@@ -437,7 +476,7 @@ upgrade_stack() {
   info "recorded upgrade state: $state_file"
   backup_stack "$BACKUP_DIR"
   set_env_key LITEWAF_IMAGE_TAG "$target" "$ENV_FILE"
-  compose pull
+  pull_images
   compose up -d --no-build --remove-orphans
   if wait_health; then
     cp "$state_file" "$STATE_DIR/current.env"
@@ -455,7 +494,7 @@ rollback_stack() {
   ensure_env
   info "rolling back to image tag $previous"
   set_env_key LITEWAF_IMAGE_TAG "$previous" "$ENV_FILE"
-  compose pull
+  pull_images
   compose up -d --no-build --remove-orphans
   wait_health
   info "rollback complete"

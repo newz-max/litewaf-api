@@ -9,6 +9,8 @@ IMAGE_PREFIX="${LITEWAF_IMAGE_PREFIX:-mmxiaozhi}"
 IMAGE_TAG="${LITEWAF_IMAGE_TAG:-latest}"
 PROJECT_NAME="${PROJECT_NAME:-litewaf}"
 DASHBOARD_PORT_OVERRIDE="${LITEWAF_DASHBOARD_PORT:-}"
+GATEWAY_LISTENER_MODE_OVERRIDE="${LITEWAF_GATEWAY_LISTENER_MODE:-${GATEWAY_LISTENER_MODE:-}}"
+GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE="${LITEWAF_GATEWAY_BRIDGE_PORT_RANGE:-${GATEWAY_BRIDGE_PORT_RANGE:-}}"
 CONNECT_TIMEOUT_SECONDS="${LITEWAF_CONNECT_TIMEOUT_SECONDS:-15}"
 DOWNLOAD_RETRIES="${LITEWAF_DOWNLOAD_RETRIES:-2}"
 HEARTBEAT_SECONDS="${LITEWAF_HEARTBEAT_SECONDS:-15}"
@@ -156,10 +158,15 @@ run_litewafctl() {
   command_name="$1"
   label="$2"
   if [ -n "$SUDO" ]; then
-    run_with_heartbeat "$label" "$SUDO" env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh "$command_name"
+    run_with_heartbeat "$label" "$SUDO" env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILES="$COMPOSE_FILES" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh "$command_name"
   else
-    run_with_heartbeat "$label" env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh "$command_name"
+    run_with_heartbeat "$label" env PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILES="$COMPOSE_FILES" COMPOSE_FILE=docker-compose.prod.yml ENV_FILE=.env ./litewafctl.sh "$command_name"
   fi
+}
+
+installed_env_value() {
+  key="$1"
+  $SUDO grep "^${key}=" "$INSTALL_DIR/.env" 2>/dev/null | tail -n 1 | cut -d= -f2- || true
 }
 
 need_cmd id
@@ -181,22 +188,30 @@ info "image: $IMAGE_PREFIX:$IMAGE_TAG"
 if [ -n "$DASHBOARD_PORT_OVERRIDE" ]; then
   info "dashboard port override: $DASHBOARD_PORT_OVERRIDE"
 fi
+if [ -n "$GATEWAY_LISTENER_MODE_OVERRIDE" ]; then
+  info "gateway listener mode override: $GATEWAY_LISTENER_MODE_OVERRIDE"
+fi
+if [ -n "$GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE" ]; then
+  info "gateway bridge port range override: $GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE"
+fi
 info "download source candidates: $BASE_URLS"
 info "heartbeat interval: ${HEARTBEAT_SECONDS}s"
 
 step "Downloading deployment files"
 download_deploy_file docker-compose.prod.yml
+download_deploy_file docker-compose.bridge-range.yml
 download_deploy_file .env.example
 download_deploy_file litewafctl.sh
 
 step "Installing deployment files"
 $SUDO mkdir -p "$INSTALL_DIR"
 $SUDO cp "$TMP_DIR/docker-compose.prod.yml" "$INSTALL_DIR/docker-compose.prod.yml"
+$SUDO cp "$TMP_DIR/docker-compose.bridge-range.yml" "$INSTALL_DIR/docker-compose.bridge-range.yml"
 $SUDO cp "$TMP_DIR/.env.example" "$INSTALL_DIR/.env.example"
 $SUDO cp "$TMP_DIR/litewafctl.sh" "$INSTALL_DIR/litewafctl.sh"
-$SUDO chmod 644 "$INSTALL_DIR/docker-compose.prod.yml" "$INSTALL_DIR/.env.example"
+$SUDO chmod 644 "$INSTALL_DIR/docker-compose.prod.yml" "$INSTALL_DIR/docker-compose.bridge-range.yml" "$INSTALL_DIR/.env.example"
 $SUDO chmod 755 "$INSTALL_DIR/litewafctl.sh"
-info "installed docker-compose.prod.yml, .env.example, and litewafctl.sh"
+info "installed docker-compose.prod.yml, docker-compose.bridge-range.yml, .env.example, and litewafctl.sh"
 
 step "Preparing environment file"
 if [ ! -f "$INSTALL_DIR/.env" ]; then
@@ -206,6 +221,12 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
   set_env_key LITEWAF_IMAGE_TAG "$IMAGE_TAG" "$INSTALL_DIR/.env"
   if [ -n "$DASHBOARD_PORT_OVERRIDE" ]; then
     set_env_key DASHBOARD_PORT "$DASHBOARD_PORT_OVERRIDE" "$INSTALL_DIR/.env"
+  fi
+  if [ -n "$GATEWAY_LISTENER_MODE_OVERRIDE" ]; then
+    set_env_key GATEWAY_LISTENER_MODE "$GATEWAY_LISTENER_MODE_OVERRIDE" "$INSTALL_DIR/.env"
+  fi
+  if [ -n "$GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE" ]; then
+    set_env_key GATEWAY_BRIDGE_PORT_RANGE "$GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE" "$INSTALL_DIR/.env"
   fi
   info "created $INSTALL_DIR/.env"
 else
@@ -222,12 +243,32 @@ else
     set_env_key DASHBOARD_PORT "$DASHBOARD_PORT_OVERRIDE" "$INSTALL_DIR/.env"
     env_updated=1
   fi
+  if [ -n "$GATEWAY_LISTENER_MODE_OVERRIDE" ]; then
+    set_env_key GATEWAY_LISTENER_MODE "$GATEWAY_LISTENER_MODE_OVERRIDE" "$INSTALL_DIR/.env"
+    env_updated=1
+  fi
+  if [ -n "$GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE" ]; then
+    set_env_key GATEWAY_BRIDGE_PORT_RANGE "$GATEWAY_BRIDGE_PORT_RANGE_OVERRIDE" "$INSTALL_DIR/.env"
+    env_updated=1
+  fi
   if [ "$env_updated" = "1" ]; then
     info "updated environment settings in $INSTALL_DIR/.env"
   else
     info "preserving existing $INSTALL_DIR/.env"
   fi
 fi
+
+gateway_listener_mode="$(installed_env_value GATEWAY_LISTENER_MODE)"
+case "$gateway_listener_mode" in
+  bridge|bridge-range|fixed-range|fixed-port-range)
+    COMPOSE_FILES="docker-compose.prod.yml docker-compose.bridge-range.yml"
+    info "using compose files: $COMPOSE_FILES"
+    ;;
+  *)
+    COMPOSE_FILES="docker-compose.prod.yml"
+    info "using compose file: $COMPOSE_FILES"
+    ;;
+esac
 
 step "Running production install"
 (

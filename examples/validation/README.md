@@ -7,7 +7,7 @@
 - Host: `example.local`
 - 验证上游：`deploy/upstream/default.conf`
 
-先按 [快速开始](../../doc/快速开始.md) 创建站点、策略并发布默认规则。
+先按 [README 快速开始](../../README.md#快速开始) 创建站点、策略并发布默认规则。
 
 ## 一键脚本
 

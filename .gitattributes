@@ -1,2 +1,5 @@
 /.gitattributes text eol=lf
+VERSION text eol=lf
+*.go text eol=lf
 *.sh text eol=lf
+.github/workflows/*.yml text eol=lf

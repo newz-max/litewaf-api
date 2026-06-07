@@ -185,6 +185,28 @@ func TestProtectedEndpointRequiresToken(t *testing.T) {
 	}
 }
 
+func TestEmptyListsReturnArrays(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	for _, path := range []string{"/api/v1/applications", "/api/v1/certificates"} {
+		req := withToken(httptest.NewRequest(http.MethodGet, path, nil), token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+
+		var response map[string]json.RawMessage
+		if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+			t.Fatalf("%s decode: %v", path, err)
+		}
+		if string(response["items"]) != "[]" {
+			t.Fatalf("%s expected items to be [], got %s", path, response["items"])
+		}
+	}
+}
+
 func TestSitesRouteRemoved(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

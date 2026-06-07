@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -1992,7 +1993,20 @@ func (h handlers) writeList(w http.ResponseWriter, items any, err error) {
 		h.writeServerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, envelope{"items": items})
+	writeJSON(w, http.StatusOK, envelope{"items": nonNilList(items)})
+}
+
+func nonNilList(items any) any {
+	if items == nil {
+		return []any{}
+	}
+
+	value := reflect.ValueOf(items)
+	if value.Kind() == reflect.Slice && value.IsNil() {
+		return reflect.MakeSlice(value.Type(), 0, 0).Interface()
+	}
+
+	return items
 }
 
 func (h handlers) writeItem(w http.ResponseWriter, item any, err error) {

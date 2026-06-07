@@ -97,6 +97,8 @@ CREATE TABLE IF NOT EXISTS access_logs (
 	client_ip TEXT NOT NULL DEFAULT '',
 	user_agent TEXT NOT NULL DEFAULT '',
 	disposition TEXT NOT NULL DEFAULT '',
+	reason_code TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -106,6 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_access_logs_listener ON access_logs (site_id, lis
 CREATE INDEX IF NOT EXISTS idx_access_logs_client_ip ON access_logs (client_ip);
 CREATE INDEX IF NOT EXISTS idx_access_logs_status ON access_logs (status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_disposition ON access_logs (disposition);
+CREATE INDEX IF NOT EXISTS idx_access_logs_reason_code ON access_logs (reason_code);
 
 CREATE TABLE IF NOT EXISTS waf_events (
 	id BIGSERIAL PRIMARY KEY,

@@ -837,6 +837,7 @@ Provider 包预览返回普通规则包预览字段，并额外包含 `provider_
 | 方法 | 路径 | 权限 | 说明 |
 | --- | --- | --- | --- |
 | GET | `/api/v1/access-logs` | 读 | 查询访问日志 |
+| GET | `/api/v1/blocked-rejected-records` | 读 | 查询拦截/拒绝记录和触发解释 |
 | GET | `/api/v1/attack-logs` | 读 | 查询 WAF 事件 |
 | GET | `/api/v1/observability/summary` | 读 | 查询汇总指标 |
 | GET | `/api/v1/protection/overview` | 读 | 查询跨模块防护概览 |
@@ -856,6 +857,21 @@ GET /api/v1/attack-logs?module=upload-protection&action=block
 GET /api/v1/attack-logs?module=bot-protection&challenge_result=failed
 GET /api/v1/attack-logs?module=dynamic-protection&dynamic_result=token-failed
 ```
+
+拦截/拒绝记录以访问日志中的 `disposition=blocked` 或 `disposition=rejected` 为主记录，并尽量关联同 `request_id` 的 WAF 事件、同应用/IP/监听的动态封禁，或访问日志自身的 `reason_code` / `reason`。支持过滤：`since`、`until`、`application_id`、`listener_port`、`scheme`、`host`、`client_ip`、`method`、`uri`、`status`、`disposition`、`module`、`action`、`trigger_source`、`limit` 和 `offset`。`trigger_source` 可能为：
+
+- `waf-event`：同请求 ID 的 WAF 事件，优先展示模块、规则、动作和摘要。
+- `dynamic-ban`：动态封禁上下文，展示封禁原因、来源、状态和剩余时长。
+- `access-log`：访问日志自带的网关拒绝/阻断原因，例如未知 Host。
+- `unclassified`：只有访问日志可用，系统不会伪造模块或规则身份。
+
+```text
+GET /api/v1/blocked-rejected-records?disposition=blocked
+GET /api/v1/blocked-rejected-records?trigger_source=access-log
+GET /api/v1/blocked-rejected-records?module=attack-protection&action=block
+```
+
+访问日志摄取可携带有界 `reason_code` 和 `reason` 字段，用于解释没有 WAF 事件的网关拒绝或阻断。日志响应不得包含完整请求体、Cookie、Authorization、动态 token、captcha 答案、签名密钥或未截断的匹配值。
 
 `/api/v1/protection/overview` 返回模块化防护概览，包含 `modules` 和 `risks`。`modules` 固定覆盖已实现模块：CC 防护、攻击防护、IP 黑白名单、访问控制、上传防护、Bot / 人机验证、动态防护和高级规则生态；每个模块包含 `key`、`label`、`category`、`route`、`log_module`、`rules`、`enabled`、`observe`、`block`、`allow`、`compatibility_source`、`warnings` 和 `evidence`。计数来自真实规则、日志和发布预览数据；没有数据时返回零值或空数组，不返回 mock 行。`risks` 从各模块真实高风险提示派生，用于后台跨模块风险摘要。
 

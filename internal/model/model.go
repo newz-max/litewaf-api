@@ -208,6 +208,8 @@ type AccessLog struct {
 	GeoLongitude   float64   `json:"geo_longitude,omitempty"`
 	GeoLatitude    float64   `json:"geo_latitude,omitempty"`
 	Disposition    string    `json:"disposition"`
+	ReasonCode     string    `json:"reason_code,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	Time           string    `json:"time"`
 }
@@ -239,9 +241,63 @@ type AccessLogFilter struct {
 	URI          string
 	Status       int
 	Disposition  string
+	ReasonCode   string
 	Since        time.Time
 	Until        time.Time
 	Pagination   Pagination
+}
+
+type DeniedRecord struct {
+	ID                     int64     `json:"id"`
+	RequestID              string    `json:"request_id"`
+	SiteID                 int64     `json:"application_id"`
+	ListenerPort           int       `json:"listener_port,omitempty"`
+	Scheme                 string    `json:"scheme,omitempty"`
+	Host                   string    `json:"host"`
+	Method                 string    `json:"method"`
+	URI                    string    `json:"uri"`
+	Status                 int       `json:"status"`
+	UpstreamStatus         int       `json:"upstream_status"`
+	DurationMS             int64     `json:"duration_ms"`
+	ClientIP               string    `json:"client_ip"`
+	Disposition            string    `json:"disposition"`
+	ReasonCode             string    `json:"reason_code,omitempty"`
+	Reason                 string    `json:"reason,omitempty"`
+	ExplanationSource      string    `json:"explanation_source"`
+	CorrelationType        string    `json:"correlation_type"`
+	WAFEventID             int64     `json:"waf_event_id,omitempty"`
+	EventType              string    `json:"event_type,omitempty"`
+	Module                 string    `json:"module,omitempty"`
+	Category               string    `json:"category,omitempty"`
+	RuleID                 int64     `json:"rule_id,omitempty"`
+	RuleName               string    `json:"rule_name,omitempty"`
+	Action                 string    `json:"action,omitempty"`
+	AttackType             string    `json:"attack_type,omitempty"`
+	Summary                string    `json:"summary,omitempty"`
+	DynamicBanReason       string    `json:"dynamic_ban_reason,omitempty"`
+	DynamicBanSource       string    `json:"dynamic_ban_source,omitempty"`
+	DynamicBanStatus       string    `json:"dynamic_ban_status,omitempty"`
+	DynamicBanRemainingSec int       `json:"dynamic_ban_remaining_sec,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+	Time                   string    `json:"time"`
+}
+
+type DeniedRecordFilter struct {
+	SiteID        int64
+	ListenerPort  int
+	Scheme        string
+	Host          string
+	ClientIP      string
+	Method        string
+	URI           string
+	Status        int
+	Disposition   string
+	Module        string
+	Action        string
+	TriggerSource string
+	Since         time.Time
+	Until         time.Time
+	Pagination    Pagination
 }
 
 type WAFEvent struct {

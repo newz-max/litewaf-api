@@ -16,13 +16,13 @@ func (s *PostgresStore) CreateAccessLog(ctx context.Context, item model.AccessLo
 		INSERT INTO access_logs (
 			request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
 			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
-			geo_longitude, geo_latitude, disposition, created_at
+			geo_longitude, geo_latitude, disposition, reason_code, reason, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, COALESCE($20::timestamptz, now()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, COALESCE($22::timestamptz, now()))
 		RETURNING id, created_at`,
 		item.RequestID, item.SiteID, item.ListenerPort, item.Scheme, item.Host, item.Method, item.URI, item.Status, item.UpstreamStatus,
 		item.DurationMS, item.ClientIP, item.UserAgent, item.Referer, item.GeoCountry, item.GeoRegion, item.GeoCity,
-		item.GeoLongitude, item.GeoLatitude, item.Disposition, createdAt).
+		item.GeoLongitude, item.GeoLatitude, item.Disposition, item.ReasonCode, item.Reason, createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	return item, err
@@ -37,7 +37,7 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
 			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
-			geo_longitude, geo_latitude, disposition, created_at
+			geo_longitude, geo_latitude, disposition, reason_code, reason, created_at
 		FROM access_logs
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2::integer = 0 OR listener_port = $2)
@@ -48,12 +48,13 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 			AND ($7 = '' OR uri ILIKE '%' || $7 || '%')
 			AND ($8::integer = 0 OR status = $8)
 			AND ($9 = '' OR disposition = $9)
-			AND ($10::timestamptz IS NULL OR created_at >= $10)
-			AND ($11::timestamptz IS NULL OR created_at <= $11)
+			AND ($10 = '' OR reason_code = $10)
+			AND ($11::timestamptz IS NULL OR created_at >= $11)
+			AND ($12::timestamptz IS NULL OR created_at <= $12)
 		ORDER BY id DESC
-		LIMIT $12 OFFSET $13`,
+		LIMIT $13 OFFSET $14`,
 		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
-		nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
+		filter.ReasonCode, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +65,100 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 		if err := rows.Scan(
 			&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus,
 			&item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Referer, &item.GeoCountry, &item.GeoRegion, &item.GeoCity,
-			&item.GeoLongitude, &item.GeoLatitude, &item.Disposition, &item.CreatedAt,
+			&item.GeoLongitude, &item.GeoLatitude, &item.Disposition, &item.ReasonCode, &item.Reason, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.Time = item.CreatedAt.Format(time.RFC3339)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) ListDeniedRecords(ctx context.Context, filter model.DeniedRecordFilter) ([]model.DeniedRecord, error) {
+	limit := normalizeLimit(filter.Pagination.Limit)
+	offset := filter.Pagination.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			a.id, a.request_id, a.site_id, a.listener_port, a.scheme, a.host, a.method, a.uri,
+			a.status, a.upstream_status, a.duration_ms, a.client_ip, a.disposition,
+			a.reason_code, a.reason,
+			CASE
+				WHEN w.id IS NOT NULL THEN 'waf-event'
+				WHEN d.id IS NOT NULL THEN 'dynamic-ban'
+				WHEN a.reason_code <> '' OR a.reason <> '' THEN 'access-log'
+				ELSE 'unclassified'
+			END AS explanation_source,
+			CASE
+				WHEN w.id IS NOT NULL THEN 'request-id'
+				WHEN d.id IS NOT NULL THEN 'fallback'
+				ELSE 'none'
+			END AS correlation_type,
+			COALESCE(w.id, 0), COALESCE(w.event_type, ''), COALESCE(w.module, ''), COALESCE(w.category, ''),
+			COALESCE(w.rule_id, 0), COALESCE(w.rule_name, ''), COALESCE(w.action, ''), COALESCE(w.attack_type, ''),
+			COALESCE(w.summary, ''),
+			COALESCE(d.ban_reason, ''), COALESCE(d.source, ''), COALESCE(d.status, ''), COALESCE(d.ban_remaining_sec, 0),
+			a.created_at
+		FROM access_logs a
+		LEFT JOIN LATERAL (
+			SELECT id, event_type, module, category, rule_id, rule_name, action, attack_type, summary
+			FROM waf_events
+			WHERE request_id = a.request_id AND a.request_id <> ''
+			ORDER BY id DESC
+			LIMIT 1
+		) w ON true
+		LEFT JOIN LATERAL (
+			SELECT id, ban_reason, source, status, ban_remaining_sec, updated_at
+			FROM dynamic_bans
+			WHERE site_id = a.site_id
+				AND listener_port = a.listener_port
+				AND scheme = a.scheme
+				AND client_ip = a.client_ip
+				AND (a.created_at BETWEEN created_at AND expires_at OR (status = 'active' AND expires_at > now()))
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+		) d ON w.id IS NULL
+		WHERE a.disposition IN ('blocked', 'rejected')
+			AND ($1::bigint = 0 OR a.site_id = $1)
+			AND ($2::integer = 0 OR a.listener_port = $2)
+			AND ($3 = '' OR a.scheme = $3)
+			AND ($4 = '' OR a.host = $4)
+			AND ($5 = '' OR a.client_ip = $5)
+			AND ($6 = '' OR a.method = $6)
+			AND ($7 = '' OR a.uri ILIKE '%' || $7 || '%')
+			AND ($8::integer = 0 OR a.status = $8)
+			AND ($9 = '' OR a.disposition = $9)
+			AND ($10::timestamptz IS NULL OR a.created_at >= $10)
+			AND ($11::timestamptz IS NULL OR a.created_at <= $11)
+			AND ($12 = '' OR COALESCE(w.module, '') = $12)
+			AND ($13 = '' OR COALESCE(w.action, '') = $13)
+			AND ($14 = '' OR CASE
+				WHEN w.id IS NOT NULL THEN 'waf-event'
+				WHEN d.id IS NOT NULL THEN 'dynamic-ban'
+				WHEN a.reason_code <> '' OR a.reason <> '' THEN 'access-log'
+				ELSE 'unclassified'
+			END = $14)
+		ORDER BY a.id DESC
+		LIMIT $15 OFFSET $16`,
+		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
+		nullableTime(filter.Since), nullableTime(filter.Until), filter.Module, filter.Action, filter.TriggerSource, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []model.DeniedRecord
+	for rows.Next() {
+		var item model.DeniedRecord
+		if err := rows.Scan(
+			&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI,
+			&item.Status, &item.UpstreamStatus, &item.DurationMS, &item.ClientIP, &item.Disposition,
+			&item.ReasonCode, &item.Reason, &item.ExplanationSource, &item.CorrelationType,
+			&item.WAFEventID, &item.EventType, &item.Module, &item.Category, &item.RuleID, &item.RuleName, &item.Action, &item.AttackType,
+			&item.Summary, &item.DynamicBanReason, &item.DynamicBanSource, &item.DynamicBanStatus, &item.DynamicBanRemainingSec,
+			&item.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

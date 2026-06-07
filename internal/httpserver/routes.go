@@ -92,6 +92,7 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("POST /api/v1/ingest/access-logs", handlers.requireGatewayIngestion(handlers.ingestAccessLog))
 	mux.HandleFunc("POST /api/v1/ingest/waf-events", handlers.requireGatewayIngestion(handlers.ingestWAFEvent))
 	mux.HandleFunc("GET /api/v1/access-logs", handlers.require(permissionRead, handlers.listAccessLogs))
+	mux.HandleFunc("GET /api/v1/blocked-rejected-records", handlers.require(permissionRead, handlers.listDeniedRecords))
 	mux.HandleFunc("GET /api/v1/attack-logs", handlers.require(permissionRead, handlers.listAttackLogs))
 	mux.HandleFunc("GET /api/v1/observability/summary", handlers.require(permissionRead, handlers.observabilitySummary))
 	mux.HandleFunc("GET /api/v1/reports/statistics", handlers.require(permissionRead, handlers.statisticsReport))

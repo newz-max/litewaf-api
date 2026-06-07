@@ -47,6 +47,15 @@ func (h handlers) listAccessLogs(w http.ResponseWriter, r *http.Request) {
 	h.writeList(w, items, err)
 }
 
+func (h handlers) listDeniedRecords(w http.ResponseWriter, r *http.Request) {
+	filter, ok := parseDeniedRecordFilter(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.app.Store.ListDeniedRecords(r.Context(), filter)
+	h.writeList(w, items, err)
+}
+
 func (h handlers) listAttackLogs(w http.ResponseWriter, r *http.Request) {
 	filter, ok := parseWAFEventFilter(w, r)
 	if !ok {
@@ -134,6 +143,8 @@ func normalizeAccessLog(item *model.AccessLog) {
 	item.GeoRegion = strings.TrimSpace(item.GeoRegion)
 	item.GeoCity = strings.TrimSpace(item.GeoCity)
 	item.Disposition = strings.ToLower(strings.TrimSpace(item.Disposition))
+	item.ReasonCode = strings.ToLower(strings.TrimSpace(item.ReasonCode))
+	item.Reason = boundedSummary(strings.TrimSpace(item.Reason), 512)
 }
 
 func validateAccessLog(item model.AccessLog) error {
@@ -228,6 +239,7 @@ func parseAccessLogFilter(w http.ResponseWriter, r *http.Request) (model.AccessL
 		Method:      strings.ToUpper(strings.TrimSpace(query.Get("method"))),
 		URI:         strings.TrimSpace(query.Get("uri")),
 		Disposition: strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
+		ReasonCode:  strings.ToLower(strings.TrimSpace(query.Get("reason_code"))),
 	}
 	var ok bool
 	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
@@ -248,6 +260,42 @@ func parseAccessLogFilter(w http.ResponseWriter, r *http.Request) (model.AccessL
 	}
 	if filter.Pagination, ok = parsePagination(w, r); !ok {
 		return model.AccessLogFilter{}, false
+	}
+	return filter, true
+}
+
+func parseDeniedRecordFilter(w http.ResponseWriter, r *http.Request) (model.DeniedRecordFilter, bool) {
+	query := r.URL.Query()
+	filter := model.DeniedRecordFilter{
+		Host:          strings.ToLower(strings.TrimSpace(query.Get("host"))),
+		Scheme:        strings.ToLower(strings.TrimSpace(query.Get("scheme"))),
+		ClientIP:      strings.TrimSpace(query.Get("client_ip")),
+		Method:        strings.ToUpper(strings.TrimSpace(query.Get("method"))),
+		URI:           strings.TrimSpace(query.Get("uri")),
+		Disposition:   strings.ToLower(strings.TrimSpace(query.Get("disposition"))),
+		Module:        strings.ToLower(strings.TrimSpace(query.Get("module"))),
+		Action:        strings.ToLower(strings.TrimSpace(query.Get("action"))),
+		TriggerSource: strings.ToLower(strings.TrimSpace(query.Get("trigger_source"))),
+	}
+	var ok bool
+	if filter.SiteID, ok = parseApplicationIDQuery(w, query); !ok {
+		return model.DeniedRecordFilter{}, false
+	}
+	listenerPort, ok := parseOptionalInt64(w, query.Get("listener_port"), "listener_port")
+	if !ok {
+		return model.DeniedRecordFilter{}, false
+	}
+	filter.ListenerPort = int(listenerPort)
+	status, ok := parseOptionalInt64(w, query.Get("status"), "status")
+	if !ok {
+		return model.DeniedRecordFilter{}, false
+	}
+	filter.Status = int(status)
+	if filter.Since, filter.Until, ok = parseTimeRange(w, r); !ok {
+		return model.DeniedRecordFilter{}, false
+	}
+	if filter.Pagination, ok = parsePagination(w, r); !ok {
+		return model.DeniedRecordFilter{}, false
 	}
 	return filter, true
 }

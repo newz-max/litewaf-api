@@ -231,6 +231,8 @@ CREATE TABLE IF NOT EXISTS access_logs (
 	geo_longitude DOUBLE PRECISION NOT NULL DEFAULT 0,
 	geo_latitude DOUBLE PRECISION NOT NULL DEFAULT 0,
 	disposition TEXT NOT NULL DEFAULT '',
+	reason_code TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -242,6 +244,8 @@ ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_region TEXT NOT NULL DEFAUL
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_city TEXT NOT NULL DEFAULT '';
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_longitude DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_latitude DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS reason_code TEXT NOT NULL DEFAULT '';
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_access_logs_site_id ON access_logs (site_id);
@@ -249,6 +253,7 @@ CREATE INDEX IF NOT EXISTS idx_access_logs_listener ON access_logs (site_id, lis
 CREATE INDEX IF NOT EXISTS idx_access_logs_client_ip ON access_logs (client_ip);
 CREATE INDEX IF NOT EXISTS idx_access_logs_status ON access_logs (status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_disposition ON access_logs (disposition);
+CREATE INDEX IF NOT EXISTS idx_access_logs_reason_code ON access_logs (reason_code);
 CREATE INDEX IF NOT EXISTS idx_access_logs_geo_country ON access_logs (geo_country);
 CREATE INDEX IF NOT EXISTS idx_access_logs_geo_region ON access_logs (geo_region);
 

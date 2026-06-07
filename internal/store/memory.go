@@ -601,6 +601,70 @@ func (s *MemoryStore) ListAccessLogs(_ context.Context, filter model.AccessLogFi
 	return paginate(items, filter.Pagination), nil
 }
 
+func (s *MemoryStore) ListDeniedRecords(_ context.Context, filter model.DeniedRecordFilter) ([]model.DeniedRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := time.Now().UTC()
+	items := make([]model.DeniedRecord, 0)
+	for _, item := range s.accessLogs {
+		if !accessLogMatchesDeniedFilter(item, filter) {
+			continue
+		}
+		record := deniedRecordFromAccessLog(item)
+		if event, ok := s.findWAFEventForAccessLogLocked(item); ok {
+			record = deniedRecordWithWAFEvent(record, event)
+		} else if ban, ok := s.findDynamicBanForAccessLogLocked(item, now); ok {
+			record = deniedRecordWithDynamicBan(record, ban)
+		} else if record.ReasonCode != "" || record.Reason != "" {
+			record.ExplanationSource = "access-log"
+			record.CorrelationType = "none"
+		}
+		if deniedRecordMatches(record, filter) {
+			items = append(items, record)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	return paginate(items, filter.Pagination), nil
+}
+
+func (s *MemoryStore) findWAFEventForAccessLogLocked(item model.AccessLog) (model.WAFEvent, bool) {
+	if item.RequestID == "" {
+		return model.WAFEvent{}, false
+	}
+	var matched model.WAFEvent
+	for _, event := range s.wafEvents {
+		if event.RequestID != item.RequestID {
+			continue
+		}
+		if matched.ID == 0 || event.ID > matched.ID {
+			matched = event
+		}
+	}
+	return matched, matched.ID > 0
+}
+
+func (s *MemoryStore) findDynamicBanForAccessLogLocked(item model.AccessLog, now time.Time) (model.DynamicBan, bool) {
+	var matched model.DynamicBan
+	for _, ban := range s.dynamicBans {
+		if ban.SiteID != item.SiteID || ban.ClientIP != item.ClientIP {
+			continue
+		}
+		if ban.ListenerPort != item.ListenerPort || ban.Scheme != item.Scheme {
+			continue
+		}
+		if item.CreatedAt.Before(ban.CreatedAt) || item.CreatedAt.After(ban.ExpiresAt) {
+			active := dynamicBanWithStatus(ban, now)
+			if active.Status != "active" {
+				continue
+			}
+		}
+		if matched.ID == 0 || ban.UpdatedAt.After(matched.UpdatedAt) || (ban.UpdatedAt.Equal(matched.UpdatedAt) && ban.ID > matched.ID) {
+			matched = dynamicBanWithStatus(ban, now)
+		}
+	}
+	return matched, matched.ID > 0
+}
+
 func (s *MemoryStore) CreateWAFEvent(_ context.Context, item model.WAFEvent) (model.WAFEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1998,6 +2062,9 @@ func accessLogMatches(item model.AccessLog, filter model.AccessLogFilter) bool {
 		return false
 	}
 	if filter.Disposition != "" && item.Disposition != filter.Disposition {
+		return false
+	}
+	if filter.ReasonCode != "" && item.ReasonCode != filter.ReasonCode {
 		return false
 	}
 	return summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until)

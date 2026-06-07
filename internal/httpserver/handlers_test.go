@@ -771,6 +771,84 @@ func TestObservabilityIngestionAndQueries(t *testing.T) {
 	}
 }
 
+func TestBlockedRejectedRecordsExplainDeniedTraffic(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	ingest := func(path string, body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
+		req.Header.Set("Authorization", "Bearer gateway-secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("ingest %s status = %d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	ingest("/api/v1/ingest/access-logs", `{"request_id":"denied-waf","application_id":2,"listener_port":443,"scheme":"https","host":"app.example.test","method":"GET","uri":"/login","status":403,"duration_ms":4,"client_ip":"192.0.2.20","user_agent":"curl","disposition":"blocked"}`)
+	ingest("/api/v1/ingest/waf-events", `{"request_id":"denied-waf","application_id":2,"listener_port":443,"scheme":"https","host":"app.example.test","event_type":"rule","rule_id":17,"rule_type":"sqli","target":"args","module":"attack-protection","category":"managed","rule_name":"SQLi block","attack_type":"sqli","action":"block","disposition":"blocked","client_ip":"192.0.2.20","method":"GET","uri":"/login","summary":"union select"}`)
+
+	ingest("/api/v1/ingest/waf-events", `{"request_id":"ban-source","application_id":3,"listener_port":80,"scheme":"http","event_type":"dynamic-ban","rule_id":3,"rule_type":"cc","target":"path","module":"cc-protection","category":"rate-limit","rule_name":"Login ban","action":"block","disposition":"blocked","client_ip":"192.0.2.30","method":"POST","uri":"/api/login","summary":"temporary ban created","ban_reason":"cc threshold","ban_duration_sec":600,"ban_remaining_sec":600}`)
+	ingest("/api/v1/ingest/access-logs", `{"request_id":"denied-ban","application_id":3,"listener_port":80,"scheme":"http","host":"ban.example.test","method":"POST","uri":"/api/login","status":403,"duration_ms":3,"client_ip":"192.0.2.30","user_agent":"curl","disposition":"blocked"}`)
+
+	ingest("/api/v1/ingest/access-logs", `{"request_id":"denied-access-reason","application_id":4,"host":"missing.example.test","method":"GET","uri":"/","status":404,"duration_ms":1,"client_ip":"192.0.2.40","user_agent":"curl","disposition":"rejected","reason_code":"unknown-host","reason":"site not configured"}`)
+	ingest("/api/v1/ingest/access-logs", `{"request_id":"denied-unclassified","application_id":5,"host":"plain.example.test","method":"GET","uri":"/blocked","status":403,"duration_ms":2,"client_ip":"192.0.2.50","user_agent":"curl","disposition":"blocked"}`)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/blocked-rejected-records", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("denied records status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Items []model.DeniedRecord `json:"items"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode denied records: %v", err)
+	}
+	byRequestID := map[string]model.DeniedRecord{}
+	for _, item := range response.Items {
+		byRequestID[item.RequestID] = item
+	}
+	if len(byRequestID) != 4 {
+		t.Fatalf("expected four denied records, got %+v", response.Items)
+	}
+	if item := byRequestID["denied-waf"]; item.ExplanationSource != "waf-event" || item.CorrelationType != "request-id" || item.Module != "attack-protection" || item.RuleID != 17 || item.Reason != "union select" {
+		t.Fatalf("unexpected WAF denied record: %+v", item)
+	}
+	if item := byRequestID["denied-ban"]; item.ExplanationSource != "dynamic-ban" || item.CorrelationType != "fallback" || item.DynamicBanReason != "cc threshold" {
+		t.Fatalf("unexpected dynamic-ban denied record: %+v", item)
+	}
+	if item := byRequestID["denied-access-reason"]; item.ExplanationSource != "access-log" || item.ReasonCode != "unknown-host" || item.Reason != "site not configured" {
+		t.Fatalf("unexpected access-log denied record: %+v", item)
+	}
+	if item := byRequestID["denied-unclassified"]; item.ExplanationSource != "unclassified" || item.Module != "" || item.RuleID != 0 {
+		t.Fatalf("unexpected unclassified denied record: %+v", item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/blocked-rejected-records?module=attack-protection&action=block&trigger_source=waf-event", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered denied records status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	response.Items = nil
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode filtered denied records: %v", err)
+	}
+	if len(response.Items) != 1 || response.Items[0].RequestID != "denied-waf" {
+		t.Fatalf("unexpected filtered denied records: %+v", response.Items)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/blocked-rejected-records", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized denied records status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestApplicationScopedFieldsUseApplicationIDContract(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

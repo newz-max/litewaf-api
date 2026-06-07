@@ -60,6 +60,7 @@ type Store interface {
 
 	CreateAccessLog(context.Context, model.AccessLog) (model.AccessLog, error)
 	ListAccessLogs(context.Context, model.AccessLogFilter) ([]model.AccessLog, error)
+	ListDeniedRecords(context.Context, model.DeniedRecordFilter) ([]model.DeniedRecord, error)
 	CreateWAFEvent(context.Context, model.WAFEvent) (model.WAFEvent, error)
 	ListWAFEvents(context.Context, model.WAFEventFilter) ([]model.WAFEvent, error)
 	GetObservabilitySummary(context.Context, model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error)

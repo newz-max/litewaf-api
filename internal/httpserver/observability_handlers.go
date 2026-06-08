@@ -20,6 +20,7 @@ func (h handlers) ingestAccessLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	h.resolveAccessLogGeo(&input)
 	item, err := h.app.Store.CreateAccessLog(r.Context(), input)
 	h.writeCreated(w, item, err)
 }
@@ -142,9 +143,51 @@ func normalizeAccessLog(item *model.AccessLog) {
 	item.GeoCountry = strings.TrimSpace(item.GeoCountry)
 	item.GeoRegion = strings.TrimSpace(item.GeoRegion)
 	item.GeoCity = strings.TrimSpace(item.GeoCity)
+	item.GeoDistrict = strings.TrimSpace(item.GeoDistrict)
+	item.GeoSource = strings.TrimSpace(item.GeoSource)
+	item.GeoSourceVersion = strings.TrimSpace(item.GeoSourceVersion)
+	item.GeoUnresolvedReason = strings.TrimSpace(item.GeoUnresolvedReason)
 	item.Disposition = strings.ToLower(strings.TrimSpace(item.Disposition))
 	item.ReasonCode = strings.ToLower(strings.TrimSpace(item.ReasonCode))
 	item.Reason = boundedSummary(strings.TrimSpace(item.Reason), 512)
+}
+
+func (h handlers) resolveAccessLogGeo(item *model.AccessLog) {
+	item.GeoCountry = ""
+	item.GeoRegion = ""
+	item.GeoCity = ""
+	item.GeoDistrict = ""
+	item.GeoLongitude = 0
+	item.GeoLatitude = 0
+	item.GeoResolved = false
+	item.GeoSource = ""
+	item.GeoSourceVersion = ""
+	item.GeoUnresolvedReason = ""
+	if h.app.GeoIPResolver == nil {
+		item.GeoUnresolvedReason = "geoip-database-not-configured"
+		return
+	}
+	result := h.app.GeoIPResolver.Resolve(item.ClientIP)
+	item.GeoResolved = result.Resolved
+	item.GeoCountry = firstNonEmptyString(result.Country, result.CountryCode)
+	item.GeoRegion = firstNonEmptyString(result.Region, result.RegionCode)
+	item.GeoCity = result.City
+	item.GeoDistrict = result.District
+	item.GeoLongitude = result.Longitude
+	item.GeoLatitude = result.Latitude
+	item.GeoSource = result.Source
+	item.GeoSourceVersion = result.SourceVersion
+	item.GeoUnresolvedReason = result.UnresolvedReason
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func validateAccessLog(item model.AccessLog) error {

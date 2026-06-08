@@ -228,8 +228,13 @@ CREATE TABLE IF NOT EXISTS access_logs (
 	geo_country TEXT NOT NULL DEFAULT '',
 	geo_region TEXT NOT NULL DEFAULT '',
 	geo_city TEXT NOT NULL DEFAULT '',
+	geo_district TEXT NOT NULL DEFAULT '',
 	geo_longitude DOUBLE PRECISION NOT NULL DEFAULT 0,
 	geo_latitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+	geo_resolved BOOLEAN NOT NULL DEFAULT false,
+	geo_source TEXT NOT NULL DEFAULT '',
+	geo_source_version TEXT NOT NULL DEFAULT '',
+	geo_unresolved_reason TEXT NOT NULL DEFAULT '',
 	disposition TEXT NOT NULL DEFAULT '',
 	reason_code TEXT NOT NULL DEFAULT '',
 	reason TEXT NOT NULL DEFAULT '',
@@ -242,8 +247,13 @@ ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS referer TEXT NOT NULL DEFAULT '
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_country TEXT NOT NULL DEFAULT '';
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_region TEXT NOT NULL DEFAULT '';
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_city TEXT NOT NULL DEFAULT '';
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_district TEXT NOT NULL DEFAULT '';
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_longitude DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_latitude DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_resolved BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_source_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS geo_unresolved_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS reason_code TEXT NOT NULL DEFAULT '';
 ALTER TABLE access_logs ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT '';
 
@@ -256,6 +266,7 @@ CREATE INDEX IF NOT EXISTS idx_access_logs_disposition ON access_logs (dispositi
 CREATE INDEX IF NOT EXISTS idx_access_logs_reason_code ON access_logs (reason_code);
 CREATE INDEX IF NOT EXISTS idx_access_logs_geo_country ON access_logs (geo_country);
 CREATE INDEX IF NOT EXISTS idx_access_logs_geo_region ON access_logs (geo_region);
+CREATE INDEX IF NOT EXISTS idx_access_logs_geo_resolved ON access_logs (geo_resolved);
 
 CREATE TABLE IF NOT EXISTS waf_events (
 	id BIGSERIAL PRIMARY KEY,

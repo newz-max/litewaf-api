@@ -61,6 +61,18 @@ func testServer(t *testing.T) http.Handler {
 	return mux
 }
 
+func writeTestGeoIPDatabase(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "geoip.csv")
+	data := "cidr,country_code,country,region,city,district,longitude,latitude,source,version\n" +
+		"8.8.8.0/24,CN,中国,北京,北京,朝阳区,116.4,39.9,test-db,2026\n" +
+		"1.1.1.0/24,SG,新加坡,,,,103.8,1.3,test-db,2026\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatalf("write test geoip database: %v", err)
+	}
+	return path
+}
+
 func testServerWithConfig(t *testing.T, configure func(*config.Config)) http.Handler {
 	t.Helper()
 	cfg := config.Config{
@@ -1023,14 +1035,16 @@ func TestObservabilityApplicationListenerFields(t *testing.T) {
 }
 
 func TestStatisticsReportAggregatesRealLogs(t *testing.T) {
-	handler := testServer(t)
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GeoIPDatabasePath = writeTestGeoIPDatabase(t)
+	})
 	token := adminToken(t, handler)
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	accessPayloads := []string{
-		`{"request_id":"report-1","application_id":5,"host":"app.example.test","method":"GET","uri":"/","status":200,"duration_ms":12,"client_ip":"198.51.100.10","user_agent":"Mozilla/5.0 (Windows NT 10.0) Chrome/120.0","referer":"https://search.example.com/result","geo_country":"中国","geo_region":"北京","geo_city":"北京","geo_longitude":116.4,"geo_latitude":39.9,"disposition":"proxied","created_at":"` + now + `"}`,
-		`{"request_id":"report-2","application_id":5,"host":"app.example.test","method":"GET","uri":"/static/app.js","status":404,"duration_ms":5,"client_ip":"198.51.100.11","user_agent":"curl/8.0","geo_country":"新加坡","geo_longitude":103.8,"geo_latitude":1.3,"disposition":"blocked","created_at":"` + now + `"}`,
-		`{"request_id":"report-other","application_id":6,"host":"other.example.test","method":"GET","uri":"/","status":200,"duration_ms":5,"client_ip":"198.51.100.12","user_agent":"curl/8.0","disposition":"proxied","created_at":"` + now + `"}`,
+		`{"request_id":"report-1","application_id":5,"host":"app.example.test","method":"GET","uri":"/","status":200,"duration_ms":12,"client_ip":"8.8.8.8","user_agent":"Mozilla/5.0 (Windows NT 10.0) Chrome/120.0","referer":"https://search.example.com/result","geo_country":"伪造国家","geo_region":"伪造省","geo_city":"伪造市","geo_longitude":1,"geo_latitude":2,"disposition":"proxied","created_at":"` + now + `"}`,
+		`{"request_id":"report-2","application_id":5,"host":"app.example.test","method":"GET","uri":"/static/app.js","status":404,"duration_ms":5,"client_ip":"1.1.1.1","user_agent":"curl/8.0","geo_country":"伪造国家","geo_longitude":1,"geo_latitude":2,"disposition":"blocked","created_at":"` + now + `"}`,
+		`{"request_id":"report-other","application_id":6,"host":"other.example.test","method":"GET","uri":"/","status":200,"duration_ms":5,"client_ip":"9.9.9.9","user_agent":"curl/8.0","disposition":"proxied","created_at":"` + now + `"}`,
 	}
 	for _, payload := range accessPayloads {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(payload))
@@ -1071,11 +1085,79 @@ func TestStatisticsReportAggregatesRealLogs(t *testing.T) {
 	if response.Item.Geo.Scope != "world" || response.Item.Geo.MapView != "3d" || len(response.Item.Geo.Ranking) != 2 {
 		t.Fatalf("unexpected world geo report: %+v", response.Item.Geo)
 	}
+	if response.Item.Geo.Ranking[0].Name == "伪造国家" || response.Item.Geo.Ranking[1].Name == "伪造国家" {
+		t.Fatalf("statistics report used caller-supplied geo fields: %+v", response.Item.Geo.Ranking)
+	}
 	if len(response.Item.Referers.Domains) != 1 || response.Item.Referers.Domains[0].Key != "search.example.com" {
 		t.Fatalf("unexpected referers: %+v", response.Item.Referers)
 	}
 	if len(response.Item.Clients.Browsers) == 0 || len(response.Item.Statuses) == 0 || len(response.Item.QPS) == 0 {
 		t.Fatalf("expected report breakdowns: %+v", response.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/reports/statistics?application_id=5&range=30d&scope=china&map_view=3d", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statistics china report status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode china statistics report: %v", err)
+	}
+	if response.Item.Geo.Scope != "china" || response.Item.Geo.MapView != "2d" || len(response.Item.Geo.Ranking) != 1 || response.Item.Geo.Ranking[0].Name != "北京" {
+		t.Fatalf("unexpected china geo report: %+v", response.Item.Geo)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/reports/statistics?application_id=5&range=30d&scope=world&metric=blocked", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statistics blocked geo report status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode blocked statistics report: %v", err)
+	}
+	if len(response.Item.Geo.Ranking) != 1 || response.Item.Geo.Ranking[0].Name != "新加坡" {
+		t.Fatalf("unexpected blocked geo report: %+v", response.Item.Geo)
+	}
+}
+
+func TestAccessLogGeoIPIgnoresPayloadGeoAndReportsMissingDatabase(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(`{"request_id":"geo-spoof","application_id":5,"host":"app.example.test","method":"GET","uri":"/","status":200,"duration_ms":12,"client_ip":"8.8.8.8","user_agent":"curl","geo_country":"伪造国家","geo_region":"伪造省","geo_city":"伪造市","geo_longitude":1,"geo_latitude":2,"disposition":"proxied","created_at":"`+now+`"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest spoofed geo status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var createResponse struct {
+		Item model.AccessLog `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
+		t.Fatalf("decode spoofed geo ingest: %v", err)
+	}
+	if createResponse.Item.GeoCountry != "" || createResponse.Item.GeoRegion != "" || createResponse.Item.GeoResolved || createResponse.Item.GeoUnresolvedReason != "geoip-database-not-configured" {
+		t.Fatalf("expected spoofed geo to be ignored with missing database diagnostic, got %+v", createResponse.Item)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/reports/statistics?application_id=5&range=30d&scope=world", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statistics report status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var reportResponse struct {
+		Item model.StatisticsReport `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&reportResponse); err != nil {
+		t.Fatalf("decode missing geoip report: %v", err)
+	}
+	if len(reportResponse.Item.Geo.Ranking) != 0 || len(reportResponse.Item.Geo.Diagnostics) == 0 {
+		t.Fatalf("expected empty geo ranking with diagnostics, got %+v", reportResponse.Item.Geo)
 	}
 }
 

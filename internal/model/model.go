@@ -187,31 +187,36 @@ type Pagination struct {
 }
 
 type AccessLog struct {
-	Event          string    `json:"event,omitempty"`
-	ID             int64     `json:"id"`
-	RequestID      string    `json:"request_id"`
-	SiteID         int64     `json:"application_id"`
-	ListenerPort   int       `json:"listener_port,omitempty"`
-	Scheme         string    `json:"scheme,omitempty"`
-	Host           string    `json:"host"`
-	Method         string    `json:"method"`
-	URI            string    `json:"uri"`
-	Status         int       `json:"status"`
-	UpstreamStatus int       `json:"upstream_status"`
-	DurationMS     int64     `json:"duration_ms"`
-	ClientIP       string    `json:"client_ip"`
-	UserAgent      string    `json:"user_agent"`
-	Referer        string    `json:"referer,omitempty"`
-	GeoCountry     string    `json:"geo_country,omitempty"`
-	GeoRegion      string    `json:"geo_region,omitempty"`
-	GeoCity        string    `json:"geo_city,omitempty"`
-	GeoLongitude   float64   `json:"geo_longitude,omitempty"`
-	GeoLatitude    float64   `json:"geo_latitude,omitempty"`
-	Disposition    string    `json:"disposition"`
-	ReasonCode     string    `json:"reason_code,omitempty"`
-	Reason         string    `json:"reason,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	Time           string    `json:"time"`
+	Event               string    `json:"event,omitempty"`
+	ID                  int64     `json:"id"`
+	RequestID           string    `json:"request_id"`
+	SiteID              int64     `json:"application_id"`
+	ListenerPort        int       `json:"listener_port,omitempty"`
+	Scheme              string    `json:"scheme,omitempty"`
+	Host                string    `json:"host"`
+	Method              string    `json:"method"`
+	URI                 string    `json:"uri"`
+	Status              int       `json:"status"`
+	UpstreamStatus      int       `json:"upstream_status"`
+	DurationMS          int64     `json:"duration_ms"`
+	ClientIP            string    `json:"client_ip"`
+	UserAgent           string    `json:"user_agent"`
+	Referer             string    `json:"referer,omitempty"`
+	GeoCountry          string    `json:"geo_country,omitempty"`
+	GeoRegion           string    `json:"geo_region,omitempty"`
+	GeoCity             string    `json:"geo_city,omitempty"`
+	GeoDistrict         string    `json:"geo_district,omitempty"`
+	GeoLongitude        float64   `json:"geo_longitude,omitempty"`
+	GeoLatitude         float64   `json:"geo_latitude,omitempty"`
+	GeoResolved         bool      `json:"geo_resolved,omitempty"`
+	GeoSource           string    `json:"geo_source,omitempty"`
+	GeoSourceVersion    string    `json:"geo_source_version,omitempty"`
+	GeoUnresolvedReason string    `json:"geo_unresolved_reason,omitempty"`
+	Disposition         string    `json:"disposition"`
+	ReasonCode          string    `json:"reason_code,omitempty"`
+	Reason              string    `json:"reason,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	Time                string    `json:"time"`
 }
 
 func (item *AccessLog) UnmarshalJSON(data []byte) error {

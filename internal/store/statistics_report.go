@@ -57,7 +57,8 @@ func (s *PostgresStore) statisticsAccessLogs(ctx context.Context, filter model.S
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
 			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
-			geo_longitude, geo_latitude, disposition, created_at
+			geo_district, geo_longitude, geo_latitude, geo_resolved, geo_source, geo_source_version,
+			geo_unresolved_reason, disposition, created_at
 		FROM access_logs
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2::timestamptz IS NULL OR created_at >= $2)
@@ -75,7 +76,8 @@ func (s *PostgresStore) statisticsAccessLogs(ctx context.Context, filter model.S
 		if err := rows.Scan(
 			&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus,
 			&item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Referer, &item.GeoCountry, &item.GeoRegion, &item.GeoCity,
-			&item.GeoLongitude, &item.GeoLatitude, &item.Disposition, &item.CreatedAt,
+			&item.GeoDistrict, &item.GeoLongitude, &item.GeoLatitude, &item.GeoResolved, &item.GeoSource, &item.GeoSourceVersion,
+			&item.GeoUnresolvedReason, &item.Disposition, &item.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -168,6 +170,7 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 	visitBuckets := map[time.Time]int64{}
 	blockBuckets := map[time.Time]int64{}
 	geoCounts := map[string]*geoAccumulator{}
+	geoDiagnostics := map[string]int64{}
 	bucket := statisticsBucketDuration(filter.Since, filter.Until)
 
 	for _, item := range accessLogs {
@@ -206,6 +209,9 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 			increment(refererPageCounts, page)
 		}
 		addGeo(geoCounts, item, scope, metric)
+		if !item.GeoResolved && item.GeoUnresolvedReason != "" {
+			increment(geoDiagnostics, item.GeoUnresolvedReason)
+		}
 	}
 
 	for _, item := range wafEvents {
@@ -234,9 +240,15 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 	report.Referers.Domains = topCounts(refererDomainCounts, limit)
 	report.Referers.Pages = topCounts(refererPageCounts, limit)
 	report.Geo.Ranking, report.Geo.Points = geoResults(geoCounts, limit)
-	if len(report.Geo.Ranking) == 0 {
-		report.Geo.Diagnostics = append(report.Geo.Diagnostics, "geo data is unavailable for matched logs")
-		report.Diagnostics = append(report.Diagnostics, "geo data is unavailable for matched logs")
+	for _, diagnostic := range topCounts(geoDiagnostics, limit) {
+		message := "GeoIP unresolved " + diagnostic.Key + ": " + strconv.FormatInt(diagnostic.Count, 10)
+		report.Geo.Diagnostics = append(report.Geo.Diagnostics, message)
+		report.Diagnostics = append(report.Diagnostics, message)
+	}
+	if len(accessLogs) > 0 && len(report.Geo.Ranking) == 0 {
+		message := "GeoIP data is unavailable for matched logs"
+		report.Geo.Diagnostics = append(report.Geo.Diagnostics, message)
+		report.Diagnostics = append(report.Diagnostics, message)
 	}
 	return report
 }
@@ -414,6 +426,9 @@ func externalReferer(raw string, currentHost string) (string, string) {
 }
 
 func addGeo(counts map[string]*geoAccumulator, item model.AccessLog, scope string, metric string) {
+	if !item.GeoResolved {
+		return
+	}
 	key := ""
 	name := ""
 	if scope == "china" {

@@ -96,6 +96,17 @@ CREATE TABLE IF NOT EXISTS access_logs (
 	duration_ms BIGINT NOT NULL DEFAULT 0,
 	client_ip TEXT NOT NULL DEFAULT '',
 	user_agent TEXT NOT NULL DEFAULT '',
+	referer TEXT NOT NULL DEFAULT '',
+	geo_country TEXT NOT NULL DEFAULT '',
+	geo_region TEXT NOT NULL DEFAULT '',
+	geo_city TEXT NOT NULL DEFAULT '',
+	geo_district TEXT NOT NULL DEFAULT '',
+	geo_longitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+	geo_latitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+	geo_resolved BOOLEAN NOT NULL DEFAULT false,
+	geo_source TEXT NOT NULL DEFAULT '',
+	geo_source_version TEXT NOT NULL DEFAULT '',
+	geo_unresolved_reason TEXT NOT NULL DEFAULT '',
 	disposition TEXT NOT NULL DEFAULT '',
 	reason_code TEXT NOT NULL DEFAULT '',
 	reason TEXT NOT NULL DEFAULT '',
@@ -109,6 +120,9 @@ CREATE INDEX IF NOT EXISTS idx_access_logs_client_ip ON access_logs (client_ip);
 CREATE INDEX IF NOT EXISTS idx_access_logs_status ON access_logs (status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_disposition ON access_logs (disposition);
 CREATE INDEX IF NOT EXISTS idx_access_logs_reason_code ON access_logs (reason_code);
+CREATE INDEX IF NOT EXISTS idx_access_logs_geo_country ON access_logs (geo_country);
+CREATE INDEX IF NOT EXISTS idx_access_logs_geo_region ON access_logs (geo_region);
+CREATE INDEX IF NOT EXISTS idx_access_logs_geo_resolved ON access_logs (geo_resolved);
 
 CREATE TABLE IF NOT EXISTS waf_events (
 	id BIGSERIAL PRIMARY KEY,

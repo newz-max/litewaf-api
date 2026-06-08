@@ -16,13 +16,15 @@ func (s *PostgresStore) CreateAccessLog(ctx context.Context, item model.AccessLo
 		INSERT INTO access_logs (
 			request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
 			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
-			geo_longitude, geo_latitude, disposition, reason_code, reason, created_at
+			geo_district, geo_longitude, geo_latitude, geo_resolved, geo_source, geo_source_version,
+			geo_unresolved_reason, disposition, reason_code, reason, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, COALESCE($22::timestamptz, now()))
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, COALESCE($27::timestamptz, now()))
 		RETURNING id, created_at`,
 		item.RequestID, item.SiteID, item.ListenerPort, item.Scheme, item.Host, item.Method, item.URI, item.Status, item.UpstreamStatus,
 		item.DurationMS, item.ClientIP, item.UserAgent, item.Referer, item.GeoCountry, item.GeoRegion, item.GeoCity,
-		item.GeoLongitude, item.GeoLatitude, item.Disposition, item.ReasonCode, item.Reason, createdAt).
+		item.GeoDistrict, item.GeoLongitude, item.GeoLatitude, item.GeoResolved, item.GeoSource, item.GeoSourceVersion,
+		item.GeoUnresolvedReason, item.Disposition, item.ReasonCode, item.Reason, createdAt).
 		Scan(&item.ID, &item.CreatedAt)
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	return item, err
@@ -37,7 +39,8 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
 			duration_ms, client_ip, user_agent, referer, geo_country, geo_region, geo_city,
-			geo_longitude, geo_latitude, disposition, reason_code, reason, created_at
+			geo_district, geo_longitude, geo_latitude, geo_resolved, geo_source, geo_source_version,
+			geo_unresolved_reason, disposition, reason_code, reason, created_at
 		FROM access_logs
 		WHERE ($1::bigint = 0 OR site_id = $1)
 			AND ($2::integer = 0 OR listener_port = $2)
@@ -65,7 +68,8 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 		if err := rows.Scan(
 			&item.ID, &item.RequestID, &item.SiteID, &item.ListenerPort, &item.Scheme, &item.Host, &item.Method, &item.URI, &item.Status, &item.UpstreamStatus,
 			&item.DurationMS, &item.ClientIP, &item.UserAgent, &item.Referer, &item.GeoCountry, &item.GeoRegion, &item.GeoCity,
-			&item.GeoLongitude, &item.GeoLatitude, &item.Disposition, &item.ReasonCode, &item.Reason, &item.CreatedAt,
+			&item.GeoDistrict, &item.GeoLongitude, &item.GeoLatitude, &item.GeoResolved, &item.GeoSource, &item.GeoSourceVersion,
+			&item.GeoUnresolvedReason, &item.Disposition, &item.ReasonCode, &item.Reason, &item.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

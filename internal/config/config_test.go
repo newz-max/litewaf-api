@@ -43,3 +43,13 @@ func TestValidateProductionSkipsNonProduction(t *testing.T) {
 		t.Fatalf("expected non-production configuration to skip validation: %v", err)
 	}
 }
+
+func TestLoadReadsGeoIPConfiguration(t *testing.T) {
+	t.Setenv("LITEWAF_GEOIP_DB_PATH", "/data/litewaf/geoip.csv")
+	t.Setenv("LITEWAF_GEOIP_CACHE_SIZE", "128")
+
+	cfg := Load()
+	if cfg.GeoIPDatabasePath != "/data/litewaf/geoip.csv" || cfg.GeoIPCacheSize != 128 {
+		t.Fatalf("unexpected geoip config: %+v", cfg)
+	}
+}

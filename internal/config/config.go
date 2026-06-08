@@ -29,6 +29,8 @@ type Config struct {
 	AdminRole              string
 	GatewayIngestionToken  string
 	MetricsEnabled         bool
+	GeoIPDatabasePath      string
+	GeoIPCacheSize         int
 }
 
 func Load() Config {
@@ -54,6 +56,8 @@ func Load() Config {
 		AdminRole:              getEnv("LITEWAF_ADMIN_ROLE", "admin"),
 		GatewayIngestionToken:  getEnv("GATEWAY_INGESTION_TOKEN", ""),
 		MetricsEnabled:         getEnvBool("METRICS_ENABLED", false),
+		GeoIPDatabasePath:      getEnv("LITEWAF_GEOIP_DB_PATH", ""),
+		GeoIPCacheSize:         getEnvInt("LITEWAF_GEOIP_CACHE_SIZE", 2048),
 	}
 }
 
@@ -107,6 +111,18 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func normalizeGatewayListenerMode(value string) string {

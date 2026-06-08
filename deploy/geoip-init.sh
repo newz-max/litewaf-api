@@ -6,19 +6,28 @@ ENV_FILE="${LITEWAF_ENV_FILE:-$INSTALL_DIR/.env}"
 DATA_DIR="${LITEWAF_GEOIP_DATA_DIR:-$INSTALL_DIR/data/geoip}"
 CONTAINER_DB_PATH="${LITEWAF_GEOIP_CONTAINER_PATH:-/var/lib/litewaf/geoip/geoip.csv}"
 SOURCE_MONTH="${LITEWAF_GEOIP_DBIP_MONTH:-$(date -u +%Y-%m)}"
+DBIP_EDITION="${LITEWAF_GEOIP_DBIP_EDITION:-country}"
 RESTART_API="${LITEWAF_GEOIP_RESTART_API:-1}"
 PROJECT_NAME="${PROJECT_NAME:-litewaf}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 COMPOSE_FILES="${COMPOSE_FILES:-}"
 
 CUSTOM_SOURCE_URL="${LITEWAF_GEOIP_SOURCE_URL:-}"
-SOURCE_URL="${CUSTOM_SOURCE_URL:-https://download.db-ip.com/free/dbip-city-lite-$SOURCE_MONTH.csv.gz}"
+case "$DBIP_EDITION" in
+  country|city)
+    ;;
+  *)
+    printf 'error: LITEWAF_GEOIP_DBIP_EDITION must be country or city\n' >&2
+    exit 1
+    ;;
+esac
+SOURCE_URL="${CUSTOM_SOURCE_URL:-https://download.db-ip.com/free/dbip-$DBIP_EDITION-lite-$SOURCE_MONTH.csv.gz}"
 
 usage() {
   cat <<'EOF'
 Usage: ./geoip-init.sh [init|update]
 
-Downloads DB-IP Lite City data, converts it to LiteWaf CSV format, updates
+Downloads DB-IP Lite data, converts it to LiteWaf CSV format, updates
 LITEWAF_GEOIP_DB_PATH in .env, and restarts the API container by default.
 
 Environment:
@@ -27,6 +36,7 @@ Environment:
   LITEWAF_GEOIP_CONTAINER_PATH Container CSV path, default /var/lib/litewaf/geoip/geoip.csv.
   LITEWAF_GEOIP_RESTART_API=0  Do not restart the API container.
   LITEWAF_GEOIP_DBIP_MONTH     DB-IP Lite month, default current UTC YYYY-MM.
+  LITEWAF_GEOIP_DBIP_EDITION   country or city, default country.
   LITEWAF_GEOIP_SOURCE_URL     Override the DB-IP CSV.gz download URL.
 EOF
 }
@@ -67,7 +77,7 @@ download_dbip_data() {
   fi
   [ -z "$CUSTOM_SOURCE_URL" ] || die "failed to download configured GeoIP source: $SOURCE_URL"
   if previous_month="$(date -u -d "$SOURCE_MONTH-15 -1 month" +%Y-%m 2>/dev/null)"; then
-    fallback_url="https://download.db-ip.com/free/dbip-city-lite-$previous_month.csv.gz"
+    fallback_url="https://download.db-ip.com/free/dbip-$DBIP_EDITION-lite-$previous_month.csv.gz"
     warn "failed to download $SOURCE_MONTH data; trying $previous_month"
     SOURCE_MONTH="$previous_month"
     SOURCE_URL="$fallback_url"
@@ -91,24 +101,23 @@ set_env_key() {
 append_dbip_csv() {
   input="$1"
   output="$2"
-  gzip -cd "$input" | awk -F, '
+  gzip -cd "$input" | awk -F, -v edition="$DBIP_EDITION" '
     NF >= 3 {
       start_ip=$1
       end_ip=$2
-      country_code=$4
-      region=$5
-      city=$6
-      latitude=$7
-      longitude=$8
+      if (edition == "city") {
+        country_code=$4
+        region=$5
+      } else {
+        country_code=$3
+        region=""
+      }
       gsub(/^"|"$/, "", start_ip)
       gsub(/^"|"$/, "", end_ip)
-      gsub(/^"|"$/, "", country_code)
-      gsub(/^"|"$/, "", city)
-      gsub(/^"|"$/, "", region)
-      gsub(/^"|"$/, "", latitude)
-      gsub(/^"|"$/, "", longitude)
+      gsub(/"/, "", country_code)
+      gsub(/"/, "", region)
       if (start_ip != "" && end_ip != "" && country_code != "" && country_code != "ZZ") {
-        printf "%s,%s,%s,%s,%s,%s,%s,db-ip-lite,dbip-city\n", start_ip, end_ip, country_code, region, city, longitude, latitude
+        printf "%s,%s,%s,%s,,,,db-ip-lite,dbip-city\n", start_ip, end_ip, country_code, region
       }
     }
   ' >>"$output"
@@ -138,6 +147,10 @@ restart_api() {
   info "restarting LiteWaf API to load GeoIP data"
   # shellcheck disable=SC2086
   (cd "$INSTALL_DIR" && docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" $file_args up -d --no-build waf-api)
+  # File content changes in the bind-mounted GeoIP directory do not change the
+  # Compose service definition, so force a process restart to reload the CSV.
+  # shellcheck disable=SC2086
+  (cd "$INSTALL_DIR" && docker compose -p "$PROJECT_NAME" --env-file "$ENV_FILE" $file_args restart waf-api)
 }
 
 cmd="${1:-update}"
@@ -166,12 +179,12 @@ trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 mkdir -p "$DATA_DIR"
 chmod 755 "$DATA_DIR" 2>/dev/null || true
 
-info "downloading DB-IP Lite City data: $SOURCE_MONTH"
-download_dbip_data "$tmp_dir/dbip-city-lite.csv.gz"
+info "downloading DB-IP Lite $DBIP_EDITION data: $SOURCE_MONTH"
+download_dbip_data "$tmp_dir/dbip-lite.csv.gz"
 
 output="$tmp_dir/geoip.csv"
 printf 'start_ip,end_ip,country_code,region,city,longitude,latitude,source,version\n' >"$output"
-append_dbip_csv "$tmp_dir/dbip-city-lite.csv.gz" "$output"
+append_dbip_csv "$tmp_dir/dbip-lite.csv.gz" "$output"
 
 if [ "$(wc -l <"$output" | tr -d ' ')" -le 1 ]; then
   die "downloaded GeoIP data produced no usable rows"
@@ -183,7 +196,7 @@ mv "$DATA_DIR/geoip.csv.tmp" "$DATA_DIR/geoip.csv"
 
 cat >"$DATA_DIR/ATTRIBUTION.txt" <<'EOF'
 LiteWaf GeoIP data source:
-DB-IP Lite City data from https://db-ip.com/db/download/ip-to-city-lite.
+DB-IP Lite data from https://db-ip.com/db/download/.
 License: Creative Commons Attribution 4.0 International (CC BY 4.0).
 Attribution: IP Geolocation by DB-IP (https://db-ip.com/).
 EOF

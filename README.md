@@ -82,7 +82,7 @@ cd /opt/litewaf
 sudo ./litewafctl.sh geoip update
 ```
 
-该命令会下载 DB-IP Lite City 当月数据，转换为 LiteWaf CSV，保存到 `/opt/litewaf/data/geoip/geoip.csv`，写入 `LITEWAF_GEOIP_DB_PATH=/var/lib/litewaf/geoip/geoip.csv`，并重启 API 容器使新数据生效。后续更新继续执行同一命令即可。
+该命令默认会下载 DB-IP Lite Country 当月数据，转换为 LiteWaf CSV，保存到 `/opt/litewaf/data/geoip/geoip.csv`，写入 `LITEWAF_GEOIP_DB_PATH=/var/lib/litewaf/geoip/geoip.csv`，并重启 API 容器使新数据生效。后续更新继续执行同一命令即可。
 
 如果只需要下载和对接 GeoIP，不执行完整安装流程，也可以直接运行初始化脚本：
 
@@ -98,7 +98,16 @@ cd /opt/litewaf
 sudo LITEWAF_GEOIP_DBIP_MONTH=2026-06 ./litewafctl.sh geoip update
 ```
 
-GeoIP 默认数据源为 DB-IP Lite City，许可证为 CC BY 4.0。页面或报表使用该数据时需要保留 DB-IP attribution。
+GeoIP 默认数据源为 DB-IP Lite Country，许可证为 CC BY 4.0。页面或报表使用该数据时需要保留 DB-IP attribution。
+
+如需省/州维度，可使用更大的 City 数据源：
+
+```bash
+cd /opt/litewaf
+sudo LITEWAF_GEOIP_DBIP_EDITION=city ./litewafctl.sh geoip update
+```
+
+City 数据量明显更大，当前版本建议仅在确认服务器资源充足时启用。
 
 ### 手动部署
 

@@ -202,6 +202,7 @@ download_deploy_file docker-compose.prod.yml
 download_deploy_file docker-compose.bridge-range.yml
 download_deploy_file .env.example
 download_deploy_file litewafctl.sh
+download_deploy_file geoip-init.sh
 
 step "Installing deployment files"
 $SUDO mkdir -p "$INSTALL_DIR"
@@ -209,9 +210,10 @@ $SUDO cp "$TMP_DIR/docker-compose.prod.yml" "$INSTALL_DIR/docker-compose.prod.ym
 $SUDO cp "$TMP_DIR/docker-compose.bridge-range.yml" "$INSTALL_DIR/docker-compose.bridge-range.yml"
 $SUDO cp "$TMP_DIR/.env.example" "$INSTALL_DIR/.env.example"
 $SUDO cp "$TMP_DIR/litewafctl.sh" "$INSTALL_DIR/litewafctl.sh"
+$SUDO cp "$TMP_DIR/geoip-init.sh" "$INSTALL_DIR/geoip-init.sh"
 $SUDO chmod 644 "$INSTALL_DIR/docker-compose.prod.yml" "$INSTALL_DIR/docker-compose.bridge-range.yml" "$INSTALL_DIR/.env.example"
-$SUDO chmod 755 "$INSTALL_DIR/litewafctl.sh"
-info "installed docker-compose.prod.yml, docker-compose.bridge-range.yml, .env.example, and litewafctl.sh"
+$SUDO chmod 755 "$INSTALL_DIR/litewafctl.sh" "$INSTALL_DIR/geoip-init.sh"
+info "installed docker-compose.prod.yml, docker-compose.bridge-range.yml, .env.example, litewafctl.sh, and geoip-init.sh"
 
 step "Preparing environment file"
 if [ ! -f "$INSTALL_DIR/.env" ]; then

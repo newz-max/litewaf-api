@@ -55,6 +55,7 @@ services:
       LITEWAF_ADMIN_ROLE: ${LITEWAF_ADMIN_ROLE:-admin}
     volumes:
       - litewaf-gateway-config:/var/lib/litewaf/gateway
+      - ./data/geoip:/var/lib/litewaf/geoip:ro
     depends_on:
       postgres:
         condition: service_healthy

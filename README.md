@@ -31,7 +31,7 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 bash -c "$(curl -fSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
 ```
 
-安装入口会下载 `docker-compose.prod.yml`、`.env.example` 和 `litewafctl.sh` 到 `/opt/litewaf`，生成 `.env`，拉取预构建镜像并等待服务健康。安装过程会输出带时间戳的阶段进度，长时间运行的安装和健康检查步骤会定期输出心跳。默认镜像前缀为 `mmxiaozhi`，默认标签为 `latest`。
+安装入口会下载 `docker-compose.prod.yml`、`.env.example`、`litewafctl.sh` 和 `geoip-init.sh` 到 `/opt/litewaf`，生成 `.env`，拉取预构建镜像并等待服务健康。安装过程会输出带时间戳的阶段进度，长时间运行的安装和健康检查步骤会定期输出心跳。默认镜像前缀为 `mmxiaozhi`，默认标签为 `latest`。
 
 如果服务器访问 GitHub 不稳定，可使用 Gitee 入口：
 
@@ -73,6 +73,33 @@ cd /opt/litewaf
 sudo ./litewafctl.sh upgrade v1.0.1
 ```
 
+### GeoIP 地理数据
+
+统计报表地图需要 GeoIP 数据库。已安装 LiteWaf 的服务器可执行：
+
+```bash
+cd /opt/litewaf
+sudo ./litewafctl.sh geoip update
+```
+
+该命令会下载 DB-IP Lite City 当月数据，转换为 LiteWaf CSV，保存到 `/opt/litewaf/data/geoip/geoip.csv`，写入 `LITEWAF_GEOIP_DB_PATH=/var/lib/litewaf/geoip/geoip.csv`，并重启 API 容器使新数据生效。后续更新继续执行同一命令即可。
+
+如果只需要下载和对接 GeoIP，不执行完整安装流程，也可以直接运行初始化脚本：
+
+```bash
+cd /opt/litewaf
+sudo ./geoip-init.sh init
+```
+
+如需固定某个月份的数据，可指定 `YYYY-MM`：
+
+```bash
+cd /opt/litewaf
+sudo LITEWAF_GEOIP_DBIP_MONTH=2026-06 ./litewafctl.sh geoip update
+```
+
+GeoIP 默认数据源为 DB-IP Lite City，许可证为 CC BY 4.0。页面或报表使用该数据时需要保留 DB-IP attribution。
+
 ### 手动部署
 
 如果需要离线排障或手动检查下载内容，也可以按下面的方式执行：
@@ -86,8 +113,9 @@ BASE_URL="https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy"
 sudo curl -fsSLo docker-compose.prod.yml "$BASE_URL/docker-compose.prod.yml"
 sudo curl -fsSLo .env.example "$BASE_URL/.env.example"
 sudo curl -fsSLo litewafctl.sh "$BASE_URL/litewafctl.sh"
+sudo curl -fsSLo geoip-init.sh "$BASE_URL/geoip-init.sh"
 
-sudo chmod +x litewafctl.sh
+sudo chmod +x litewafctl.sh geoip-init.sh
 sudo cp -n .env.example .env
 
 sudo sed -i \

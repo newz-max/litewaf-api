@@ -22,6 +22,7 @@ Commands:
   restore <archive>         Restore a backup archive into this deployment.
   upgrade <image-tag>       Backup, switch image tag, pull, start, and verify health.
   rollback [state-file]     Roll back to the previous image tag recorded by upgrade.
+  geoip init|update          Download/update GeoIP data and restart the API container.
   health                    Wait for production services to become healthy.
 
 Environment:
@@ -157,6 +158,8 @@ ensure_env() {
   ensure_env_key LITEWAF_METRICS_ENABLED false "$ENV_FILE"
   ensure_env_key LITEWAF_SENSITIVE_HEADERS authorization,cookie,set-cookie "$ENV_FILE"
   ensure_env_key LITEWAF_LOG_VALUE_MAX_LEN 160 "$ENV_FILE"
+  ensure_env_key LITEWAF_GEOIP_DB_PATH "" "$ENV_FILE"
+  ensure_env_key LITEWAF_GEOIP_CACHE_SIZE 2048 "$ENV_FILE"
   ensure_env_key LITEWAF_REAL_IP_TRUSTED_CIDRS "" "$ENV_FILE"
   ensure_env_key LITEWAF_REAL_IP_HEADER X-Forwarded-For "$ENV_FILE"
   ensure_env_key LITEWAF_REAL_IP_RECURSIVE on "$ENV_FILE"
@@ -501,6 +504,22 @@ rollback_stack() {
   warn "if the failed upgrade changed data irreversibly, restore the pre-upgrade backup before serving traffic"
 }
 
+geoip_stack() {
+  action="${1:-update}"
+  case "$action" in
+    init|update)
+      ;;
+    *)
+      die "geoip requires init or update"
+      ;;
+  esac
+  ensure_env
+  if [ ! -x "./geoip-init.sh" ]; then
+    die "geoip-init.sh is missing or not executable; refresh deployment files first"
+  fi
+  PROJECT_NAME="$PROJECT_NAME" COMPOSE_FILE="$COMPOSE_FILE" COMPOSE_FILES="$COMPOSE_FILES" LITEWAF_ENV_FILE="$ENV_FILE" ./geoip-init.sh "$action"
+}
+
 cmd="${1:-}"
 case "$cmd" in
   validate)
@@ -527,6 +546,10 @@ case "$cmd" in
   rollback)
     shift
     rollback_stack "${1:-$STATE_DIR/current.env}"
+    ;;
+  geoip)
+    shift
+    geoip_stack "${1:-update}"
     ;;
   health)
     wait_health

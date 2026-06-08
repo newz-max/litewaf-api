@@ -53,6 +53,7 @@ services:
       LITEWAF_ADMIN_ROLE: ${LITEWAF_ADMIN_ROLE:-admin}
     volumes:
       - litewaf-gateway-config:/var/lib/litewaf/gateway
+      - ./data/geoip:/var/lib/litewaf/geoip:ro
     ports:
       - "${API_LOOPBACK_ADDR:-127.0.0.1}:${API_LOOPBACK_PORT:-18081}:8080"
     depends_on:

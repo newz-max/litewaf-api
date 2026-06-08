@@ -128,6 +128,77 @@ LITEWAF_REAL_IP_RECURSIVE=on
 
 `LITEWAF_REAL_IP_TRUSTED_CIDRS` 只应填写直接连接到网关的可信代理网段；为空时网关使用连接来源地址，不信任客户端提交的转发头。部署后可运行 `litewaf-gateway/scripts/real-ip-smoke.ps1` 或用带 `X-Forwarded-For` 的请求检查访问日志中的 `client_ip`，确认 IP/CIDR 访问控制、CC 计数和临时封禁都使用真实客户端 IP。
 
+### Cloudflare / CDN 前置时恢复真实客户端 IP
+
+当访问链路是 `客户端 -> Cloudflare -> 宿主机 Nginx/宝塔 -> LiteWaf Gateway` 时，源站 TCP 连接来源通常是 Cloudflare 节点。若直接把 `$remote_addr` 传给 LiteWaf，访问日志中的 `client_ip` 会变成 `172.64.0.0/13`、`162.158.0.0/15`、`108.162.192.0/18` 等 Cloudflare 节点 IP，GeoIP 报表可能把中国用户统计成美国、新加坡等 Cloudflare 节点所在地。
+
+这种场景需要分两层恢复真实 IP：
+
+1. 宿主机 Nginx 只信任 Cloudflare 官方网段，并从 `CF-Connecting-IP` 恢复真实客户端 IP。
+2. LiteWaf Gateway 只信任直接连接到 Gateway 的宿主机反向代理或 Docker bridge 地址，并从 `X-Forwarded-For` 读取宿主机 Nginx 已恢复的真实 IP。
+
+宿主机 Nginx 可创建一个 Cloudflare realip include。普通 Nginx 部署可放在 `/etc/nginx/conf.d/litewaf-cloudflare-realip.conf`，宝塔面板可放在 `/www/server/panel/vhost/nginx/litewaf_cloudflare_realip.conf`。下面示例会从 Cloudflare 官方地址生成当前 IP 段：
+
+```bash
+sudo sh -c '{
+  echo "# Generated for LiteWaf real client IP recovery behind Cloudflare."
+  echo "# Source: https://www.cloudflare.com/ips/"
+  curl -fsSL https://www.cloudflare.com/ips-v4 | sed "s/^/set_real_ip_from /;s/$/;/"
+  curl -fsSL https://www.cloudflare.com/ips-v6 | sed "s/^/set_real_ip_from /;s/$/;/"
+  echo "real_ip_header CF-Connecting-IP;"
+  echo "real_ip_recursive on;"
+} > /etc/nginx/conf.d/litewaf-cloudflare-realip.conf'
+```
+
+在代理到 LiteWaf 的 `server` 块中引入该文件，并继续把 Nginx 恢复后的 `$remote_addr` 转发给 Gateway：
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name example.com;
+
+    include /etc/nginx/conf.d/litewaf-cloudflare-realip.conf;
+
+    location / {
+        proxy_pass https://127.0.0.1:19443;
+        proxy_ssl_server_name on;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+    }
+}
+```
+
+宝塔面板的站点配置通常在 `/www/server/panel/vhost/nginx/*.conf`，应把 include 放进每个代理到 LiteWaf 的 `server` 块，而不是只放在某一个 location 中。修改后先执行 `nginx -t`，通过后再 reload：
+
+```bash
+sudo nginx -t
+sudo nginx -s reload
+```
+
+最后配置 LiteWaf Gateway 信任直接连接它的代理地址。若 Gateway 使用 bridge-range 或宿主机 Nginx 通过 Docker bridge 访问容器，通常填写 Docker bridge 网段或更精确的 bridge 网关地址；若 host-network 下宿主机 Nginx 通过 `127.0.0.1` 访问 Gateway，则填写 `127.0.0.1/32`：
+
+```text
+LITEWAF_REAL_IP_TRUSTED_CIDRS=172.16.0.0/12
+LITEWAF_REAL_IP_HEADER=X-Forwarded-For
+LITEWAF_REAL_IP_RECURSIVE=on
+```
+
+如果 Cloudflare 直接连接 LiteWaf Gateway，中间没有宿主机 Nginx，则可以让 Gateway 直接信任 Cloudflare 官方网段，并把 `LITEWAF_REAL_IP_HEADER` 改为 `CF-Connecting-IP`。不要把 `LITEWAF_REAL_IP_TRUSTED_CIDRS` 设为 `0.0.0.0/0` 或 `::/0`，否则客户端可以伪造真实 IP 头影响访问控制、CC 计数、动态封禁和 GeoIP 统计。
+
+验证时先看最近访问日志中的 `client_ip` 是否仍是 Cloudflare 网段：
+
+```bash
+cd /opt/litewaf
+docker exec litewaf-postgres-1 psql -U litewaf -d litewaf -Atc \
+  "select host,client_ip,geo_country,geo_region,geo_city,created_at from access_logs order by id desc limit 20;"
+```
+
+修复成功后，新日志中的 `client_ip` 应该是用户真实公网 IP，GeoIP 会基于该 IP 解析地区。历史日志如果只保存了 Cloudflare 节点 IP，无法在事后恢复成真实用户 IP。
+
 ## 备份和恢复
 
 创建备份：

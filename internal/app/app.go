@@ -18,6 +18,6 @@ func New(cfg config.Config, dataStore store.Store) *App {
 	return &App{
 		Config:        cfg,
 		Store:         dataStore,
-		GeoIPResolver: geoip.NewResolver(geoip.Options{DatabasePath: cfg.GeoIPDatabasePath, CacheSize: cfg.GeoIPCacheSize}),
+		GeoIPResolver: geoip.NewResolver(geoip.Options{DatabasePath: cfg.GeoIPDatabasePath, ChinaDatabasePath: cfg.GeoIPChinaDatabasePath, CacheSize: cfg.GeoIPCacheSize}),
 	}
 }

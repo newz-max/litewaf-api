@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/lionsoul2014/ip2region/binding/golang/xdb"
 )
 
 const (
@@ -22,8 +24,9 @@ const (
 )
 
 type Options struct {
-	DatabasePath string
-	CacheSize    int
+	DatabasePath      string
+	ChinaDatabasePath string
+	CacheSize         int
 }
 
 type Result struct {
@@ -47,13 +50,15 @@ type Resolver interface {
 }
 
 type resolver struct {
-	mu          sync.RWMutex
-	entries     []entry
-	loadReason  string
-	cacheSize   int
-	cache       map[string]Result
-	cacheOrder  []string
-	diagnostics []string
+	mu              sync.RWMutex
+	entries         []entry
+	loadReason      string
+	chinaSearcher   chinaRegionSearcher
+	chinaLoadReason string
+	cacheSize       int
+	cache           map[string]Result
+	cacheOrder      []string
+	diagnostics     []string
 }
 
 type entry struct {
@@ -61,6 +66,10 @@ type entry struct {
 	start  netip.Addr
 	end    netip.Addr
 	result Result
+}
+
+type chinaRegionSearcher interface {
+	Search(ip any) (string, error)
 }
 
 func NewResolver(options Options) Resolver {
@@ -72,18 +81,19 @@ func NewResolver(options Options) Resolver {
 		cacheSize: cacheSize,
 		cache:     map[string]Result{},
 	}
+	r.loadChinaDatabase(strings.TrimSpace(options.ChinaDatabasePath))
 	path := strings.TrimSpace(options.DatabasePath)
 	if path == "" {
 		r.loadReason = ReasonDatabaseNotConfigured
-		r.diagnostics = []string{"GeoIP database is not configured; geographic report data will remain empty."}
+		r.diagnostics = append(r.diagnostics, "GeoIP database is not configured; geographic report data will remain empty.")
 		return r
 	}
 	if err := r.loadCSV(path); err != nil {
 		r.loadReason = ReasonDatabaseLoadFailed
-		r.diagnostics = []string{fmt.Sprintf("GeoIP database could not be loaded: %s.", safeLoadError(err))}
+		r.diagnostics = append(r.diagnostics, fmt.Sprintf("GeoIP database could not be loaded: %s.", safeLoadError(err)))
 		return r
 	}
-	r.diagnostics = []string{fmt.Sprintf("GeoIP database loaded with %d ranges.", len(r.entries))}
+	r.diagnostics = append(r.diagnostics, fmt.Sprintf("GeoIP database loaded with %d ranges.", len(r.entries)))
 	return r
 }
 
@@ -109,14 +119,10 @@ func (r *resolver) Resolve(ip string) Result {
 }
 
 func (r *resolver) resolveAddr(addr netip.Addr) Result {
-	if r.loadReason != "" {
-		return Result{UnresolvedReason: r.loadReason}
-	}
 	if isReserved(addr) {
 		return Result{UnresolvedReason: ReasonReservedIP}
 	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	for _, item := range r.entries {
 		if item.contains(addr) {
 			result := item.result
@@ -124,10 +130,74 @@ func (r *resolver) resolveAddr(addr netip.Addr) Result {
 			if result.Source == "" {
 				result.Source = "geoip-csv"
 			}
-			return result
+			r.mu.RUnlock()
+			return r.enrichChinaResult(addr.String(), result)
 		}
 	}
+	r.mu.RUnlock()
+	if result, ok := r.resolveChinaOnly(addr.String()); ok {
+		return result
+	}
+	if r.loadReason != "" {
+		return Result{UnresolvedReason: r.loadReason}
+	}
 	return Result{UnresolvedReason: ReasonNoMatch}
+}
+
+func (r *resolver) loadChinaDatabase(path string) {
+	if path == "" {
+		return
+	}
+	content, err := xdb.LoadContentFromFile(path)
+	if err != nil {
+		r.chinaLoadReason = ReasonDatabaseLoadFailed
+		r.diagnostics = append(r.diagnostics, fmt.Sprintf("GeoIP China database could not be loaded: %s.", safeLoadError(err)))
+		return
+	}
+	searcher, err := xdb.NewWithBuffer(xdb.IPv4, content)
+	if err != nil {
+		r.chinaLoadReason = ReasonDatabaseLoadFailed
+		r.diagnostics = append(r.diagnostics, "GeoIP China database could not be loaded: invalid or unsupported database.")
+		return
+	}
+	r.chinaSearcher = searcher
+	r.diagnostics = append(r.diagnostics, "GeoIP China database loaded with ip2region IPv4 data.")
+}
+
+func (r *resolver) enrichChinaResult(ip string, result Result) Result {
+	if r.chinaSearcher == nil || !isChinaResult(result) {
+		return result
+	}
+	region, err := r.chinaSearcher.Search(ip)
+	if err != nil {
+		return result
+	}
+	china, ok := parseChinaRegion(region)
+	if !ok {
+		return result
+	}
+	return mergeChinaRegion(result, china)
+}
+
+func (r *resolver) resolveChinaOnly(ip string) (Result, bool) {
+	if r.chinaSearcher == nil {
+		return Result{}, false
+	}
+	region, err := r.chinaSearcher.Search(ip)
+	if err != nil {
+		return Result{}, false
+	}
+	china, ok := parseChinaRegion(region)
+	if !ok {
+		return Result{}, false
+	}
+	return mergeChinaRegion(Result{
+		Resolved:      true,
+		CountryCode:   "CN",
+		Country:       "中国",
+		Source:        "ip2region",
+		SourceVersion: "ip2region-v4",
+	}, china), true
 }
 
 func (r *resolver) cached(key string) (Result, bool) {
@@ -314,6 +384,68 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+type chinaRegion struct {
+	CountryCode string
+	Country     string
+	Region      string
+	City        string
+}
+
+func parseChinaRegion(value string) (chinaRegion, bool) {
+	parts := strings.Split(value, "|")
+	if len(parts) < 3 {
+		return chinaRegion{}, false
+	}
+	country := strings.TrimSpace(parts[0])
+	region := strings.TrimSpace(parts[1])
+	city := strings.TrimSpace(parts[2])
+	countryCode := ""
+	if len(parts) >= 5 {
+		countryCode = strings.ToUpper(strings.TrimSpace(parts[4]))
+	}
+	if countryCode != "CN" && country != "中国" && country != "中华人民共和国" {
+		return chinaRegion{}, false
+	}
+	return chinaRegion{
+		CountryCode: firstNonEmpty(countryCode, "CN"),
+		Country:     firstNonEmpty(country, "中国"),
+		Region:      region,
+		City:        city,
+	}, true
+}
+
+func mergeChinaRegion(result Result, china chinaRegion) Result {
+	result.CountryCode = firstNonEmpty(result.CountryCode, china.CountryCode, "CN")
+	result.Country = firstNonEmpty(result.Country, china.Country, "中国")
+	result.Region = firstNonEmpty(result.Region, china.Region)
+	result.City = firstNonEmpty(result.City, china.City)
+	result.Source = appendToken(result.Source, "ip2region")
+	result.SourceVersion = appendToken(result.SourceVersion, "ip2region-v4")
+	return result
+}
+
+func isChinaResult(result Result) bool {
+	value := strings.ToLower(strings.TrimSpace(firstNonEmpty(result.CountryCode, result.Country)))
+	return value == "cn" || value == "china" || value == "中国" || value == "中华人民共和国"
+}
+
+func appendToken(value string, token string) string {
+	value = strings.TrimSpace(value)
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return value
+	}
+	if value == "" {
+		return token
+	}
+	for _, part := range strings.Split(value, ",") {
+		if strings.TrimSpace(part) == token {
+			return value
+		}
+	}
+	return value + "," + token
 }
 
 func emptyRow(row []string) bool {

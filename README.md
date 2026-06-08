@@ -82,7 +82,7 @@ cd /opt/litewaf
 sudo ./litewafctl.sh geoip update
 ```
 
-该命令默认会下载 DB-IP Lite Country 当月数据，转换为 LiteWaf CSV，保存到 `/opt/litewaf/data/geoip/geoip.csv`，写入 `LITEWAF_GEOIP_DB_PATH=/var/lib/litewaf/geoip/geoip.csv`，并重启 API 容器使新数据生效。后续更新继续执行同一命令即可。
+该命令默认会下载 DB-IP Lite Country 当月数据和 ip2region 中国 IPv4 xdb 数据。DB-IP 数据会转换为 LiteWaf CSV，保存到 `/opt/litewaf/data/geoip/geoip.csv`，ip2region 数据保存到 `/opt/litewaf/data/geoip/ip2region_v4.xdb`，并自动写入 `LITEWAF_GEOIP_DB_PATH=/var/lib/litewaf/geoip/geoip.csv` 与 `LITEWAF_GEOIP_CHINA_DB_PATH=/var/lib/litewaf/geoip/ip2region_v4.xdb`，然后重启 API 容器使新数据生效。后续更新继续执行同一命令即可。
 
 如果只需要下载和对接 GeoIP，不执行完整安装流程，也可以直接运行初始化脚本：
 
@@ -98,9 +98,16 @@ cd /opt/litewaf
 sudo LITEWAF_GEOIP_DBIP_MONTH=2026-06 ./litewafctl.sh geoip update
 ```
 
-GeoIP 默认数据源为 DB-IP Lite Country，许可证为 CC BY 4.0。页面或报表使用该数据时需要保留 DB-IP attribution。
+GeoIP 默认全球国家数据源为 DB-IP Lite Country，许可证为 CC BY 4.0，页面或报表使用该数据时需要保留 DB-IP attribution。中国省市补充数据源为 ip2region IPv4 xdb，许可证为 Apache-2.0。
 
-如需省/州维度，可使用更大的 City 数据源：
+如需关闭中国省市补充库，可执行：
+
+```bash
+cd /opt/litewaf
+sudo LITEWAF_GEOIP_CHINA_ENABLED=0 ./litewafctl.sh geoip update
+```
+
+如需全球省/州维度，可使用更大的 DB-IP City 数据源：
 
 ```bash
 cd /opt/litewaf

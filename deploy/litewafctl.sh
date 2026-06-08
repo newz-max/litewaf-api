@@ -159,6 +159,7 @@ ensure_env() {
   ensure_env_key LITEWAF_SENSITIVE_HEADERS authorization,cookie,set-cookie "$ENV_FILE"
   ensure_env_key LITEWAF_LOG_VALUE_MAX_LEN 160 "$ENV_FILE"
   ensure_env_key LITEWAF_GEOIP_DB_PATH "" "$ENV_FILE"
+  ensure_env_key LITEWAF_GEOIP_CHINA_DB_PATH "" "$ENV_FILE"
   ensure_env_key LITEWAF_GEOIP_CACHE_SIZE 2048 "$ENV_FILE"
   ensure_env_key LITEWAF_REAL_IP_TRUSTED_CIDRS "" "$ENV_FILE"
   ensure_env_key LITEWAF_REAL_IP_HEADER X-Forwarded-For "$ENV_FILE"

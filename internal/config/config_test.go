@@ -46,10 +46,11 @@ func TestValidateProductionSkipsNonProduction(t *testing.T) {
 
 func TestLoadReadsGeoIPConfiguration(t *testing.T) {
 	t.Setenv("LITEWAF_GEOIP_DB_PATH", "/data/litewaf/geoip.csv")
+	t.Setenv("LITEWAF_GEOIP_CHINA_DB_PATH", "/data/litewaf/ip2region_v4.xdb")
 	t.Setenv("LITEWAF_GEOIP_CACHE_SIZE", "128")
 
 	cfg := Load()
-	if cfg.GeoIPDatabasePath != "/data/litewaf/geoip.csv" || cfg.GeoIPCacheSize != 128 {
+	if cfg.GeoIPDatabasePath != "/data/litewaf/geoip.csv" || cfg.GeoIPChinaDatabasePath != "/data/litewaf/ip2region_v4.xdb" || cfg.GeoIPCacheSize != 128 {
 		t.Fatalf("unexpected geoip config: %+v", cfg)
 	}
 }

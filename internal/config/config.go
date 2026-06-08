@@ -30,6 +30,7 @@ type Config struct {
 	GatewayIngestionToken  string
 	MetricsEnabled         bool
 	GeoIPDatabasePath      string
+	GeoIPChinaDatabasePath string
 	GeoIPCacheSize         int
 }
 
@@ -57,6 +58,7 @@ func Load() Config {
 		GatewayIngestionToken:  getEnv("GATEWAY_INGESTION_TOKEN", ""),
 		MetricsEnabled:         getEnvBool("METRICS_ENABLED", false),
 		GeoIPDatabasePath:      getEnv("LITEWAF_GEOIP_DB_PATH", ""),
+		GeoIPChinaDatabasePath: getEnv("LITEWAF_GEOIP_CHINA_DB_PATH", ""),
 		GeoIPCacheSize:         getEnvInt("LITEWAF_GEOIP_CACHE_SIZE", 2048),
 	}
 }

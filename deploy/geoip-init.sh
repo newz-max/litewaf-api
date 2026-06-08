@@ -5,14 +5,17 @@ INSTALL_DIR="${LITEWAF_INSTALL_DIR:-/opt/litewaf}"
 ENV_FILE="${LITEWAF_ENV_FILE:-$INSTALL_DIR/.env}"
 DATA_DIR="${LITEWAF_GEOIP_DATA_DIR:-$INSTALL_DIR/data/geoip}"
 CONTAINER_DB_PATH="${LITEWAF_GEOIP_CONTAINER_PATH:-/var/lib/litewaf/geoip/geoip.csv}"
+CONTAINER_CHINA_DB_PATH="${LITEWAF_GEOIP_CHINA_CONTAINER_PATH:-/var/lib/litewaf/geoip/ip2region_v4.xdb}"
 SOURCE_MONTH="${LITEWAF_GEOIP_DBIP_MONTH:-$(date -u +%Y-%m)}"
 DBIP_EDITION="${LITEWAF_GEOIP_DBIP_EDITION:-country}"
+CHINA_ENABLED="${LITEWAF_GEOIP_CHINA_ENABLED:-1}"
 RESTART_API="${LITEWAF_GEOIP_RESTART_API:-1}"
 PROJECT_NAME="${PROJECT_NAME:-litewaf}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
 COMPOSE_FILES="${COMPOSE_FILES:-}"
 
 CUSTOM_SOURCE_URL="${LITEWAF_GEOIP_SOURCE_URL:-}"
+CHINA_SOURCE_URL="${LITEWAF_GEOIP_CHINA_SOURCE_URL:-https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v4.xdb}"
 case "$DBIP_EDITION" in
   country|city)
     ;;
@@ -28,16 +31,23 @@ usage() {
 Usage: ./geoip-init.sh [init|update]
 
 Downloads DB-IP Lite data, converts it to LiteWaf CSV format, updates
-LITEWAF_GEOIP_DB_PATH in .env, and restarts the API container by default.
+LITEWAF_GEOIP_DB_PATH plus the optional ip2region China database path in .env,
+and restarts the API container by default.
 
 Environment:
   LITEWAF_INSTALL_DIR          Install directory, default /opt/litewaf.
   LITEWAF_GEOIP_DATA_DIR       Host data directory, default $INSTALL_DIR/data/geoip.
   LITEWAF_GEOIP_CONTAINER_PATH Container CSV path, default /var/lib/litewaf/geoip/geoip.csv.
+  LITEWAF_GEOIP_CHINA_CONTAINER_PATH
+                                Container xdb path, default /var/lib/litewaf/geoip/ip2region_v4.xdb.
   LITEWAF_GEOIP_RESTART_API=0  Do not restart the API container.
   LITEWAF_GEOIP_DBIP_MONTH     DB-IP Lite month, default current UTC YYYY-MM.
   LITEWAF_GEOIP_DBIP_EDITION   country or city, default country.
   LITEWAF_GEOIP_SOURCE_URL     Override the DB-IP CSV.gz download URL.
+  LITEWAF_GEOIP_CHINA_ENABLED=0
+                                Do not download or enable ip2region China data.
+  LITEWAF_GEOIP_CHINA_SOURCE_URL
+                                Override the ip2region_v4.xdb download URL.
 EOF
 }
 
@@ -182,6 +192,11 @@ chmod 755 "$DATA_DIR" 2>/dev/null || true
 info "downloading DB-IP Lite $DBIP_EDITION data: $SOURCE_MONTH"
 download_dbip_data "$tmp_dir/dbip-lite.csv.gz"
 
+if [ "$CHINA_ENABLED" = "1" ]; then
+  info "downloading ip2region China IPv4 data"
+  download "$CHINA_SOURCE_URL" "$tmp_dir/ip2region_v4.xdb" || die "failed to download ip2region China data: $CHINA_SOURCE_URL"
+fi
+
 output="$tmp_dir/geoip.csv"
 printf 'start_ip,end_ip,country_code,region,city,longitude,latitude,source,version\n' >"$output"
 append_dbip_csv "$tmp_dir/dbip-lite.csv.gz" "$output"
@@ -194,6 +209,12 @@ mv "$output" "$DATA_DIR/geoip.csv.tmp"
 chmod 644 "$DATA_DIR/geoip.csv.tmp" 2>/dev/null || true
 mv "$DATA_DIR/geoip.csv.tmp" "$DATA_DIR/geoip.csv"
 
+if [ "$CHINA_ENABLED" = "1" ]; then
+  mv "$tmp_dir/ip2region_v4.xdb" "$DATA_DIR/ip2region_v4.xdb.tmp"
+  chmod 644 "$DATA_DIR/ip2region_v4.xdb.tmp" 2>/dev/null || true
+  mv "$DATA_DIR/ip2region_v4.xdb.tmp" "$DATA_DIR/ip2region_v4.xdb"
+fi
+
 cat >"$DATA_DIR/ATTRIBUTION.txt" <<'EOF'
 LiteWaf GeoIP data source:
 DB-IP Lite data from https://db-ip.com/db/download/.
@@ -201,10 +222,26 @@ License: Creative Commons Attribution 4.0 International (CC BY 4.0).
 Attribution: IP Geolocation by DB-IP (https://db-ip.com/).
 EOF
 
+if [ "$CHINA_ENABLED" = "1" ]; then
+  cat >>"$DATA_DIR/ATTRIBUTION.txt" <<'EOF'
+ip2region IPv4 data from https://github.com/lionsoul2014/ip2region.
+License: Apache License 2.0.
+EOF
+fi
+
 set_env_key LITEWAF_GEOIP_DB_PATH "$CONTAINER_DB_PATH" "$ENV_FILE"
+if [ "$CHINA_ENABLED" = "1" ]; then
+  set_env_key LITEWAF_GEOIP_CHINA_DB_PATH "$CONTAINER_CHINA_DB_PATH" "$ENV_FILE"
+else
+  set_env_key LITEWAF_GEOIP_CHINA_DB_PATH "" "$ENV_FILE"
+fi
 set_env_key LITEWAF_GEOIP_CACHE_SIZE "${LITEWAF_GEOIP_CACHE_SIZE:-2048}" "$ENV_FILE"
 
 info "GeoIP CSV installed: $DATA_DIR/geoip.csv"
 info "GeoIP container path: $CONTAINER_DB_PATH"
+if [ "$CHINA_ENABLED" = "1" ]; then
+  info "GeoIP China xdb installed: $DATA_DIR/ip2region_v4.xdb"
+  info "GeoIP China container path: $CONTAINER_CHINA_DB_PATH"
+fi
 info "DB-IP attribution written: $DATA_DIR/ATTRIBUTION.txt"
 restart_api

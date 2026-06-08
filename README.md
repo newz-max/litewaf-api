@@ -57,6 +57,22 @@ bash -c "$(curl -fSL https://raw.githubusercontent.com/newz-max/litewaf-api/mast
 
 安装脚本会自动检查 Docker、Compose、端口、生产密钥和 Compose 配置；首次安装会把 `.env` 中的弱默认值替换为随机密钥。已存在 `.env` 时会保留原配置，只有显式传入 `LITEWAF_IMAGE_PREFIX`、`LITEWAF_IMAGE_TAG` 或 `LITEWAF_DASHBOARD_PORT` 时才会改写对应配置。
 
+### 升级
+
+已安装 LiteWaf 的服务器可在安装目录中直接升级到最新镜像：
+
+```bash
+cd /opt/litewaf
+sudo ./litewafctl.sh upgrade latest
+```
+
+如需升级到指定版本，把 `latest` 替换为目标镜像标签：
+
+```bash
+cd /opt/litewaf
+sudo ./litewafctl.sh upgrade v1.0.1
+```
+
 ### 手动部署
 
 如果需要离线排障或手动检查下载内容，也可以按下面的方式执行：

@@ -1,8 +1,8 @@
 # LiteWaf
 
-LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty WAF 项目。数据面使用 OpenResty + LuaJIT，控制面使用 Go 标准库，后台管理使用 Vue 3 + TypeScript + Vite + Naive UI，默认推荐 Debian 12 minimal + Docker Compose 部署。
+> 语言 / Language: [中文](README.md) | [English](README.en.md)
 
-English summary: LiteWaf is an open-source, lightweight, fast-to-deploy OpenResty WAF. The data plane is OpenResty + LuaJIT, the control plane is a Go standard-library API, the dashboard is Vue 3 + TypeScript + Vite + Naive UI, and the default production baseline is Debian 12 minimal with Docker Compose.
+LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty WAF 项目。数据面使用 OpenResty + LuaJIT，控制面使用 Go 标准库，后台管理使用 Vue 3 + TypeScript + Vite + Naive UI，默认推荐 Debian 12 minimal + Docker Compose 部署。
 
 ## 当前能力
 
@@ -13,39 +13,6 @@ English summary: LiteWaf is an open-source, lightweight, fast-to-deploy OpenRest
 - 访问日志、WAF 事件、观测汇总和基础 Prometheus 指标。
 - 生产 Compose、环境变量模板、健康检查、备份、恢复、升级和回滚脚本。
 - 版本化默认规则集和本地验证样例。
-
-## English Guide
-
-LiteWaf is split across three repositories:
-
-- `litewaf-api`: Go control plane, deployment assets, default rules, examples, and the authoritative public documentation.
-- `litewaf-dashboard`: Vue 3 dashboard for operators.
-- `litewaf-gateway`: OpenResty data-plane gateway that enforces published configuration.
-
-Start here:
-
-- [Online documentation site](https://newz-max.github.io/litewaf-docs/)
-- [Documentation index](doc/文档索引.md)
-- [Operator guide](doc/使用说明.md)
-- [Architecture guide](doc/架构说明.md)
-- [API reference](doc/API文档.md)
-- [Rule authoring guide](doc/规则编写指南.md)
-- [Contribution guide](doc/贡献指南.md)
-- [Debian 12 minimal deployment guide](doc/Debian12部署说明.md)
-
-Quick start on a Linux host with Docker Engine and Docker Compose v2:
-
-```bash
-bash -c "$(curl -fSL https://raw.githubusercontent.com/newz-max/litewaf-api/master/deploy/manager.sh)"
-```
-
-If GitHub access is unstable, use the Gitee entry:
-
-```bash
-bash -c "$(curl -fSL https://gitee.com/old_records/litewaf-api/raw/master/deploy/manager.sh)"
-```
-
-The installer downloads the production Compose files into `/opt/litewaf`, creates `.env`, replaces weak first-run secrets, pulls prebuilt images, and waits for service health. The dashboard defaults to `http://SERVER_IP:18080`; read generated credentials from `.env`. Creating or editing sites, rules, policies, IP lists, access lists, rate limits, or protection modules does not affect gateway traffic until a new release is published.
 
 ## 界面预览
 

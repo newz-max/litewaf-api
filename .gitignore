@@ -1,7 +1,9 @@
 bin/
 dist/
+.tmp/
 .env
 AGENTS.md
+CLAUDE.md
 .idea/
 .vscode/
 *.log

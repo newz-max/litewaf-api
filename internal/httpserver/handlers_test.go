@@ -1298,6 +1298,59 @@ func TestAdvancedWAFEventIngestionQueryAndSummary(t *testing.T) {
 	}
 }
 
+func TestObservabilitySummaryIncludesHourlyTrends(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	until := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	accessTime := until.Add(-2 * time.Hour).Format(time.RFC3339)
+	wafTime := until.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(`{"request_id":"trend-access","application_id":2,"host":"app.example.test","method":"GET","uri":"/login","status":403,"duration_ms":4,"client_ip":"192.0.2.20","user_agent":"curl","disposition":"blocked","created_at":"`+accessTime+`"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest trend access status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/ingest/waf-events", bytes.NewBufferString(`{"request_id":"trend-waf","application_id":2,"event_type":"rule","rule_id":17,"rule_type":"sqli","target":"args","module":"attack-protection","category":"managed","rule_name":"SQLi block","attack_type":"sqli","action":"block","disposition":"blocked","client_ip":"192.0.2.20","method":"GET","uri":"/login","summary":"blocked","created_at":"`+wafTime+`"}`))
+	req.Header.Set("Authorization", "Bearer gateway-secret")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("ingest trend waf status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/observability/summary?until="+until.Format(time.RFC3339), nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("summary trend status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var summaryResponse struct {
+		Item model.ObservabilitySummary `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&summaryResponse); err != nil {
+		t.Fatalf("decode summary trend: %v", err)
+	}
+	item := summaryResponse.Item
+	if len(item.RequestTrend) != 24 || len(item.BlockedTrend) != 24 || len(item.WAFMatchTrend) != 24 {
+		t.Fatalf("unexpected trend lengths: request=%d blocked=%d waf=%d", len(item.RequestTrend), len(item.BlockedTrend), len(item.WAFMatchTrend))
+	}
+	if item.RequestTrend[0].Time != until.Add(-23*time.Hour).Format(time.RFC3339) || item.RequestTrend[23].Time != until.Format(time.RFC3339) {
+		t.Fatalf("unexpected trend range: first=%s last=%s", item.RequestTrend[0].Time, item.RequestTrend[23].Time)
+	}
+	if item.RequestTrend[21].Value != 1 || item.BlockedTrend[21].Value != 1 {
+		t.Fatalf("unexpected access trend buckets: request=%+v blocked=%+v", item.RequestTrend[21], item.BlockedTrend[21])
+	}
+	if item.WAFMatchTrend[22].Value != 1 || item.BlockedTrend[22].Value != 1 {
+		t.Fatalf("unexpected waf trend buckets: waf=%+v blocked=%+v", item.WAFMatchTrend[22], item.BlockedTrend[22])
+	}
+	if item.RequestTrend[20].Value != 0 || item.WAFMatchTrend[23].Value != 0 {
+		t.Fatalf("expected zero-count buckets around populated values: request20=%d waf23=%d", item.RequestTrend[20].Value, item.WAFMatchTrend[23].Value)
+	}
+}
+
 func TestObservabilityIngestionRequiresGatewayToken(t *testing.T) {
 	handler := testServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(`{"request_id":"req-1","method":"GET","uri":"/","status":200,"disposition":"proxied"}`))

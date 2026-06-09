@@ -460,24 +460,27 @@ type DynamicBanClearResult struct {
 }
 
 type ObservabilitySummary struct {
-	Requests          int64          `json:"requests"`
-	BlockedRequests   int64          `json:"blocked_requests"`
-	WAFMatches        int64          `json:"waf_matches"`
-	RateLimited       int64          `json:"rate_limited"`
-	ScoreBlocks       int64          `json:"score_blocks"`
-	BodyDetections    int64          `json:"body_detections"`
-	UploadDetections  int64          `json:"upload_detections"`
-	DynamicBans       int64          `json:"dynamic_bans"`
-	AccessControl     []SummaryCount `json:"access_control"`
-	IPAccessList      []SummaryCount `json:"ip_access_list"`
-	TopIPs            []SummaryCount `json:"top_ips"`
-	TopURIs           []SummaryCount `json:"top_uris"`
-	TopRules          []SummaryCount `json:"top_rules"`
-	AttackTypes       []SummaryCount `json:"attack_types"`
-	AttackProtection  []SummaryCount `json:"attack_protection"`
-	UploadProtection  []SummaryCount `json:"upload_protection"`
-	BotProtection     []SummaryCount `json:"bot_protection"`
-	DynamicProtection []SummaryCount `json:"dynamic_protection"`
+	Requests          int64             `json:"requests"`
+	BlockedRequests   int64             `json:"blocked_requests"`
+	WAFMatches        int64             `json:"waf_matches"`
+	RateLimited       int64             `json:"rate_limited"`
+	ScoreBlocks       int64             `json:"score_blocks"`
+	BodyDetections    int64             `json:"body_detections"`
+	UploadDetections  int64             `json:"upload_detections"`
+	DynamicBans       int64             `json:"dynamic_bans"`
+	AccessControl     []SummaryCount    `json:"access_control"`
+	IPAccessList      []SummaryCount    `json:"ip_access_list"`
+	TopIPs            []SummaryCount    `json:"top_ips"`
+	TopURIs           []SummaryCount    `json:"top_uris"`
+	TopRules          []SummaryCount    `json:"top_rules"`
+	AttackTypes       []SummaryCount    `json:"attack_types"`
+	AttackProtection  []SummaryCount    `json:"attack_protection"`
+	UploadProtection  []SummaryCount    `json:"upload_protection"`
+	BotProtection     []SummaryCount    `json:"bot_protection"`
+	DynamicProtection []SummaryCount    `json:"dynamic_protection"`
+	RequestTrend      []TimeSeriesPoint `json:"request_trend"`
+	BlockedTrend      []TimeSeriesPoint `json:"blocked_trend"`
+	WAFMatchTrend     []TimeSeriesPoint `json:"waf_match_trend"`
 }
 
 type StatisticsReport struct {

@@ -271,6 +271,7 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 
 func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error) {
 	summary := emptyObservabilitySummary()
+	trendStart, trendUntil := summaryTrendRange(filter)
 	if err := s.db.QueryRowContext(ctx, `
 		SELECT count(*),
 			count(*) FILTER (WHERE disposition IN ('blocked', 'rejected')),
@@ -301,6 +302,10 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 	}
 	summary.BlockedRequests += eventBlocked
 	summary.RateLimited += eventRateLimited
+
+	if err := s.loadObservabilitySummaryTrends(ctx, &summary, trendStart, trendUntil); err != nil {
+		return summary, err
+	}
 
 	limit := normalizeSummaryLimit(filter.Limit)
 	var err error
@@ -342,6 +347,69 @@ func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter mode
 	}
 	summary.DynamicProtection, err = s.dynamicProtectionSummaryCounts(ctx, filter, limit)
 	return summary, err
+}
+
+func (s *PostgresStore) loadObservabilitySummaryTrends(ctx context.Context, summary *model.ObservabilitySummary, start time.Time, until time.Time) error {
+	requestBuckets := newSummaryTrendBuckets(start)
+	blockedBuckets := newSummaryTrendBuckets(start)
+	wafMatchBuckets := newSummaryTrendBuckets(start)
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT date_trunc('hour', created_at) AS bucket,
+			count(*),
+			count(*) FILTER (WHERE disposition IN ('blocked', 'rejected'))
+		FROM access_logs
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY bucket`,
+		start, until)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bucket time.Time
+		var requests int64
+		var blocked int64
+		if err := rows.Scan(&bucket, &requests, &blocked); err != nil {
+			return err
+		}
+		addSummaryTrendBucket(requestBuckets, start, bucket, requests)
+		addSummaryTrendBucket(blockedBuckets, start, bucket, blocked)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	rows, err = s.db.QueryContext(ctx, `
+		SELECT date_trunc('hour', created_at) AS bucket,
+			count(*),
+			count(*) FILTER (WHERE disposition IN ('blocked', 'rejected'))
+		FROM waf_events
+		WHERE created_at >= $1 AND created_at < $2
+		GROUP BY bucket`,
+		start, until)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bucket time.Time
+		var matches int64
+		var blocked int64
+		if err := rows.Scan(&bucket, &matches, &blocked); err != nil {
+			return err
+		}
+		addSummaryTrendBucket(wafMatchBuckets, start, bucket, matches)
+		addSummaryTrendBucket(blockedBuckets, start, bucket, blocked)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	summary.RequestTrend = summaryTrendPoints(start, requestBuckets)
+	summary.BlockedTrend = summaryTrendPoints(start, blockedBuckets)
+	summary.WAFMatchTrend = summaryTrendPoints(start, wafMatchBuckets)
+	return nil
 }
 
 func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.DynamicBanFilter) ([]model.DynamicBan, error) {

@@ -806,7 +806,17 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	uploadProtectionCounts := map[string]int64{}
 	botProtectionCounts := map[string]int64{}
 	dynamicProtectionCounts := map[string]int64{}
+	trendStart, trendUntil := summaryTrendRange(filter)
+	requestTrend := newSummaryTrendBuckets(trendStart)
+	blockedTrend := newSummaryTrendBuckets(trendStart)
+	wafMatchTrend := newSummaryTrendBuckets(trendStart)
 	for _, item := range s.accessLogs {
+		if summaryTimeMatches(item.CreatedAt, trendStart, trendUntil) {
+			addSummaryTrendBucket(requestTrend, trendStart, item.CreatedAt, 1)
+			if item.Disposition == "blocked" || item.Disposition == "rejected" {
+				addSummaryTrendBucket(blockedTrend, trendStart, item.CreatedAt, 1)
+			}
+		}
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
 		}
@@ -821,6 +831,12 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 		increment(uriCounts, item.URI)
 	}
 	for _, item := range s.wafEvents {
+		if summaryTimeMatches(item.CreatedAt, trendStart, trendUntil) {
+			addSummaryTrendBucket(wafMatchTrend, trendStart, item.CreatedAt, 1)
+			if item.Disposition == "blocked" || item.Disposition == "rejected" {
+				addSummaryTrendBucket(blockedTrend, trendStart, item.CreatedAt, 1)
+			}
+		}
 		if !summaryTimeMatches(item.CreatedAt, filter.Since, filter.Until) {
 			continue
 		}
@@ -890,6 +906,9 @@ func (s *MemoryStore) GetObservabilitySummary(_ context.Context, filter model.Ob
 	summary.UploadProtection = topCounts(uploadProtectionCounts, limit)
 	summary.BotProtection = topCounts(botProtectionCounts, limit)
 	summary.DynamicProtection = topCounts(dynamicProtectionCounts, limit)
+	summary.RequestTrend = summaryTrendPoints(trendStart, requestTrend)
+	summary.BlockedTrend = summaryTrendPoints(trendStart, blockedTrend)
+	summary.WAFMatchTrend = summaryTrendPoints(trendStart, wafMatchTrend)
 	return summary, nil
 }
 

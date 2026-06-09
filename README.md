@@ -20,6 +20,18 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 
 ![统计报表](images/统计报表.png)
 
+## 文档入口
+
+- [在线文档站](https://newz-max.github.io/litewaf-docs/)
+- [文档索引](doc/文档索引.md)
+- [使用说明](doc/使用说明.md)
+- [架构说明](doc/架构说明.md)
+- [API 文档](doc/API文档.md)
+- [规则编写指南](doc/规则编写指南.md)
+- [贡献指南](doc/贡献指南.md)
+- [规则生态路线](doc/规则生态路线.md)
+- [Debian 12 minimal 部署说明](doc/Debian12部署说明.md)
+
 ## 快速开始
 
 本节面向第一次部署 LiteWaf 的用户，目标是在 Debian 12 minimal 或其他已安装 Docker Engine / Docker Compose v2 的 Linux 服务器上，直接拉取预构建镜像并启动生产栈。
@@ -269,17 +281,6 @@ litewaf-gateway      配套网关仓库
 - 后端与项目文档：[litewaf-api](https://github.com/newz-max/litewaf-api)
 - 前端管理台：[litewaf-dashboard](https://github.com/newz-max/litewaf-dashboard)
 - OpenResty 数据面网关：[litewaf-gateway](https://github.com/newz-max/litewaf-gateway)
-
-## 文档入口
-
-- [文档索引](doc/文档索引.md)
-- [使用说明](doc/使用说明.md)
-- [架构说明](doc/架构说明.md)
-- [API 文档](doc/API文档.md)
-- [规则编写指南](doc/规则编写指南.md)
-- [贡献指南](doc/贡献指南.md)
-- [规则生态路线](doc/规则生态路线.md)
-- [Debian 12 minimal 部署说明](doc/Debian12部署说明.md)
 
 ## 开发命令
 

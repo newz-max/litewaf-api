@@ -12,6 +12,14 @@ LiteWaf 是一个以源码开放、轻便、快速部署为目标的 OpenResty W
 - 生产 Compose、环境变量模板、健康检查、备份、恢复、升级和回滚脚本。
 - 版本化默认规则集和本地验证样例。
 
+## 界面预览
+
+![安全态势](images/安全态势.png)
+
+![防护概览](images/防护概览.png)
+
+![统计报表](images/统计报表.png)
+
 ## 快速开始
 
 本节面向第一次部署 LiteWaf 的用户，目标是在 Debian 12 minimal 或其他已安装 Docker Engine / Docker Compose v2 的 Linux 服务器上，直接拉取预构建镜像并启动生产栈。

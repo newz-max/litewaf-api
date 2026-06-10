@@ -328,7 +328,7 @@ func realtimeQPSPoints(buckets map[time.Time]int64, start time.Time, end time.Ti
 	for key := start; !key.After(end); key = key.Add(realtimeQPSBucket) {
 		points = append(points, model.TimeSeriesPoint{
 			Time:  key.Format(time.RFC3339),
-			Value: float64(buckets[key]) / realtimeQPSBucket.Seconds(),
+			Value: float64(buckets[key]),
 		})
 	}
 	return points

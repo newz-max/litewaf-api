@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"log/slog"
-	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -1123,7 +1122,7 @@ func TestStatisticsReportAggregatesRealLogs(t *testing.T) {
 	}
 }
 
-func TestStatisticsReportRealtimeQPSUsesFiveSecondWindow(t *testing.T) {
+func TestStatisticsReportRealtimeQPSUsesFiveSecondBucketTotals(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 	until := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
@@ -1179,11 +1178,11 @@ func TestStatisticsReportRealtimeQPSUsesFiveSecondWindow(t *testing.T) {
 			t.Fatalf("expected qps bucket interval 5s at index %d, got %s", index, current.Sub(previous))
 		}
 	}
-	if math.Abs(qps[1].Value-0.2) > 0.0001 {
-		t.Fatalf("expected one request in five seconds to be 0.2 qps, got %+v", qps[1])
+	if qps[1].Value != 1 {
+		t.Fatalf("expected one request in five seconds to be counted as 1, got %+v", qps[1])
 	}
-	if math.Abs(qps[34].Value-0.4) > 0.0001 {
-		t.Fatalf("expected two requests in five seconds to be 0.4 qps, got %+v", qps[34])
+	if qps[34].Value != 2 {
+		t.Fatalf("expected two requests in five seconds to be counted as 2, got %+v", qps[34])
 	}
 	if qps[2].Value != 0 || qps[0].Value != 0 {
 		t.Fatalf("expected empty qps buckets to be zero-filled: first=%+v third=%+v", qps[0], qps[2])

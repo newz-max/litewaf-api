@@ -23,6 +23,8 @@ Local checks:
 go test ./...
 ```
 
+When adding or migrating API endpoints, update `api/litewaf.api` first, keep HTTP binding in `internal/handler`, put validation/store orchestration/audit summaries in `internal/logic` or existing domain packages, and pass shared dependencies through `internal/svc.ServiceContext`. Existing endpoint migrations must include compatibility tests for paths, status codes, JSON fields, and error responses. Keep the legacy `internal/httpserver` rollback path until the production runtime is explicitly switched.
+
 Dashboard and Gateway checks live in their companion repositories:
 
 ```bash

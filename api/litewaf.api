@@ -1,0 +1,28 @@
+syntax = "v1"
+
+type (
+    HealthzResp {
+        Status string `json:"status"`
+        Error string `json:"error,optional"`
+        Time string `json:"time"`
+    }
+
+    VersionResp {
+        Name string `json:"name"`
+        Version string `json:"version"`
+        Env string `json:"env"`
+    }
+)
+
+service litewaf-api {
+    @handler Healthz
+    get /healthz returns (HealthzResp)
+}
+
+@server (
+    prefix: /api/v1
+)
+service litewaf-api {
+    @handler Version
+    get /version returns (VersionResp)
+}

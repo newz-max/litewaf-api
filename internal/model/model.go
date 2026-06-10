@@ -552,8 +552,8 @@ type StatisticsRefererReport struct {
 }
 
 type TimeSeriesPoint struct {
-	Time  string `json:"time"`
-	Value int64  `json:"value"`
+	Time  string  `json:"time"`
+	Value float64 `json:"value"`
 }
 
 type ProtectionOverview struct {

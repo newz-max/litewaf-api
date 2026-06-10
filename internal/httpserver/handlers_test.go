@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"log/slog"
+	"math"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -1122,6 +1123,73 @@ func TestStatisticsReportAggregatesRealLogs(t *testing.T) {
 	}
 }
 
+func TestStatisticsReportRealtimeQPSUsesFiveSecondWindow(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+	until := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
+	since := until.Add(-time.Hour)
+	qpsStart := until.Add(-3 * time.Minute)
+	accessTimes := []time.Time{
+		qpsStart.Add(5 * time.Second),
+		until.Add(-10 * time.Second),
+		until.Add(-9 * time.Second),
+		until.Add(-181 * time.Second),
+	}
+
+	for index, createdAt := range accessTimes {
+		payload := `{"request_id":"qps-` + strconv.Itoa(index) + `","application_id":5,"host":"app.example.test","method":"GET","uri":"/","status":200,"duration_ms":12,"client_ip":"8.8.8.8","user_agent":"curl","disposition":"proxied","created_at":"` + createdAt.Format(time.RFC3339) + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", bytes.NewBufferString(payload))
+		req.Header.Set("Authorization", "Bearer gateway-secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("ingest qps access status = %d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/reports/statistics?application_id=5&since="+since.Format(time.RFC3339)+"&until="+until.Format(time.RFC3339), nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statistics qps report status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.StatisticsReport `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode qps statistics report: %v", err)
+	}
+	qps := response.Item.QPS
+	if len(qps) != 37 {
+		t.Fatalf("expected 37 qps buckets for 3 minute window, got %d", len(qps))
+	}
+	if qps[0].Time != qpsStart.Format(time.RFC3339) || qps[len(qps)-1].Time != until.Format(time.RFC3339) {
+		t.Fatalf("unexpected qps range: first=%s last=%s", qps[0].Time, qps[len(qps)-1].Time)
+	}
+	for index := 1; index < len(qps); index++ {
+		previous, err := time.Parse(time.RFC3339, qps[index-1].Time)
+		if err != nil {
+			t.Fatalf("parse previous qps time: %v", err)
+		}
+		current, err := time.Parse(time.RFC3339, qps[index].Time)
+		if err != nil {
+			t.Fatalf("parse current qps time: %v", err)
+		}
+		if current.Sub(previous) != 5*time.Second {
+			t.Fatalf("expected qps bucket interval 5s at index %d, got %s", index, current.Sub(previous))
+		}
+	}
+	if math.Abs(qps[1].Value-0.2) > 0.0001 {
+		t.Fatalf("expected one request in five seconds to be 0.2 qps, got %+v", qps[1])
+	}
+	if math.Abs(qps[34].Value-0.4) > 0.0001 {
+		t.Fatalf("expected two requests in five seconds to be 0.4 qps, got %+v", qps[34])
+	}
+	if qps[2].Value != 0 || qps[0].Value != 0 {
+		t.Fatalf("expected empty qps buckets to be zero-filled: first=%+v third=%+v", qps[0], qps[2])
+	}
+}
+
 func TestAccessLogGeoIPIgnoresPayloadGeoAndReportsMissingDatabase(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
@@ -1347,7 +1415,7 @@ func TestObservabilitySummaryIncludesHourlyTrends(t *testing.T) {
 		t.Fatalf("unexpected waf trend buckets: waf=%+v blocked=%+v", item.WAFMatchTrend[22], item.BlockedTrend[22])
 	}
 	if item.RequestTrend[20].Value != 0 || item.WAFMatchTrend[23].Value != 0 {
-		t.Fatalf("expected zero-count buckets around populated values: request20=%d waf23=%d", item.RequestTrend[20].Value, item.WAFMatchTrend[23].Value)
+		t.Fatalf("expected zero-count buckets around populated values: request20=%v waf23=%v", item.RequestTrend[20].Value, item.WAFMatchTrend[23].Value)
 	}
 }
 

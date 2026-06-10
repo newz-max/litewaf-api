@@ -56,7 +56,7 @@ func summaryTrendPoints(start time.Time, buckets []int64) []model.TimeSeriesPoin
 	for index, count := range buckets {
 		points = append(points, model.TimeSeriesPoint{
 			Time:  start.Add(time.Duration(index) * time.Hour).Format(time.RFC3339),
-			Value: count,
+			Value: float64(count),
 		})
 	}
 	return points

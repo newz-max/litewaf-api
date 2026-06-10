@@ -12,6 +12,11 @@ import (
 	"litewaf-api/internal/model"
 )
 
+const (
+	realtimeQPSWindow = 3 * time.Minute
+	realtimeQPSBucket = 5 * time.Second
+)
+
 type geoAccumulator struct {
 	code      string
 	name      string
@@ -171,7 +176,8 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 	blockBuckets := map[time.Time]int64{}
 	geoCounts := map[string]*geoAccumulator{}
 	geoDiagnostics := map[string]int64{}
-	bucket := statisticsBucketDuration(filter.Since, filter.Until)
+	qpsStart, qpsEnd := realtimeQPSRange(filter.Until)
+	trendBucket := statisticsBucketDuration(filter.Since, filter.Until)
 
 	for _, item := range accessLogs {
 		report.Cards.Requests++
@@ -195,9 +201,9 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 		if isBlockedDisposition(item.Disposition) {
 			report.Cards.Blocked++
 		}
-		addBucket(qpsBuckets, item.CreatedAt, bucket, 1)
+		addBucket(qpsBuckets, item.CreatedAt, realtimeQPSBucket, 1)
 		if isPageView(item) {
-			addBucket(visitBuckets, item.CreatedAt, bucket, 1)
+			addBucket(visitBuckets, item.CreatedAt, trendBucket, 1)
 		}
 		if item.UserAgent != "" {
 			increment(osCounts, detectOS(item.UserAgent))
@@ -217,7 +223,7 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 	for _, item := range wafEvents {
 		if isBlockedDisposition(item.Disposition) || item.Action == "block" {
 			report.Cards.Blocked++
-			addBucket(blockBuckets, item.CreatedAt, bucket, 1)
+			addBucket(blockBuckets, item.CreatedAt, trendBucket, 1)
 			if item.ClientIP != "" {
 				attackIPs[item.ClientIP] = struct{}{}
 			}
@@ -230,7 +236,7 @@ func buildStatisticsReport(accessLogs []model.AccessLog, wafEvents []model.WAFEv
 	report.Cards.ErrorRate4xx = percent(report.Cards.Errors4xx, report.Cards.Requests)
 	report.Cards.BlockRate4xx = percent(report.Cards.Blocked4xx, report.Cards.Errors4xx)
 	report.Cards.ErrorRate5xx = percent(report.Cards.Errors5xx, report.Cards.Requests)
-	report.QPS = bucketPoints(qpsBuckets)
+	report.QPS = realtimeQPSPoints(qpsBuckets, qpsStart, qpsEnd)
 	report.Visits = bucketPoints(visitBuckets)
 	report.Blocks = bucketPoints(blockBuckets)
 	report.Statuses = topCounts(statusCounts, limit)
@@ -299,11 +305,33 @@ func statisticsBucketDuration(since time.Time, until time.Time) time.Duration {
 	return 24 * time.Hour
 }
 
+func realtimeQPSRange(until time.Time) (time.Time, time.Time) {
+	if until.IsZero() {
+		until = time.Now().UTC()
+	}
+	end := until.UTC().Truncate(realtimeQPSBucket)
+	return end.Add(-realtimeQPSWindow), end
+}
+
 func addBucket(buckets map[time.Time]int64, value time.Time, bucket time.Duration, count int64) {
 	if value.IsZero() {
 		return
 	}
-	buckets[value.Truncate(bucket)] += count
+	buckets[value.UTC().Truncate(bucket)] += count
+}
+
+func realtimeQPSPoints(buckets map[time.Time]int64, start time.Time, end time.Time) []model.TimeSeriesPoint {
+	points := []model.TimeSeriesPoint{}
+	if end.Before(start) {
+		return points
+	}
+	for key := start; !key.After(end); key = key.Add(realtimeQPSBucket) {
+		points = append(points, model.TimeSeriesPoint{
+			Time:  key.Format(time.RFC3339),
+			Value: float64(buckets[key]) / realtimeQPSBucket.Seconds(),
+		})
+	}
+	return points
 }
 
 func bucketPoints(buckets map[time.Time]int64) []model.TimeSeriesPoint {
@@ -314,7 +342,7 @@ func bucketPoints(buckets map[time.Time]int64) []model.TimeSeriesPoint {
 	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
 	points := make([]model.TimeSeriesPoint, 0, len(times))
 	for _, key := range times {
-		points = append(points, model.TimeSeriesPoint{Time: key.Format(time.RFC3339), Value: buckets[key]})
+		points = append(points, model.TimeSeriesPoint{Time: key.Format(time.RFC3339), Value: float64(buckets[key])})
 	}
 	return points
 }

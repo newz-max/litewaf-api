@@ -671,7 +671,21 @@ func (s *PostgresStore) EnsureUser(ctx context.Context, user model.User) (model.
 	return user, err
 }
 
-func (s *PostgresStore) ListAuditLogs(ctx context.Context, filter model.AuditLogFilter) ([]model.AuditLog, error) {
+func (s *PostgresStore) ListAuditLogs(ctx context.Context, filter model.AuditLogFilter) (model.ListResult[model.AuditLog], error) {
+	pagination := normalizePagination(filter.Pagination)
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM audit_logs
+		WHERE ($1 = '' OR actor = $1)
+			AND ($2 = '' OR action = $2)
+			AND ($3 = '' OR resource_type = $3)
+			AND ($4 = '' OR result = $4)
+			AND ($5::timestamptz IS NULL OR created_at >= $5)
+			AND ($6::timestamptz IS NULL OR created_at <= $6)`,
+		filter.Actor, filter.Action, filter.ResourceType, filter.Result, nullableTime(filter.Since), nullableTime(filter.Until)).Scan(&total); err != nil {
+		return model.ListResult[model.AuditLog]{}, err
+	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, actor, role, action, resource_type, resource_id, result, remote_addr, user_agent, message, created_at
 		FROM audit_logs
@@ -681,22 +695,23 @@ func (s *PostgresStore) ListAuditLogs(ctx context.Context, filter model.AuditLog
 			AND ($4 = '' OR result = $4)
 			AND ($5::timestamptz IS NULL OR created_at >= $5)
 			AND ($6::timestamptz IS NULL OR created_at <= $6)
-		ORDER BY id DESC`,
-		filter.Actor, filter.Action, filter.ResourceType, filter.Result, nullableTime(filter.Since), nullableTime(filter.Until))
+		ORDER BY id DESC
+		LIMIT $7 OFFSET $8`,
+		filter.Actor, filter.Action, filter.ResourceType, filter.Result, nullableTime(filter.Since), nullableTime(filter.Until), pagination.Limit, pagination.Offset)
 	if err != nil {
-		return nil, err
+		return model.ListResult[model.AuditLog]{}, err
 	}
 	defer rows.Close()
 	var items []model.AuditLog
 	for rows.Next() {
 		var item model.AuditLog
 		if err := rows.Scan(&item.ID, &item.Actor, &item.Role, &item.Action, &item.ResourceType, &item.ResourceID, &item.Result, &item.RemoteAddr, &item.UserAgent, &item.Message, &item.CreatedAt); err != nil {
-			return nil, err
+			return model.ListResult[model.AuditLog]{}, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return model.ListResult[model.AuditLog]{Items: items, Total: total, Pagination: pagination}, rows.Err()
 }
 
 func (s *PostgresStore) CreateAuditLog(ctx context.Context, item model.AuditLog) (model.AuditLog, error) {

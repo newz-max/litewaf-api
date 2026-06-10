@@ -55,17 +55,17 @@ type Store interface {
 	GetUserByUsername(context.Context, string) (model.User, error)
 	EnsureUser(context.Context, model.User) (model.User, error)
 
-	ListAuditLogs(context.Context, model.AuditLogFilter) ([]model.AuditLog, error)
+	ListAuditLogs(context.Context, model.AuditLogFilter) (model.ListResult[model.AuditLog], error)
 	CreateAuditLog(context.Context, model.AuditLog) (model.AuditLog, error)
 
 	CreateAccessLog(context.Context, model.AccessLog) (model.AccessLog, error)
-	ListAccessLogs(context.Context, model.AccessLogFilter) ([]model.AccessLog, error)
-	ListDeniedRecords(context.Context, model.DeniedRecordFilter) ([]model.DeniedRecord, error)
+	ListAccessLogs(context.Context, model.AccessLogFilter) (model.ListResult[model.AccessLog], error)
+	ListDeniedRecords(context.Context, model.DeniedRecordFilter) (model.ListResult[model.DeniedRecord], error)
 	CreateWAFEvent(context.Context, model.WAFEvent) (model.WAFEvent, error)
-	ListWAFEvents(context.Context, model.WAFEventFilter) ([]model.WAFEvent, error)
+	ListWAFEvents(context.Context, model.WAFEventFilter) (model.ListResult[model.WAFEvent], error)
 	GetObservabilitySummary(context.Context, model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error)
 	GetStatisticsReport(context.Context, model.StatisticsReportFilter) (model.StatisticsReport, error)
-	ListDynamicBans(context.Context, model.DynamicBanFilter) ([]model.DynamicBan, error)
+	ListDynamicBans(context.Context, model.DynamicBanFilter) (model.ListResult[model.DynamicBan], error)
 	ClearDynamicBan(context.Context, model.DynamicBanClearRequest) (model.DynamicBanClearResult, error)
 	ListDynamicBanClears(context.Context, model.DynamicBanFilter) ([]model.DynamicBanClearResult, error)
 

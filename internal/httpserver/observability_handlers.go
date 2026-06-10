@@ -44,8 +44,8 @@ func (h handlers) listAccessLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.app.Store.ListAccessLogs(r.Context(), filter)
-	h.writeList(w, items, err)
+	result, err := h.app.Store.ListAccessLogs(r.Context(), filter)
+	h.writePagedList(w, result.Items, result.Total, result.Pagination, err)
 }
 
 func (h handlers) listDeniedRecords(w http.ResponseWriter, r *http.Request) {
@@ -53,8 +53,8 @@ func (h handlers) listDeniedRecords(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.app.Store.ListDeniedRecords(r.Context(), filter)
-	h.writeList(w, items, err)
+	result, err := h.app.Store.ListDeniedRecords(r.Context(), filter)
+	h.writePagedList(w, result.Items, result.Total, result.Pagination, err)
 }
 
 func (h handlers) listAttackLogs(w http.ResponseWriter, r *http.Request) {
@@ -62,8 +62,8 @@ func (h handlers) listAttackLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.app.Store.ListWAFEvents(r.Context(), filter)
-	h.writeList(w, items, err)
+	result, err := h.app.Store.ListWAFEvents(r.Context(), filter)
+	h.writePagedList(w, result.Items, result.Total, result.Pagination, err)
 }
 
 func (h handlers) observabilitySummary(w http.ResponseWriter, r *http.Request) {
@@ -89,8 +89,8 @@ func (h handlers) listDynamicBans(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.app.Store.ListDynamicBans(r.Context(), filter)
-	h.writeList(w, items, err)
+	result, err := h.app.Store.ListDynamicBans(r.Context(), filter)
+	h.writePagedList(w, result.Items, result.Total, result.Pagination, err)
 }
 
 func (h handlers) clearDynamicBan(w http.ResponseWriter, r *http.Request) {

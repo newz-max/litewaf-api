@@ -1361,6 +1361,77 @@ func TestObservabilityIngestionRequiresGatewayToken(t *testing.T) {
 	}
 }
 
+func TestAccessLogsPaginationMetadata(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	for i := 1; i <= 3; i++ {
+		body := bytes.NewBufferString(`{"request_id":"page-` + strconv.Itoa(i) + `","application_id":1,"host":"app.example.test","method":"GET","uri":"/page/` + strconv.Itoa(i) + `","status":200,"duration_ms":4,"client_ip":"198.51.100.` + strconv.Itoa(i) + `","user_agent":"curl","disposition":"proxied"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/access-logs", body)
+		req.Header.Set("Authorization", "Bearer gateway-secret")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("ingest access log %d status = %d body=%s", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-logs?limit=2&offset=1", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list access logs status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var page struct {
+		Items  []model.AccessLog `json:"items"`
+		Total  int               `json:"total"`
+		Limit  int               `json:"limit"`
+		Offset int               `json:"offset"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.Total != 3 || page.Limit != 2 || page.Offset != 1 || len(page.Items) != 2 {
+		t.Fatalf("unexpected pagination metadata: %+v", page)
+	}
+	if page.Items[0].RequestID != "page-2" || page.Items[1].RequestID != "page-1" {
+		t.Fatalf("unexpected paged order: %+v", page.Items)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-logs?client_ip=198.51.100.2&limit=20", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("filtered list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode filtered page: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 || page.Items[0].ClientIP != "198.51.100.2" {
+		t.Fatalf("unexpected filtered page: %+v", page)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-logs?client_ip=203.0.113.200&limit=20", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("empty filtered list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&page); err != nil {
+		t.Fatalf("decode empty page: %v", err)
+	}
+	if page.Total != 0 || len(page.Items) != 0 {
+		t.Fatalf("unexpected empty page: %+v", page)
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/access-logs?limit=-1", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("negative pagination status = %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestDynamicBanListUnbanClearFeedAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)

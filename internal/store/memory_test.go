@@ -256,10 +256,11 @@ func TestMemoryStoreDynamicBanLifecycle(t *testing.T) {
 		t.Fatalf("create expired ban event: %v", err)
 	}
 
-	active, err := dataStore.ListDynamicBans(ctx, model.DynamicBanFilter{SiteID: 1, Status: "active"})
+	activeResult, err := dataStore.ListDynamicBans(ctx, model.DynamicBanFilter{SiteID: 1, Status: "active"})
 	if err != nil {
 		t.Fatalf("list active bans: %v", err)
 	}
+	active := activeResult.Items
 	if len(active) != 1 || active[0].ClientIP != "192.0.2.10" {
 		t.Fatalf("unexpected active bans: %+v", active)
 	}
@@ -279,17 +280,19 @@ func TestMemoryStoreDynamicBanLifecycle(t *testing.T) {
 		t.Fatalf("unexpected repeated clear result: %+v", repeated)
 	}
 
-	active, err = dataStore.ListDynamicBans(ctx, model.DynamicBanFilter{SiteID: 1, Status: "active"})
+	activeResult, err = dataStore.ListDynamicBans(ctx, model.DynamicBanFilter{SiteID: 1, Status: "active"})
 	if err != nil {
 		t.Fatalf("list active after clear: %v", err)
 	}
+	active = activeResult.Items
 	if len(active) != 0 {
 		t.Fatalf("expected no active bans for site 1, got %+v", active)
 	}
-	active, err = dataStore.ListDynamicBans(ctx, model.DynamicBanFilter{SiteID: 2, Status: "active"})
+	activeResult, err = dataStore.ListDynamicBans(ctx, model.DynamicBanFilter{SiteID: 2, Status: "active"})
 	if err != nil {
 		t.Fatalf("list site 2 active: %v", err)
 	}
+	active = activeResult.Items
 	if len(active) != 1 || active[0].ClientIP != "192.0.2.10" {
 		t.Fatalf("expected unrelated site ban to remain active, got %+v", active)
 	}

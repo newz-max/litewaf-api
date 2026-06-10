@@ -551,7 +551,7 @@ func (s *MemoryStore) EnsureUser(_ context.Context, user model.User) (model.User
 	return user, nil
 }
 
-func (s *MemoryStore) ListAuditLogs(_ context.Context, filter model.AuditLogFilter) ([]model.AuditLog, error) {
+func (s *MemoryStore) ListAuditLogs(_ context.Context, filter model.AuditLogFilter) (model.ListResult[model.AuditLog], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := make([]model.AuditLog, 0, len(s.audits))
@@ -561,7 +561,7 @@ func (s *MemoryStore) ListAuditLogs(_ context.Context, filter model.AuditLogFilt
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
-	return items, nil
+	return listResult(items, filter.Pagination), nil
 }
 
 func (s *MemoryStore) CreateAuditLog(_ context.Context, item model.AuditLog) (model.AuditLog, error) {
@@ -588,7 +588,7 @@ func (s *MemoryStore) CreateAccessLog(_ context.Context, item model.AccessLog) (
 	return item, nil
 }
 
-func (s *MemoryStore) ListAccessLogs(_ context.Context, filter model.AccessLogFilter) ([]model.AccessLog, error) {
+func (s *MemoryStore) ListAccessLogs(_ context.Context, filter model.AccessLogFilter) (model.ListResult[model.AccessLog], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := make([]model.AccessLog, 0, len(s.accessLogs))
@@ -598,10 +598,10 @@ func (s *MemoryStore) ListAccessLogs(_ context.Context, filter model.AccessLogFi
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
-	return paginate(items, filter.Pagination), nil
+	return listResult(items, filter.Pagination), nil
 }
 
-func (s *MemoryStore) ListDeniedRecords(_ context.Context, filter model.DeniedRecordFilter) ([]model.DeniedRecord, error) {
+func (s *MemoryStore) ListDeniedRecords(_ context.Context, filter model.DeniedRecordFilter) (model.ListResult[model.DeniedRecord], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	now := time.Now().UTC()
@@ -624,7 +624,7 @@ func (s *MemoryStore) ListDeniedRecords(_ context.Context, filter model.DeniedRe
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
-	return paginate(items, filter.Pagination), nil
+	return listResult(items, filter.Pagination), nil
 }
 
 func (s *MemoryStore) findWAFEventForAccessLogLocked(item model.AccessLog) (model.WAFEvent, bool) {
@@ -679,7 +679,7 @@ func (s *MemoryStore) CreateWAFEvent(_ context.Context, item model.WAFEvent) (mo
 	return item, nil
 }
 
-func (s *MemoryStore) ListWAFEvents(_ context.Context, filter model.WAFEventFilter) ([]model.WAFEvent, error) {
+func (s *MemoryStore) ListWAFEvents(_ context.Context, filter model.WAFEventFilter) (model.ListResult[model.WAFEvent], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := make([]model.WAFEvent, 0, len(s.wafEvents))
@@ -689,10 +689,10 @@ func (s *MemoryStore) ListWAFEvents(_ context.Context, filter model.WAFEventFilt
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
-	return paginate(items, filter.Pagination), nil
+	return listResult(items, filter.Pagination), nil
 }
 
-func (s *MemoryStore) ListDynamicBans(_ context.Context, filter model.DynamicBanFilter) ([]model.DynamicBan, error) {
+func (s *MemoryStore) ListDynamicBans(_ context.Context, filter model.DynamicBanFilter) (model.ListResult[model.DynamicBan], error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	now := time.Now().UTC()
@@ -710,7 +710,7 @@ func (s *MemoryStore) ListDynamicBans(_ context.Context, filter model.DynamicBan
 		}
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
-	return paginate(items, filter.Pagination), nil
+	return listResult(items, filter.Pagination), nil
 }
 
 func (s *MemoryStore) ClearDynamicBan(_ context.Context, request model.DynamicBanClearRequest) (model.DynamicBanClearResult, error) {
@@ -2253,6 +2253,15 @@ func summaryTimeMatches(createdAt time.Time, since time.Time, until time.Time) b
 	return true
 }
 
+func listResult[T any](items []T, pagination model.Pagination) model.ListResult[T] {
+	normalized := normalizePagination(pagination)
+	return model.ListResult[T]{
+		Items:      paginate(items, normalized),
+		Total:      len(items),
+		Pagination: normalized,
+	}
+}
+
 func paginate[T any](items []T, pagination model.Pagination) []T {
 	offset := pagination.Offset
 	if offset < 0 {
@@ -2267,6 +2276,14 @@ func paginate[T any](items []T, pagination model.Pagination) []T {
 		end = len(items)
 	}
 	return items[offset:end]
+}
+
+func normalizePagination(pagination model.Pagination) model.Pagination {
+	offset := pagination.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return model.Pagination{Limit: normalizeLimit(pagination.Limit), Offset: offset}
 }
 
 func normalizeLimit(limit int) int {

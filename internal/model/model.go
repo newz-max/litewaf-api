@@ -179,11 +179,18 @@ type AuditLogFilter struct {
 	Result       string
 	Since        time.Time
 	Until        time.Time
+	Pagination   Pagination
 }
 
 type Pagination struct {
 	Limit  int
 	Offset int
+}
+
+type ListResult[T any] struct {
+	Items      []T
+	Total      int
+	Pagination Pagination
 }
 
 type AccessLog struct {

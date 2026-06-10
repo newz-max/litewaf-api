@@ -1727,8 +1727,8 @@ func (h handlers) listAuditLogs(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := h.app.Store.ListAuditLogs(r.Context(), filter)
-	h.writeList(w, items, err)
+	result, err := h.app.Store.ListAuditLogs(r.Context(), filter)
+	h.writePagedList(w, result.Items, result.Total, result.Pagination, err)
 }
 
 func (h handlers) listRateLimits(w http.ResponseWriter, r *http.Request) {
@@ -1994,6 +1994,19 @@ func (h handlers) writeList(w http.ResponseWriter, items any, err error) {
 		return
 	}
 	writeJSON(w, http.StatusOK, envelope{"items": nonNilList(items)})
+}
+
+func (h handlers) writePagedList(w http.ResponseWriter, items any, total int, pagination model.Pagination, err error) {
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{
+		"items":  nonNilList(items),
+		"total":  total,
+		"limit":  pagination.Limit,
+		"offset": pagination.Offset,
+	})
 }
 
 func nonNilList(items any) any {
@@ -2351,6 +2364,10 @@ func parseAuditFilter(w http.ResponseWriter, r *http.Request) (model.AuditLogFil
 			return model.AuditLogFilter{}, false
 		}
 		filter.Until = parsed
+	}
+	var ok bool
+	if filter.Pagination, ok = parsePagination(w, r); !ok {
+		return model.AuditLogFilter{}, false
 	}
 	return filter, true
 }

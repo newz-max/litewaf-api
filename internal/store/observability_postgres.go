@@ -30,11 +30,27 @@ func (s *PostgresStore) CreateAccessLog(ctx context.Context, item model.AccessLo
 	return item, err
 }
 
-func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessLogFilter) ([]model.AccessLog, error) {
-	limit := normalizeLimit(filter.Pagination.Limit)
-	offset := filter.Pagination.Offset
-	if offset < 0 {
-		offset = 0
+func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessLogFilter) (model.ListResult[model.AccessLog], error) {
+	pagination := normalizePagination(filter.Pagination)
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM access_logs
+		WHERE ($1::bigint = 0 OR site_id = $1)
+			AND ($2::integer = 0 OR listener_port = $2)
+			AND ($3 = '' OR scheme = $3)
+			AND ($4 = '' OR host = $4)
+			AND ($5 = '' OR client_ip = $5)
+			AND ($6 = '' OR method = $6)
+			AND ($7 = '' OR uri ILIKE '%' || $7 || '%')
+			AND ($8::integer = 0 OR status = $8)
+			AND ($9 = '' OR disposition = $9)
+			AND ($10 = '' OR reason_code = $10)
+			AND ($11::timestamptz IS NULL OR created_at >= $11)
+			AND ($12::timestamptz IS NULL OR created_at <= $12)`,
+		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
+		filter.ReasonCode, nullableTime(filter.Since), nullableTime(filter.Until)).Scan(&total); err != nil {
+		return model.ListResult[model.AccessLog]{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, listener_port, scheme, host, method, uri, status, upstream_status,
@@ -57,9 +73,9 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 		ORDER BY id DESC
 		LIMIT $13 OFFSET $14`,
 		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
-		filter.ReasonCode, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
+		filter.ReasonCode, nullableTime(filter.Since), nullableTime(filter.Until), pagination.Limit, pagination.Offset)
 	if err != nil {
-		return nil, err
+		return model.ListResult[model.AccessLog]{}, err
 	}
 	defer rows.Close()
 	var items []model.AccessLog
@@ -71,19 +87,61 @@ func (s *PostgresStore) ListAccessLogs(ctx context.Context, filter model.AccessL
 			&item.GeoDistrict, &item.GeoLongitude, &item.GeoLatitude, &item.GeoResolved, &item.GeoSource, &item.GeoSourceVersion,
 			&item.GeoUnresolvedReason, &item.Disposition, &item.ReasonCode, &item.Reason, &item.CreatedAt,
 		); err != nil {
-			return nil, err
+			return model.ListResult[model.AccessLog]{}, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return model.ListResult[model.AccessLog]{Items: items, Total: total, Pagination: pagination}, rows.Err()
 }
 
-func (s *PostgresStore) ListDeniedRecords(ctx context.Context, filter model.DeniedRecordFilter) ([]model.DeniedRecord, error) {
-	limit := normalizeLimit(filter.Pagination.Limit)
-	offset := filter.Pagination.Offset
-	if offset < 0 {
-		offset = 0
+func (s *PostgresStore) ListDeniedRecords(ctx context.Context, filter model.DeniedRecordFilter) (model.ListResult[model.DeniedRecord], error) {
+	pagination := normalizePagination(filter.Pagination)
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM access_logs a
+		LEFT JOIN LATERAL (
+			SELECT id, event_type, module, category, rule_id, rule_name, action, attack_type, summary
+			FROM waf_events
+			WHERE request_id = a.request_id AND a.request_id <> ''
+			ORDER BY id DESC
+			LIMIT 1
+		) w ON true
+		LEFT JOIN LATERAL (
+			SELECT id, ban_reason, source, status, ban_remaining_sec, updated_at
+			FROM dynamic_bans
+			WHERE site_id = a.site_id
+				AND listener_port = a.listener_port
+				AND scheme = a.scheme
+				AND client_ip = a.client_ip
+				AND (a.created_at BETWEEN created_at AND expires_at OR (status = 'active' AND expires_at > now()))
+			ORDER BY updated_at DESC, id DESC
+			LIMIT 1
+		) d ON w.id IS NULL
+		WHERE a.disposition IN ('blocked', 'rejected')
+			AND ($1::bigint = 0 OR a.site_id = $1)
+			AND ($2::integer = 0 OR a.listener_port = $2)
+			AND ($3 = '' OR a.scheme = $3)
+			AND ($4 = '' OR a.host = $4)
+			AND ($5 = '' OR a.client_ip = $5)
+			AND ($6 = '' OR a.method = $6)
+			AND ($7 = '' OR a.uri ILIKE '%' || $7 || '%')
+			AND ($8::integer = 0 OR a.status = $8)
+			AND ($9 = '' OR a.disposition = $9)
+			AND ($10::timestamptz IS NULL OR a.created_at >= $10)
+			AND ($11::timestamptz IS NULL OR a.created_at <= $11)
+			AND ($12 = '' OR COALESCE(w.module, '') = $12)
+			AND ($13 = '' OR COALESCE(w.action, '') = $13)
+			AND ($14 = '' OR CASE
+				WHEN w.id IS NOT NULL THEN 'waf-event'
+				WHEN d.id IS NOT NULL THEN 'dynamic-ban'
+				WHEN a.reason_code <> '' OR a.reason <> '' THEN 'access-log'
+				ELSE 'unclassified'
+			END = $14)`,
+		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
+		nullableTime(filter.Since), nullableTime(filter.Until), filter.Module, filter.Action, filter.TriggerSource).Scan(&total); err != nil {
+		return model.ListResult[model.DeniedRecord]{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
@@ -148,9 +206,9 @@ func (s *PostgresStore) ListDeniedRecords(ctx context.Context, filter model.Deni
 		ORDER BY a.id DESC
 		LIMIT $15 OFFSET $16`,
 		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.Method, filter.URI, filter.Status, filter.Disposition,
-		nullableTime(filter.Since), nullableTime(filter.Until), filter.Module, filter.Action, filter.TriggerSource, limit, offset)
+		nullableTime(filter.Since), nullableTime(filter.Until), filter.Module, filter.Action, filter.TriggerSource, pagination.Limit, pagination.Offset)
 	if err != nil {
-		return nil, err
+		return model.ListResult[model.DeniedRecord]{}, err
 	}
 	defer rows.Close()
 	var items []model.DeniedRecord
@@ -164,12 +222,12 @@ func (s *PostgresStore) ListDeniedRecords(ctx context.Context, filter model.Deni
 			&item.Summary, &item.DynamicBanReason, &item.DynamicBanSource, &item.DynamicBanStatus, &item.DynamicBanRemainingSec,
 			&item.CreatedAt,
 		); err != nil {
-			return nil, err
+			return model.ListResult[model.DeniedRecord]{}, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return model.ListResult[model.DeniedRecord]{Items: items, Total: total, Pagination: pagination}, rows.Err()
 }
 
 func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent) (model.WAFEvent, error) {
@@ -206,11 +264,33 @@ func (s *PostgresStore) CreateWAFEvent(ctx context.Context, item model.WAFEvent)
 	return item, nil
 }
 
-func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEventFilter) ([]model.WAFEvent, error) {
-	limit := normalizeLimit(filter.Pagination.Limit)
-	offset := filter.Pagination.Offset
-	if offset < 0 {
-		offset = 0
+func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEventFilter) (model.ListResult[model.WAFEvent], error) {
+	pagination := normalizePagination(filter.Pagination)
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM waf_events
+		WHERE ($1::bigint = 0 OR site_id = $1)
+			AND ($2::integer = 0 OR listener_port = $2)
+			AND ($3 = '' OR scheme = $3)
+			AND ($4 = '' OR host = $4)
+			AND ($5 = '' OR client_ip = $5)
+			AND ($6::bigint = 0 OR rule_id = $6)
+			AND ($7 = '' OR action = $7)
+			AND ($8 = '' OR disposition = $8)
+			AND ($9 = '' OR event_type = $9)
+			AND ($10 = '' OR module = $10)
+			AND ($11 = '' OR attack_type = $11)
+			AND ($12 = '' OR advanced_target = $12 OR target = $12)
+			AND ($13 = '' OR challenge_result = $13)
+			AND ($14::integer = 0 OR score >= $14)
+			AND ($15 = '' OR advanced_target = $15)
+			AND ($16 = '' OR bot_result = $16)
+			AND ($17::timestamptz IS NULL OR created_at >= $17)
+			AND ($18::timestamptz IS NULL OR created_at <= $18)`,
+		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
+		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, filter.DynamicResult, filter.BotResult, nullableTime(filter.Since), nullableTime(filter.Until)).Scan(&total); err != nil {
+		return model.ListResult[model.WAFEvent]{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, request_id, site_id, listener_port, scheme, host, event_type, rule_id, rule_type, target, action, disposition,
@@ -243,9 +323,9 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 		ORDER BY id DESC
 		LIMIT $19 OFFSET $20`,
 		filter.SiteID, filter.ListenerPort, filter.Scheme, filter.Host, filter.ClientIP, filter.RuleID, filter.Action, filter.Disposition, filter.EventType,
-		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, filter.DynamicResult, filter.BotResult, nullableTime(filter.Since), nullableTime(filter.Until), limit, offset)
+		filter.Module, filter.AttackType, filter.AdvancedTarget, filter.ChallengeResult, filter.MinScore, filter.DynamicResult, filter.BotResult, nullableTime(filter.Since), nullableTime(filter.Until), pagination.Limit, pagination.Offset)
 	if err != nil {
-		return nil, err
+		return model.ListResult[model.WAFEvent]{}, err
 	}
 	defer rows.Close()
 	var items []model.WAFEvent
@@ -261,12 +341,12 @@ func (s *PostgresStore) ListWAFEvents(ctx context.Context, filter model.WAFEvent
 			&item.ChallengeMode, &item.ChallengeResult, &item.BotResult, &item.BotReason, &item.DeviceSignal,
 			&item.CreatedAt,
 		); err != nil {
-			return nil, err
+			return model.ListResult[model.WAFEvent]{}, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return model.ListResult[model.WAFEvent]{Items: items, Total: total, Pagination: pagination}, rows.Err()
 }
 
 func (s *PostgresStore) GetObservabilitySummary(ctx context.Context, filter model.ObservabilitySummaryFilter) (model.ObservabilitySummary, error) {
@@ -412,11 +492,25 @@ func (s *PostgresStore) loadObservabilitySummaryTrends(ctx context.Context, summ
 	return nil
 }
 
-func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.DynamicBanFilter) ([]model.DynamicBan, error) {
-	limit := normalizeLimit(filter.Pagination.Limit)
-	offset := filter.Pagination.Offset
-	if offset < 0 {
-		offset = 0
+func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.DynamicBanFilter) (model.ListResult[model.DynamicBan], error) {
+	pagination := normalizePagination(filter.Pagination)
+	var total int
+	if err := s.db.QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM dynamic_bans
+		WHERE ($1::bigint = 0 OR site_id = $1)
+			AND ($2 = '' OR client_ip = $2)
+			AND ($3::bigint = 0 OR revision > $3)
+			AND ($4::integer = 0 OR listener_port = $4)
+			AND ($5 = '' OR scheme = $5)
+			AND (
+				$6 = ''
+				OR ($6 = 'active' AND status = 'active' AND expires_at > now())
+				OR ($6 = 'expired' AND (status = 'expired' OR (status = 'active' AND expires_at <= now())))
+				OR ($6 NOT IN ('active', 'expired') AND status = $6)
+			)`,
+		filter.SiteID, filter.ClientIP, filter.MinRevision, filter.ListenerPort, filter.Scheme, filter.Status).Scan(&total); err != nil {
+		return model.ListResult[model.DynamicBan]{}, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, site_id, listener_port, scheme, client_ip, ban_reason, source, source_event_id, ban_duration_sec,
@@ -427,11 +521,17 @@ func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.Dynami
 			AND ($3::bigint = 0 OR revision > $3)
 			AND ($4::integer = 0 OR listener_port = $4)
 			AND ($5 = '' OR scheme = $5)
+			AND (
+				$6 = ''
+				OR ($6 = 'active' AND status = 'active' AND expires_at > now())
+				OR ($6 = 'expired' AND (status = 'expired' OR (status = 'active' AND expires_at <= now())))
+				OR ($6 NOT IN ('active', 'expired') AND status = $6)
+			)
 		ORDER BY updated_at DESC, id DESC
-		LIMIT $6 OFFSET $7`,
-		filter.SiteID, filter.ClientIP, filter.MinRevision, filter.ListenerPort, filter.Scheme, limit, offset)
+		LIMIT $7 OFFSET $8`,
+		filter.SiteID, filter.ClientIP, filter.MinRevision, filter.ListenerPort, filter.Scheme, filter.Status, pagination.Limit, pagination.Offset)
 	if err != nil {
-		return nil, err
+		return model.ListResult[model.DynamicBan]{}, err
 	}
 	defer rows.Close()
 	now := time.Now().UTC()
@@ -439,15 +539,12 @@ func (s *PostgresStore) ListDynamicBans(ctx context.Context, filter model.Dynami
 	for rows.Next() {
 		item, err := scanDynamicBan(rows)
 		if err != nil {
-			return nil, err
+			return model.ListResult[model.DynamicBan]{}, err
 		}
 		item = dynamicBanWithStatus(item, now)
-		if filter.Status != "" && item.Status != filter.Status {
-			continue
-		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	return model.ListResult[model.DynamicBan]{Items: items, Total: total, Pagination: pagination}, rows.Err()
 }
 
 func (s *PostgresStore) ClearDynamicBan(ctx context.Context, request model.DynamicBanClearRequest) (model.DynamicBanClearResult, error) {

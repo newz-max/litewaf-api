@@ -2024,7 +2024,7 @@ func TestUploadProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Script upload block","site_id":3,"priority":70,"match":{"path":"/api/*/upload","path_match":"glob","methods":["post"]},"upload":{"extensions":[".php","JSP"],"max_bytes":2097152},"action":{"type":"block"}}`)
+	body := bytes.NewBufferString(`{"name":"Script upload block","site_id":3,"priority":70,"match":{"path":"/api/*/upload","path_match":"glob","methods":["post"]},"limit":{"counter":"client_ip","threshold":0,"window_sec":0,"ban_duration_sec":0},"upload":{"extensions":[".php","JSP"],"max_bytes":2097152},"action":{"type":"block"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/upload-protection/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -2042,6 +2042,9 @@ func TestUploadProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	}
 	if createResponse.Item.Match.Path != "/api/*/upload" || createResponse.Item.Match.PathMatch != "glob" || len(createResponse.Item.Match.Methods) != 1 {
 		t.Fatalf("unexpected upload protection match: %+v", createResponse.Item.Match)
+	}
+	if createResponse.Item.Limit.Counter != "client_ip" {
+		t.Fatalf("unexpected upload protection limit: %+v", createResponse.Item.Limit)
 	}
 	if createResponse.Item.Upload == nil || len(createResponse.Item.Upload.Extensions) != 2 || createResponse.Item.Upload.Extensions[0] != "php" || createResponse.Item.Upload.MaxBytes != 2097152 {
 		t.Fatalf("unexpected upload protection payload: %+v", createResponse.Item.Upload)

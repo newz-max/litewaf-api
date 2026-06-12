@@ -143,6 +143,7 @@ type uploadProtectionRequest struct {
 	Enabled      *bool                       `json:"enabled"`
 	Priority     int                         `json:"priority"`
 	Match        model.ProtectionRuleMatch   `json:"match"`
+	Limit        model.ProtectionRuleLimit   `json:"limit"`
 	Upload       *model.ProtectionRuleUpload `json:"upload"`
 	Action       model.ProtectionRuleAction  `json:"action"`
 	Module       string                      `json:"module"`
@@ -170,6 +171,7 @@ func (r uploadProtectionRequest) toProtectionRule() (model.ProtectionRule, error
 		Enabled:  boolValue(r.Enabled, true),
 		Priority: protectionRequestPriority(r.Priority),
 		Match:    r.Match,
+		Limit:    r.Limit,
 		Upload:   r.Upload,
 		Action:   r.Action,
 		Source:   protectionrules.SourceNative,

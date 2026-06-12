@@ -221,11 +221,8 @@ func (r uploadProtectionRequest) validate() error {
 	if r.Priority < 0 {
 		return errors.New("upload protection priority cannot be negative")
 	}
-	if !strings.HasPrefix(r.Match.Path, "/") {
-		return errors.New("upload protection path must start with /")
-	}
-	if !oneOf(r.Match.PathMatch, "exact", "prefix") {
-		return errors.New("upload protection path_match must be exact or prefix")
+	if err := protectionrules.ValidatePathMatch("upload protection", r.Match.PathMatch, r.Match.Path); err != nil {
+		return errors.New(err.Error())
 	}
 	for _, method := range r.Match.Methods {
 		if !oneOf(method, "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") {

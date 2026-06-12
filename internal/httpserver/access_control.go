@@ -197,11 +197,8 @@ func (r accessControlRequest) validate() error {
 	case "cidr":
 		return errors.New("source CIDR black/white lists must use /api/v1/ip-access-lists")
 	case "path":
-		if !strings.HasPrefix(r.Match.Path, "/") {
-			return errors.New("access control path must start with /")
-		}
-		if !oneOf(r.Match.PathMatch, "exact", "prefix") {
-			return errors.New("access control path_match must be exact or prefix")
+		if err := protectionrules.ValidatePathMatch("access control", r.Match.PathMatch, r.Match.Path); err != nil {
+			return errors.New(err.Error())
 		}
 	case "header":
 		if r.Match.HeaderName == "" {

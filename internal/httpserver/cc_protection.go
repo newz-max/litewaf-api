@@ -441,14 +441,8 @@ func (r ccProtectionRequest) validate() error {
 	if r.Category != rateLimitCategory {
 		return errors.New("cc protection category must be rate-limit")
 	}
-	if !strings.HasPrefix(r.Match.Path, "/") {
-		return errors.New("cc protection path must start with /")
-	}
-	if !protectionrules.IsCCPathMatch(r.Match.PathMatch) {
-		return errors.New("cc protection path_match must be exact, prefix, or glob")
-	}
-	if r.Match.PathMatch == "glob" && !ccGlobPathValid(r.Match.Path) {
-		return errors.New("cc protection glob path is invalid")
+	if err := protectionrules.ValidatePathMatch("cc protection", r.Match.PathMatch, r.Match.Path); err != nil {
+		return errors.New(err.Error())
 	}
 	for _, method := range r.Match.Methods {
 		if !oneOf(method, "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") {
@@ -488,17 +482,6 @@ func (r ccProtectionRequest) validate() error {
 		return errors.New("cc protection action is unsupported")
 	}
 	return nil
-}
-
-func ccGlobPathValid(value string) bool {
-	if value == "" || !strings.HasPrefix(value, "/") {
-		return false
-	}
-	if strings.Contains(value, "**") || strings.Contains(value, "\\") || strings.ContainsAny(value, "[]{}") {
-		return false
-	}
-	_, err := path.Match(value, value)
-	return err == nil
 }
 
 func ccRuleRiskWarnings(rule model.ProtectionRule) []string {

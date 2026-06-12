@@ -3,6 +3,7 @@ package protectionrules
 import (
 	"fmt"
 	"net"
+	"path"
 	"strings"
 
 	"litewaf-api/internal/attackmeta"
@@ -29,6 +30,12 @@ const (
 )
 
 const (
+	PathMatchExact  = "exact"
+	PathMatchPrefix = "prefix"
+	PathMatchGlob   = "glob"
+)
+
+const (
 	CounterClientIP          = "client_ip"
 	CounterClientIPPath      = "client_ip_path"
 	CounterGlobal            = "global"
@@ -51,7 +58,35 @@ func IsCCCounter(value string) bool {
 }
 
 func IsCCPathMatch(value string) bool {
-	return oneOf(value, "exact", "prefix", "glob")
+	return IsPathMatch(value)
+}
+
+func IsPathMatch(value string) bool {
+	return oneOf(value, PathMatchExact, PathMatchPrefix, PathMatchGlob)
+}
+
+func IsGlobPathValid(value string) bool {
+	if value == "" || !strings.HasPrefix(value, "/") {
+		return false
+	}
+	if strings.Contains(value, "**") || strings.Contains(value, "\\") || strings.ContainsAny(value, "[]{}") {
+		return false
+	}
+	_, err := path.Match(value, value)
+	return err == nil
+}
+
+func ValidatePathMatch(scope string, value string, path string) error {
+	if !strings.HasPrefix(path, "/") {
+		return fmt.Errorf("%s path must start with /", scope)
+	}
+	if !IsPathMatch(value) {
+		return fmt.Errorf("%s path_match must be exact, prefix, or glob", scope)
+	}
+	if value == PathMatchGlob && !IsGlobPathValid(path) {
+		return fmt.Errorf("%s glob path is invalid", scope)
+	}
+	return nil
 }
 
 func LegacyRef(kind string, id int64) string {
@@ -472,14 +507,8 @@ func validateCC(rule model.ProtectionRule) error {
 	if rule.Category != CategoryRateLimit {
 		return fmt.Errorf("cc protection category must be rate-limit")
 	}
-	if !strings.HasPrefix(rule.Match.Path, "/") {
-		return fmt.Errorf("cc protection path must start with /")
-	}
-	if !IsCCPathMatch(rule.Match.PathMatch) {
-		return fmt.Errorf("cc protection path_match must be exact, prefix, or glob")
-	}
-	if rule.Match.PathMatch == "glob" && !validCCGlobPath(rule.Match.Path) {
-		return fmt.Errorf("cc protection glob path is invalid")
+	if err := ValidatePathMatch("cc protection", rule.Match.PathMatch, rule.Match.Path); err != nil {
+		return err
 	}
 	if err := validateMethods(rule.Match.Methods); err != nil {
 		return fmt.Errorf("cc protection %w", err)
@@ -524,16 +553,6 @@ func validateCC(rule model.ProtectionRule) error {
 	return nil
 }
 
-func validCCGlobPath(path string) bool {
-	if path == "" || !strings.HasPrefix(path, "/") {
-		return false
-	}
-	if strings.Contains(path, "**") || strings.Contains(path, "\\") || strings.ContainsAny(path, "[]{}") {
-		return false
-	}
-	return true
-}
-
 func validateAccess(rule model.ProtectionRule) error {
 	if rule.Category != CategoryAccess {
 		return fmt.Errorf("access control category must be access-control")
@@ -554,11 +573,8 @@ func validateAccess(rule model.ProtectionRule) error {
 			return fmt.Errorf("access control cidr value is invalid")
 		}
 	case "path":
-		if !strings.HasPrefix(rule.Match.Path, "/") {
-			return fmt.Errorf("access control path must start with /")
-		}
-		if !oneOf(rule.Match.PathMatch, "exact", "prefix") {
-			return fmt.Errorf("access control path_match must be exact or prefix")
+		if err := ValidatePathMatch("access control", rule.Match.PathMatch, rule.Match.Path); err != nil {
+			return err
 		}
 	case "header":
 		if rule.Match.HeaderName == "" || rule.Match.Value == "" {
@@ -584,11 +600,8 @@ func validateUpload(rule model.ProtectionRule) error {
 	if rule.Category != CategoryUpload {
 		return fmt.Errorf("upload protection category must be upload")
 	}
-	if !strings.HasPrefix(rule.Match.Path, "/") {
-		return fmt.Errorf("upload protection path must start with /")
-	}
-	if !oneOf(rule.Match.PathMatch, "exact", "prefix") {
-		return fmt.Errorf("upload protection path_match must be exact or prefix")
+	if err := ValidatePathMatch("upload protection", rule.Match.PathMatch, rule.Match.Path); err != nil {
+		return err
 	}
 	if err := validateMethods(rule.Match.Methods); err != nil {
 		return fmt.Errorf("upload protection %w", err)
@@ -617,11 +630,8 @@ func validateBot(rule model.ProtectionRule) error {
 	if rule.Category != CategoryChallenge {
 		return fmt.Errorf("bot protection category must be challenge")
 	}
-	if !strings.HasPrefix(rule.Match.Path, "/") {
-		return fmt.Errorf("bot protection path must start with /")
-	}
-	if !oneOf(rule.Match.PathMatch, "exact", "prefix") {
-		return fmt.Errorf("bot protection path_match must be exact or prefix")
+	if err := ValidatePathMatch("bot protection", rule.Match.PathMatch, rule.Match.Path); err != nil {
+		return err
 	}
 	if err := validateMethods(rule.Match.Methods); err != nil {
 		return fmt.Errorf("bot protection %w", err)
@@ -657,11 +667,8 @@ func validateDynamic(rule model.ProtectionRule) error {
 	if !oneOf(rule.Category, "dynamic-token", "page-mutation", "waiting-room") {
 		return fmt.Errorf("dynamic protection category is unsupported")
 	}
-	if !strings.HasPrefix(rule.Match.Path, "/") {
-		return fmt.Errorf("dynamic protection path must start with /")
-	}
-	if !oneOf(rule.Match.PathMatch, "exact", "prefix") {
-		return fmt.Errorf("dynamic protection path_match must be exact or prefix")
+	if err := ValidatePathMatch("dynamic protection", rule.Match.PathMatch, rule.Match.Path); err != nil {
+		return err
 	}
 	if err := validateMethods(rule.Match.Methods); err != nil {
 		return fmt.Errorf("dynamic protection %w", err)

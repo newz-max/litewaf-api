@@ -351,7 +351,7 @@ func TestGenerateExtendedGatewayConfigIncludesUploadProtectionRules(t *testing.T
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
 	_, err := dataStore.CreateUploadProtectionRule(ctx, model.UploadProtectionRule{
-		Name: "Script upload block", Path: "/upload", PathMatch: "prefix", Methods: []string{"POST"},
+		Name: "Script upload block", Path: "/api/*/upload", PathMatch: "glob", Methods: []string{"POST"},
 		Extensions: []string{"php", "jsp"}, MaxBytes: 2097152, Action: "block", SiteID: 3, Enabled: true, Priority: 90,
 	})
 	if err != nil {
@@ -374,7 +374,7 @@ func TestGenerateExtendedGatewayConfigIncludesUploadProtectionRules(t *testing.T
 	if rule.Module != "upload-protection" || rule.Category != "upload" || rule.Action.Type != "block" {
 		t.Fatalf("unexpected upload protection identity/action: %+v", rule)
 	}
-	if rule.Match.Path != "/upload" || rule.Match.PathMatch != "prefix" || len(rule.Match.Methods) != 1 || rule.Priority != 90 {
+	if rule.Match.Path != "/api/*/upload" || rule.Match.PathMatch != "glob" || len(rule.Match.Methods) != 1 || rule.Priority != 90 {
 		t.Fatalf("unexpected upload protection match/priority: %+v", rule)
 	}
 	if rule.Upload == nil || len(rule.Upload.Extensions) != 2 || rule.Upload.MaxBytes != 2097152 {
@@ -386,7 +386,7 @@ func TestGenerateExtendedGatewayConfigIncludesBotProtectionRules(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
 	_, err := dataStore.CreateBotProtectionRule(ctx, model.BotProtectionRule{
-		Name: "Admin challenge", Path: "/admin", PathMatch: "prefix", Methods: []string{"GET"},
+		Name: "Admin challenge", Path: "/admin/*", PathMatch: "glob", Methods: []string{"GET"},
 		ChallengeMode: "js-challenge", VerifyTTL: 600, FailureAction: "block", SiteID: 3, Enabled: true, Priority: 60,
 	})
 	if err != nil {
@@ -409,7 +409,7 @@ func TestGenerateExtendedGatewayConfigIncludesBotProtectionRules(t *testing.T) {
 	if rule.Module != "bot-protection" || rule.Category != "challenge" || rule.Action.Type != "block" {
 		t.Fatalf("unexpected bot protection identity/action: %+v", rule)
 	}
-	if rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || len(rule.Match.Methods) != 1 || rule.Priority != 60 {
+	if rule.Match.Path != "/admin/*" || rule.Match.PathMatch != "glob" || len(rule.Match.Methods) != 1 || rule.Priority != 60 {
 		t.Fatalf("unexpected bot protection match/priority: %+v", rule)
 	}
 	if rule.Challenge == nil || rule.Challenge.Mode != "js-challenge" || rule.Challenge.VerifyTTL != 600 || rule.Challenge.FailureAction != "block" {
@@ -471,7 +471,7 @@ func TestGenerateExtendedGatewayConfigIncludesDynamicProtectionRules(t *testing.
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()
 	_, err := dataStore.CreateDynamicProtectionRule(ctx, model.DynamicProtectionRule{
-		Name: "Admin token", Category: "dynamic-token", Path: "/admin", PathMatch: "prefix", Methods: []string{"GET"},
+		Name: "Admin token", Category: "dynamic-token", Path: "/admin/*", PathMatch: "glob", Methods: []string{"GET"},
 		TokenTTL: 600, TokenPlacement: "cookie", FailureAction: "block", SiteID: 3, Enabled: true, Priority: 55,
 	})
 	if err != nil {
@@ -494,11 +494,43 @@ func TestGenerateExtendedGatewayConfigIncludesDynamicProtectionRules(t *testing.
 	if rule.Module != "dynamic-protection" || rule.Category != "dynamic-token" || rule.Action.Type != "block" {
 		t.Fatalf("unexpected dynamic protection identity/action: %+v", rule)
 	}
-	if rule.Match.Path != "/admin" || rule.Match.PathMatch != "prefix" || len(rule.Match.Methods) != 1 || rule.Priority != 55 {
+	if rule.Match.Path != "/admin/*" || rule.Match.PathMatch != "glob" || len(rule.Match.Methods) != 1 || rule.Priority != 55 {
 		t.Fatalf("unexpected dynamic protection match/priority: %+v", rule)
 	}
 	if rule.Dynamic == nil || rule.Dynamic.TokenTTL != 600 || rule.Dynamic.TokenPlacement != "cookie" || rule.Dynamic.FailureAction != "block" {
 		t.Fatalf("unexpected dynamic protection config: %+v", rule.Dynamic)
+	}
+}
+
+func TestGenerateExtendedGatewayConfigIncludesAccessControlGlobRule(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	_, err := dataStore.CreateProtectionRule(ctx, model.ProtectionRule{
+		Name:     "Admin glob block",
+		Module:   "access-control",
+		Category: "access-control",
+		Enabled:  true,
+		Priority: 50,
+		Match: model.ProtectionRuleMatch{
+			Target:    "path",
+			Path:      "/admin/*",
+			PathMatch: "glob",
+		},
+		Action: model.ProtectionRuleAction{Type: "block"},
+	})
+	if err != nil {
+		t.Fatalf("create access control glob rule: %v", err)
+	}
+	config, _, _, err := GenerateExtended(ctx, dataStore, "ruleset-access-glob")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	if len(config.ProtectionRules) != 1 {
+		t.Fatalf("expected access control output, got %+v", config.ProtectionRules)
+	}
+	rule := config.ProtectionRules[0]
+	if rule.Module != "access-control" || rule.Match.Target != "path" || rule.Match.Path != "/admin/*" || rule.Match.PathMatch != "glob" {
+		t.Fatalf("unexpected access control glob rule: %+v", rule)
 	}
 }
 

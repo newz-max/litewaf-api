@@ -1124,15 +1124,22 @@ func validateAttackProtectionRule(rule model.Rule) error {
 	return nil
 }
 
+func validatePublishedPathMatch(scope string, id int64, pathMatch string, rulePath string) error {
+	if pathMatch == "" {
+		pathMatch = protectionrules.PathMatchPrefix
+	}
+	if err := protectionrules.ValidatePathMatch(scope, pathMatch, rulePath); err != nil {
+		return fmt.Errorf("%s rule %d %s", scope, id, strings.TrimPrefix(err.Error(), scope+" "))
+	}
+	return nil
+}
+
 func validateUploadProtectionRule(item model.UploadProtectionRule) error {
 	if item.Name == "" {
 		return fmt.Errorf("upload protection rule %d name is required", item.ID)
 	}
-	if item.Path == "" || !strings.HasPrefix(item.Path, "/") {
-		return fmt.Errorf("upload protection rule %d path must start with /", item.ID)
-	}
-	if item.PathMatch != "" && item.PathMatch != "exact" && item.PathMatch != "prefix" {
-		return fmt.Errorf("upload protection rule %d path_match is unsupported", item.ID)
+	if err := validatePublishedPathMatch("upload protection", item.ID, item.PathMatch, item.Path); err != nil {
+		return err
 	}
 	for _, method := range item.Methods {
 		if method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" {
@@ -1163,11 +1170,8 @@ func validateBotProtectionRule(item model.BotProtectionRule) error {
 	if item.Name == "" {
 		return fmt.Errorf("bot protection rule %d name is required", item.ID)
 	}
-	if item.Path == "" || !strings.HasPrefix(item.Path, "/") {
-		return fmt.Errorf("bot protection rule %d path must start with /", item.ID)
-	}
-	if item.PathMatch != "" && item.PathMatch != "exact" && item.PathMatch != "prefix" {
-		return fmt.Errorf("bot protection rule %d path_match is unsupported", item.ID)
+	if err := validatePublishedPathMatch("bot protection", item.ID, item.PathMatch, item.Path); err != nil {
+		return err
 	}
 	for _, method := range item.Methods {
 		if method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" {
@@ -1196,11 +1200,8 @@ func validateDynamicProtectionRule(item model.DynamicProtectionRule) error {
 	if item.Category != "dynamic-token" && item.Category != "page-mutation" && item.Category != "waiting-room" {
 		return fmt.Errorf("dynamic protection rule %d category is unsupported", item.ID)
 	}
-	if item.Path == "" || !strings.HasPrefix(item.Path, "/") {
-		return fmt.Errorf("dynamic protection rule %d path must start with /", item.ID)
-	}
-	if item.PathMatch != "" && item.PathMatch != "exact" && item.PathMatch != "prefix" {
-		return fmt.Errorf("dynamic protection rule %d path_match is unsupported", item.ID)
+	if err := validatePublishedPathMatch("dynamic protection", item.ID, item.PathMatch, item.Path); err != nil {
+		return err
 	}
 	for _, method := range item.Methods {
 		if method != "GET" && method != "POST" && method != "PUT" && method != "PATCH" && method != "DELETE" && method != "HEAD" && method != "OPTIONS" {

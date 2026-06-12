@@ -1798,7 +1798,7 @@ func TestBotProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Admin challenge","site_id":3,"priority":70,"match":{"path":"/admin","path_match":"prefix","methods":["get","POST"]},"challenge":{"mode":"captcha","verify_ttl_sec":600,"failure_action":"block","behavior_enabled":true,"behavior_threshold":60,"device_binding":true,"search_engine_bypass":true,"failure_message":"验证失败，请稍后重试","privacy_notice":"仅使用浏览器信号完成本地验证"}}`)
+	body := bytes.NewBufferString(`{"name":"Admin challenge","site_id":3,"priority":70,"match":{"path":"/admin/*","path_match":"glob","methods":["get","POST"]},"challenge":{"mode":"captcha","verify_ttl_sec":600,"failure_action":"block","behavior_enabled":true,"behavior_threshold":60,"device_binding":true,"search_engine_bypass":true,"failure_message":"验证失败，请稍后重试","privacy_notice":"仅使用浏览器信号完成本地验证"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/bot-protection/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1814,7 +1814,7 @@ func TestBotProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	if createResponse.Item.Module != "bot-protection" || createResponse.Item.Category != "challenge" {
 		t.Fatalf("unexpected bot protection identity: %+v", createResponse.Item)
 	}
-	if createResponse.Item.Match.Path != "/admin" || createResponse.Item.Match.PathMatch != "prefix" || len(createResponse.Item.Match.Methods) != 2 {
+	if createResponse.Item.Match.Path != "/admin/*" || createResponse.Item.Match.PathMatch != "glob" || len(createResponse.Item.Match.Methods) != 2 {
 		t.Fatalf("unexpected bot protection match: %+v", createResponse.Item.Match)
 	}
 	if createResponse.Item.Challenge == nil || createResponse.Item.Challenge.Mode != "captcha" || createResponse.Item.Challenge.VerifyTTL != 600 || createResponse.Item.Challenge.FailureAction != "block" {
@@ -1875,7 +1875,7 @@ func TestDynamicProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Admin dynamic token","site_id":3,"priority":65,"category":"dynamic-token","match":{"path":"/admin","path_match":"prefix","methods":["get"]},"dynamic":{"mode":"dynamic-token","token_ttl_sec":600,"token_placement":"cookie","failure_action":"block"}}`)
+	body := bytes.NewBufferString(`{"name":"Admin dynamic token","site_id":3,"priority":65,"category":"dynamic-token","match":{"path":"/admin/*","path_match":"glob","methods":["get"]},"dynamic":{"mode":"dynamic-token","token_ttl_sec":600,"token_placement":"cookie","failure_action":"block"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/dynamic-protection/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -1946,6 +1946,7 @@ func TestBotProtectionWriteValidationAndAuthorization(t *testing.T) {
 	invalidBodies := []string{
 		`{"name":"bad","match":{"path":"admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"regex"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
+		`{"name":"bad","match":{"path":"/admin/**","path_match":"glob"},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"prefix","methods":["TRACE"]},"challenge":{"mode":"js-challenge","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"turnstile","verify_ttl_sec":300,"failure_action":"block"}}`,
 		`{"name":"bad","match":{"path":"/admin","path_match":"prefix"},"challenge":{"mode":"js-challenge","verify_ttl_sec":0,"failure_action":"block"}}`,
@@ -1982,6 +1983,7 @@ func TestDynamicProtectionWriteValidationAndAuthorization(t *testing.T) {
 	invalidBodies := []string{
 		`{"name":"bad","category":"dynamic-token","match":{"path":"admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
 		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"regex"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
+		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin/\\*","path_match":"glob"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
 		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix","methods":["TRACE"]},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"cookie","failure_action":"block"}}`,
 		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":0,"token_placement":"cookie","failure_action":"block"}}`,
 		`{"name":"bad","category":"dynamic-token","match":{"path":"/admin","path_match":"prefix"},"dynamic":{"mode":"dynamic-token","token_ttl_sec":300,"token_placement":"body","failure_action":"block"}}`,
@@ -2014,7 +2016,7 @@ func TestUploadProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Script upload block","site_id":3,"priority":70,"match":{"path":"/upload","path_match":"prefix","methods":["post"]},"upload":{"extensions":[".php","JSP"],"max_bytes":2097152},"action":{"type":"block"}}`)
+	body := bytes.NewBufferString(`{"name":"Script upload block","site_id":3,"priority":70,"match":{"path":"/api/*/upload","path_match":"glob","methods":["post"]},"upload":{"extensions":[".php","JSP"],"max_bytes":2097152},"action":{"type":"block"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/upload-protection/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -2030,7 +2032,7 @@ func TestUploadProtectionRuleWriteLifecycleAndAudit(t *testing.T) {
 	if createResponse.Item.Module != "upload-protection" || createResponse.Item.Category != "upload" {
 		t.Fatalf("unexpected upload protection identity: %+v", createResponse.Item)
 	}
-	if createResponse.Item.Match.Path != "/upload" || createResponse.Item.Match.PathMatch != "prefix" || len(createResponse.Item.Match.Methods) != 1 {
+	if createResponse.Item.Match.Path != "/api/*/upload" || createResponse.Item.Match.PathMatch != "glob" || len(createResponse.Item.Match.Methods) != 1 {
 		t.Fatalf("unexpected upload protection match: %+v", createResponse.Item.Match)
 	}
 	if createResponse.Item.Upload == nil || len(createResponse.Item.Upload.Extensions) != 2 || createResponse.Item.Upload.Extensions[0] != "php" || createResponse.Item.Upload.MaxBytes != 2097152 {
@@ -2088,6 +2090,7 @@ func TestUploadProtectionWriteValidationAndAuthorization(t *testing.T) {
 	invalidBodies := []string{
 		`{"name":"bad","match":{"path":"upload","path_match":"prefix"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/upload","path_match":"regex"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"path":"/upload/[tmp]","path_match":"glob"},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/upload","path_match":"prefix","methods":["TRACE"]},"upload":{"extensions":["php"]},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/upload","path_match":"prefix"},"upload":{"extensions":["../php"]},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"path":"/upload","path_match":"prefix"},"upload":{"max_bytes":-1},"action":{"type":"block"}}`,
@@ -2190,7 +2193,7 @@ func TestAccessControlRuleWriteLifecycleAndAudit(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Admin path","site_id":3,"priority":50,"match":{"target":"path","path":"/admin","path_match":"prefix"},"action":{"type":"block"}}`)
+	body := bytes.NewBufferString(`{"name":"Admin path","site_id":3,"priority":50,"match":{"target":"path","path":"/admin/*","path_match":"glob"},"action":{"type":"block"}}`)
 	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/access-control/rules", body), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -2203,7 +2206,7 @@ func TestAccessControlRuleWriteLifecycleAndAudit(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&createResponse); err != nil {
 		t.Fatalf("decode create access control: %v", err)
 	}
-	if createResponse.Item.Match.Target != "path" || createResponse.Item.Match.Path != "/admin" || createResponse.Item.Action.Type != "block" || createResponse.Item.Priority != 50 {
+	if createResponse.Item.Match.Target != "path" || createResponse.Item.Match.Path != "/admin/*" || createResponse.Item.Match.PathMatch != "glob" || createResponse.Item.Action.Type != "block" || createResponse.Item.Priority != 50 {
 		t.Fatalf("unexpected created access control: %+v", createResponse.Item)
 	}
 
@@ -2257,6 +2260,7 @@ func TestAccessControlWriteValidationAndAuthorization(t *testing.T) {
 		`{"name":"bad","match":{"target":"cidr","value":"10.0.0.0"},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"target":"path","path":"admin","path_match":"prefix"},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"target":"path","path":"/admin","path_match":"regex"},"action":{"type":"block"}}`,
+		`{"name":"bad","match":{"target":"path","path":"/admin/{tmp}","path_match":"glob"},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"target":"header","value":"bot","operator":"contains"},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"target":"host","host":"example.com","operator":"contains"},"action":{"type":"block"}}`,
 		`{"name":"bad","match":{"target":"host","host":"example.com","operator":"exact"},"action":{"type":"challenge"}}`,

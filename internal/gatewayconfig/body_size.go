@@ -22,14 +22,18 @@ func NormalizeClientMaxBodySize(value string) (string, error) {
 	if !clientMaxBodySizePattern.MatchString(value) {
 		return "", fmt.Errorf("gateway client max body size must match ^[1-9][0-9]*(k|K|m|M|g|G)?$")
 	}
-	bytes, ok := clientMaxBodySizeBytes(value)
+	bytes, ok := ClientMaxBodySizeBytes(value)
 	if !ok || bytes > MaxClientBodySizeBytes {
 		return "", fmt.Errorf("gateway client max body size must be between 1 byte and 1g")
 	}
 	return strings.ToLower(value), nil
 }
 
-func clientMaxBodySizeBytes(value string) (int64, bool) {
+func ClientMaxBodySizeBytes(value string) (int64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = DefaultClientMaxBodySize
+	}
 	unit := byte(0)
 	numberPart := value
 	last := value[len(value)-1]

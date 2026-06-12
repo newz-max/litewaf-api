@@ -107,7 +107,9 @@ LITEWAF_REAL_IP_RECURSIVE=on
 
 `LITEWAF_IMAGE_TAG` 建议使用不可变版本标签，不建议生产长期使用 `latest`。
 
-`LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE` 控制 OpenResty `client_max_body_size`，默认 `50m`。它是请求进入 WAF 规则前的网关硬限制，超限请求会返回 Nginx/OpenResty 原生 413，不会被归类为上传防护规则命中。允许值使用 Nginx 大小格式，例如 `1m`、`50m`、`512m`、`1g`，最大建议不超过 `1g`。
+`LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE` 控制 OpenResty `client_max_body_size`，默认 `50m`。它是 L1 网关请求体硬上限，在请求进入 WAF 规则前生效；超限请求会返回 Nginx/OpenResty 原生 413，不会被归类为 L3 上传防护规则命中。允许值使用 Nginx 大小格式，例如 `1m`、`50m`、`512m`、`1g`，最大建议不超过 `1g`。
+
+上传大小限制按层级排查：L0 是 CDN、负载均衡、宿主机 Nginx 等 LiteWaf 前置代理限制，LiteWaf 不接管；L1 是本环境变量控制的网关硬上限；L2 是策略里的请求体检测读取上限；L3 是上传防护大小规则。Dashboard“系统设置 / 上传限制”和发布预览会展示 LiteWaf 可控的 L1/L2/L3 摘要和冲突提示。
 
 生产 Compose 默认让 Gateway 使用 host network。防护应用发布后，Gateway 直接按应用监听配置绑定宿主机端口，例如 `80/http`、`443/https`、`9981/http`。HTTPS 监听使用后台上传并绑定的证书文件；首版不包含 ACME 自动签发和续期，但普通应用入口不再要求用户手工维护宿主机 Nginx 或额外反向代理。
 

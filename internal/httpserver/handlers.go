@@ -21,6 +21,7 @@ import (
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/auth"
 	"litewaf-api/internal/defaults"
+	"litewaf-api/internal/gatewayconfig"
 	"litewaf-api/internal/ipaccess"
 	"litewaf-api/internal/model"
 	"litewaf-api/internal/protectionrules"
@@ -57,11 +58,21 @@ func (h handlers) healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handlers) version(w http.ResponseWriter, r *http.Request) {
+	policies, _ := h.app.Store.ListPolicies(r.Context())
+	uploadRules, _ := h.app.Store.ListUploadProtectionRules(r.Context())
+	protectionRules, _ := h.app.Store.ListProtectionRules(r.Context())
+	uploadLimits := uploadLimitSummary(
+		h.app.Config.NormalizedGatewayClientMaxBodySize(),
+		gatewayBodyLimitSource(h.app.Config.GatewayClientMaxBodySize),
+		policies,
+		mergedUploadProtectionRules(protectionRules, uploadRules),
+	)
 	writeJSON(w, http.StatusOK, envelope{
 		"name":                         h.app.Config.AppName,
 		"version":                      app.Version,
 		"env":                          h.app.Config.Env,
 		"gateway_client_max_body_size": h.app.Config.NormalizedGatewayClientMaxBodySize(),
+		"upload_limits":                uploadLimits,
 	})
 }
 
@@ -596,6 +607,12 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	ipAccessSummary := ipAccessListSummary(ipAccessLists)
 	attackSummary := attackProtectionSummary(rules)
 	uploadSummary := uploadProtectionSummary(mergedUploadProtectionRules(protectionRules, uploadRules))
+	uploadLimits := uploadLimitSummary(
+		h.app.Config.NormalizedGatewayClientMaxBodySize(),
+		gatewayBodyLimitSource(h.app.Config.GatewayClientMaxBodySize),
+		policies,
+		mergedUploadProtectionRules(protectionRules, uploadRules),
+	)
 	botSummary := botProtectionSummary(mergedBotProtectionRules(protectionRules, botRules))
 	dynamicSummary := dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules))
 	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys, providers, providerPackages)
@@ -626,6 +643,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"application_validation":    applicationValidationSummary(applicationIssues, publishValidationErrors),
 			"listener_deployment_mode":  listenerDeploymentModeSummary(h.app.Config.GatewayListenerMode, h.app.Config.GatewayBridgePortRange),
 			"gateway":                   gatewayRuntimeSummary(h.app.Config.NormalizedGatewayClientMaxBodySize()),
+			"upload_limits":             uploadLimits,
 			"rules":                     len(rules),
 			"policies":                  len(policies),
 			"ip_access_list":            ipAccessSummary,
@@ -870,6 +888,131 @@ func gatewayRuntimeSummary(clientMaxBodySize string) envelope {
 	return envelope{
 		"client_max_body_size": clientMaxBodySize,
 	}
+}
+
+const uploadLimitSmallGatewayThresholdBytes int64 = 10 * 1024 * 1024
+
+func gatewayBodyLimitSource(rawValue string) string {
+	value := strings.TrimSpace(rawValue)
+	if value == "" || strings.EqualFold(value, gatewayconfig.DefaultClientMaxBodySize) {
+		return "default"
+	}
+	return "env"
+}
+
+func uploadLimitSummary(clientMaxBodySize string, source string, policies []model.Policy, uploadRules []model.ProtectionRule) model.UploadLimitSummary {
+	gatewayBytes, _ := gatewayconfig.ClientMaxBodySizeBytes(clientMaxBodySize)
+	bodyInspection := bodyInspectionLimitLayer(policies)
+	uploadProtection := uploadProtectionLimitLayer(uploadRules)
+	summary := model.UploadLimitSummary{
+		GatewayClientMaxBodySize: model.UploadLimitLayer{
+			Layer:        "L1",
+			Name:         "网关请求体硬上限",
+			Value:        clientMaxBodySize,
+			Source:       source,
+			Stage:        "before_waf",
+			EventVisible: false,
+			ValueBytes:   gatewayBytes,
+		},
+		BodyInspectionLimit: bodyInspection,
+		UploadProtection:    uploadProtection,
+		Warnings:            []model.UploadLimitWarning{},
+	}
+	summary.Warnings = uploadLimitWarnings(summary)
+	return summary
+}
+
+func bodyInspectionLimitLayer(policies []model.Policy) model.UploadLimitLayer {
+	layer := model.UploadLimitLayer{
+		Layer:        "L2",
+		Name:         "请求体检测读取上限",
+		Value:        "policy-derived",
+		Source:       "policy",
+		Stage:        "waf_body_inspection",
+		EventVisible: true,
+	}
+	for _, policy := range policies {
+		if !policy.Enabled {
+			continue
+		}
+		layer.TotalPolicies++
+		if !policy.BodyInspectionEnabled {
+			continue
+		}
+		layer.EnabledPolicies++
+		value := policy.BodyInspectionMaxBytes
+		if value <= 0 {
+			continue
+		}
+		if layer.MinBytes == 0 || value < layer.MinBytes {
+			layer.MinBytes = value
+		}
+		if value > layer.MaxBytes {
+			layer.MaxBytes = value
+		}
+	}
+	return layer
+}
+
+func uploadProtectionLimitLayer(rules []model.ProtectionRule) model.UploadProtectionLimitSummary {
+	summary := model.UploadProtectionLimitSummary{
+		Layer:        "L3",
+		Name:         "上传防护大小规则",
+		Source:       "upload_protection_rules",
+		Stage:        "upload_protection",
+		EventVisible: true,
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		summary.EnabledRules++
+		if rule.Upload == nil || rule.Upload.MaxBytes <= 0 {
+			continue
+		}
+		summary.SizeRules++
+		if rule.Upload.MaxBytes > summary.MaxBytes {
+			summary.MaxBytes = rule.Upload.MaxBytes
+		}
+	}
+	return summary
+}
+
+func uploadLimitWarnings(summary model.UploadLimitSummary) []model.UploadLimitWarning {
+	warnings := []model.UploadLimitWarning{}
+	gatewayBytes := summary.GatewayClientMaxBodySize.ValueBytes
+	uploadMaxBytes := int64(summary.UploadProtection.MaxBytes)
+	if gatewayBytes > 0 && uploadMaxBytes > gatewayBytes {
+		warnings = append(warnings, model.UploadLimitWarning{
+			Code:           "gateway_smaller_than_upload_rule",
+			Layer:          "L1",
+			Severity:       "warning",
+			Message:        fmt.Sprintf("网关请求体硬上限为 %s，上传防护大小规则最大值为 %d 字节。超过网关硬上限的请求会在进入 WAF 规则前被 OpenResty 413 拒绝，不会产生上传防护事件。", summary.GatewayClientMaxBodySize.Value, summary.UploadProtection.MaxBytes),
+			Impact:         "上传防护规则允许的文件大小可能永远无法到达 WAF 检测阶段。",
+			Recommendation: "调大 LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE，或将上传防护大小规则调整到不高于网关硬上限。",
+		})
+	}
+	if summary.BodyInspectionLimit.EnabledPolicies > 0 && summary.BodyInspectionLimit.MinBytes > 0 && summary.UploadProtection.MaxBytes > summary.BodyInspectionLimit.MinBytes {
+		warnings = append(warnings, model.UploadLimitWarning{
+			Code:           "body_inspection_smaller_than_upload_rule",
+			Layer:          "L2",
+			Severity:       "warning",
+			Message:        fmt.Sprintf("请求体检测读取上限最小值为 %d 字节，上传防护大小规则最大值为 %d 字节。上传大小规则可能依赖元数据，而不是完整请求体内容。", summary.BodyInspectionLimit.MinBytes, summary.UploadProtection.MaxBytes),
+			Impact:         "不同策略下的请求体检测范围不一致，上传规则语义可能不完整。",
+			Recommendation: "检查启用策略的 body_inspection_max_bytes，并确认上传大小规则依赖的检测范围符合预期。",
+		})
+	}
+	if gatewayBytes > 0 && gatewayBytes < uploadLimitSmallGatewayThresholdBytes {
+		warnings = append(warnings, model.UploadLimitWarning{
+			Code:           "gateway_limit_small",
+			Layer:          "L1",
+			Severity:       "warning",
+			Message:        fmt.Sprintf("网关请求体硬上限为 %s，低于 10m 常见上传场景阈值，较大的上传请求会在 WAF 前返回原生 413。", summary.GatewayClientMaxBodySize.Value),
+			Impact:         "头像、附件或业务文件上传可能在进入上传防护前失败。",
+			Recommendation: "生产环境请显式确认 LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE，或根据业务上传大小调高该值。",
+		})
+	}
+	return warnings
 }
 
 func listenerDeploymentPorts(value string) []int {

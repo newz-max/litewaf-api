@@ -656,6 +656,47 @@ type PublishCompatibilityDiagnostics struct {
 	Warnings        []string                       `json:"warnings"`
 }
 
+type UploadLimitSummary struct {
+	GatewayClientMaxBodySize UploadLimitLayer             `json:"gateway_client_max_body_size"`
+	BodyInspectionLimit      UploadLimitLayer             `json:"body_inspection_limit"`
+	UploadProtection         UploadProtectionLimitSummary `json:"upload_protection"`
+	Warnings                 []UploadLimitWarning         `json:"warnings"`
+}
+
+type UploadLimitLayer struct {
+	Layer           string `json:"layer"`
+	Name            string `json:"name"`
+	Value           string `json:"value"`
+	Source          string `json:"source"`
+	Stage           string `json:"stage"`
+	EventVisible    bool   `json:"event_visible"`
+	ValueBytes      int64  `json:"value_bytes,omitempty"`
+	TotalPolicies   int    `json:"total_policies,omitempty"`
+	EnabledPolicies int    `json:"enabled_policies,omitempty"`
+	MinBytes        int    `json:"min_bytes,omitempty"`
+	MaxBytes        int    `json:"max_bytes,omitempty"`
+}
+
+type UploadProtectionLimitSummary struct {
+	Layer        string `json:"layer"`
+	Name         string `json:"name"`
+	Source       string `json:"source"`
+	Stage        string `json:"stage"`
+	EventVisible bool   `json:"event_visible"`
+	EnabledRules int    `json:"enabled_rules"`
+	SizeRules    int    `json:"size_rules"`
+	MaxBytes     int    `json:"max_bytes,omitempty"`
+}
+
+type UploadLimitWarning struct {
+	Code           string `json:"code"`
+	Layer          string `json:"layer"`
+	Severity       string `json:"severity"`
+	Message        string `json:"message"`
+	Impact         string `json:"impact,omitempty"`
+	Recommendation string `json:"recommendation,omitempty"`
+}
+
 type CompatibilityCounts struct {
 	ProtectionRules int `json:"protection_rules"`
 	Native          int `json:"native"`

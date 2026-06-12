@@ -91,14 +91,15 @@ func TestGoZeroVersionCompatibleResponse(t *testing.T) {
 		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var response struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-		Env     string `json:"env"`
+		Name                     string `json:"name"`
+		Version                  string `json:"version"`
+		Env                      string `json:"env"`
+		GatewayClientMaxBodySize string `json:"gateway_client_max_body_size"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Name != "LiteWaf API" || response.Version == "" || response.Env != "test" {
+	if response.Name != "LiteWaf API" || response.Version == "" || response.Env != "test" || response.GatewayClientMaxBodySize != "50m" {
 		t.Fatalf("unexpected version response: %+v", response)
 	}
 }

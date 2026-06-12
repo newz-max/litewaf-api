@@ -2,6 +2,26 @@ package config
 
 import "testing"
 
+func TestLoadReadsGatewayClientMaxBodySize(t *testing.T) {
+	t.Setenv("LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE", "512M")
+
+	cfg := Load()
+	if cfg.NormalizedGatewayClientMaxBodySize() != "512m" {
+		t.Fatalf("unexpected gateway client max body size: %q", cfg.NormalizedGatewayClientMaxBodySize())
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid gateway client max body size: %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidGatewayClientMaxBodySize(t *testing.T) {
+	cfg := Config{GatewayClientMaxBodySize: "50m; lua_code_cache off;"}
+
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid gateway client max body size to fail")
+	}
+}
+
 func TestValidateProductionRejectsUnsafeDefaults(t *testing.T) {
 	cfg := Config{
 		Env:                   "production",

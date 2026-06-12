@@ -555,7 +555,7 @@ func TestReleaseRecordIncludesListenerActivationAndRollbackTarget(t *testing.T) 
 		t.Fatalf("expected activation summary: %+v", publishResponse.Item)
 	}
 	activation := publishResponse.Item.Activation
-	if activation.Applications != 1 || activation.ListenerCount != 1 || activation.HTTPSListenerCount != 0 || activation.ReloadStatus != "not-configured" || len(activation.ValidationErrors) != 0 {
+	if activation.Applications != 1 || activation.ListenerCount != 1 || activation.HTTPSListenerCount != 0 || activation.ClientMaxBodySize != "50m" || activation.ReloadStatus != "not-configured" || len(activation.ValidationErrors) != 0 {
 		t.Fatalf("unexpected activation summary: %+v", activation)
 	}
 	if !strings.Contains(publishResponse.Item.Note, model.PublishActivationNotePrefix) {
@@ -599,6 +599,13 @@ func TestReleaseRecordIncludesListenerActivationAndRollbackTarget(t *testing.T) 
 	}
 	if !bytes.Contains(listenerConf, []byte("listen 80;")) {
 		t.Fatalf("rollback did not restore listener artifact: %s", listenerConf)
+	}
+	bodySizeConf, err := os.ReadFile(filepath.Join(filepath.Dir(publishResponse.Item.ConfigPath), "listeners", "body-size.conf"))
+	if err != nil {
+		t.Fatalf("read body-size artifact: %v", err)
+	}
+	if !bytes.Contains(bodySizeConf, []byte("client_max_body_size 50m;")) {
+		t.Fatalf("publish did not write body-size artifact: %s", bodySizeConf)
 	}
 
 	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?resource_type=release", nil), token)
@@ -740,14 +747,15 @@ func TestVersionEndpointUsesBuildVersion(t *testing.T) {
 	}
 
 	var response struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-		Env     string `json:"env"`
+		Name                     string `json:"name"`
+		Version                  string `json:"version"`
+		Env                      string `json:"env"`
+		GatewayClientMaxBodySize string `json:"gateway_client_max_body_size"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode version: %v", err)
 	}
-	if response.Name != "LiteWaf API" || response.Version != "9.8.7-test" || response.Env != "test" {
+	if response.Name != "LiteWaf API" || response.Version != "9.8.7-test" || response.Env != "test" || response.GatewayClientMaxBodySize != "50m" {
 		t.Fatalf("unexpected version response: %+v", response)
 	}
 }
@@ -2607,6 +2615,10 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	}
 	if summary["compatibility_diagnostics"] == nil {
 		t.Fatalf("preview missing compatibility diagnostics: %+v", summary)
+	}
+	gateway, ok := summary["gateway"].(map[string]any)
+	if !ok || gateway["client_max_body_size"] != "50m" {
+		t.Fatalf("preview missing gateway client max body size: %+v", summary)
 	}
 }
 

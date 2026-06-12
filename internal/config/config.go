@@ -8,30 +8,33 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"litewaf-api/internal/gatewayconfig"
 )
 
 type Config struct {
-	AppName                string
-	Env                    string
-	HTTPAddr               string
-	LogLevel               slog.Level
-	DatabaseURL            string
-	RedisAddr              string
-	GatewayConfigPath      string
-	GatewayReloadCommand   string
-	GatewayListenerMode    string
-	GatewayBridgePortRange string
-	PublishOperator        string
-	AuthTokenSecret        string
-	AuthTokenTTL           time.Duration
-	AdminUsername          string
-	AdminPassword          string
-	AdminRole              string
-	GatewayIngestionToken  string
-	MetricsEnabled         bool
-	GeoIPDatabasePath      string
-	GeoIPChinaDatabasePath string
-	GeoIPCacheSize         int
+	AppName                  string
+	Env                      string
+	HTTPAddr                 string
+	LogLevel                 slog.Level
+	DatabaseURL              string
+	RedisAddr                string
+	GatewayConfigPath        string
+	GatewayReloadCommand     string
+	GatewayListenerMode      string
+	GatewayBridgePortRange   string
+	GatewayClientMaxBodySize string
+	PublishOperator          string
+	AuthTokenSecret          string
+	AuthTokenTTL             time.Duration
+	AdminUsername            string
+	AdminPassword            string
+	AdminRole                string
+	GatewayIngestionToken    string
+	MetricsEnabled           bool
+	GeoIPDatabasePath        string
+	GeoIPChinaDatabasePath   string
+	GeoIPCacheSize           int
 }
 
 func Load() Config {
@@ -49,6 +52,10 @@ func Load() Config {
 		GatewayReloadCommand:   getEnv("GATEWAY_RELOAD_COMMAND", ""),
 		GatewayListenerMode:    normalizeGatewayListenerMode(getEnv("GATEWAY_LISTENER_MODE", "host-network")),
 		GatewayBridgePortRange: getEnv("GATEWAY_BRIDGE_PORT_RANGE", ""),
+		GatewayClientMaxBodySize: getEnv(
+			"LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE",
+			gatewayconfig.DefaultClientMaxBodySize,
+		),
 		PublishOperator:        getEnv("PUBLISH_OPERATOR", "system"),
 		AuthTokenSecret:        getEnv("AUTH_TOKEN_SECRET", "dev-litewaf-change-me"),
 		AuthTokenTTL:           getEnvDuration("AUTH_TOKEN_TTL_MINUTES", 12*time.Hour),
@@ -61,6 +68,21 @@ func Load() Config {
 		GeoIPChinaDatabasePath: getEnv("LITEWAF_GEOIP_CHINA_DB_PATH", ""),
 		GeoIPCacheSize:         getEnvInt("LITEWAF_GEOIP_CACHE_SIZE", 2048),
 	}
+}
+
+func (c Config) Validate() error {
+	if _, err := gatewayconfig.NormalizeClientMaxBodySize(c.GatewayClientMaxBodySize); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c Config) NormalizedGatewayClientMaxBodySize() string {
+	value, err := gatewayconfig.NormalizeClientMaxBodySize(c.GatewayClientMaxBodySize)
+	if err != nil {
+		return gatewayconfig.DefaultClientMaxBodySize
+	}
+	return value
 }
 
 func (c Config) ValidateProduction() error {

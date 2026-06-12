@@ -7,7 +7,8 @@ type HealthzResp struct {
 }
 
 type VersionResp struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Env     string `json:"env"`
+	Name                     string `json:"name"`
+	Version                  string `json:"version"`
+	Env                      string `json:"env"`
+	GatewayClientMaxBodySize string `json:"gateway_client_max_body_size"`
 }

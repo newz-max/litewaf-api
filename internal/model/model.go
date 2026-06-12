@@ -97,6 +97,7 @@ type PublishActivationSummary struct {
 	Applications       int      `json:"applications"`
 	ListenerCount      int      `json:"listener_count"`
 	HTTPSListenerCount int      `json:"https_listener_count"`
+	ClientMaxBodySize  string   `json:"client_max_body_size"`
 	CertificateIDs     []int64  `json:"certificate_ids"`
 	ReloadStatus       string   `json:"reload_status"`
 	ReloadMessage      string   `json:"reload_message,omitempty"`

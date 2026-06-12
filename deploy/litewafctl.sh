@@ -169,6 +169,7 @@ ensure_env() {
   ensure_env_key DASHBOARD_PORT 18080 "$ENV_FILE"
   ensure_env_key GATEWAY_LISTENER_MODE host-network "$ENV_FILE"
   ensure_env_key GATEWAY_BRIDGE_PORT_RANGE "" "$ENV_FILE"
+  ensure_env_key LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE 50m "$ENV_FILE"
   ensure_env_key GATEWAY_RELOAD_COMMAND "" "$ENV_FILE"
   ensure_env_key API_LOOPBACK_ADDR 127.0.0.1 "$ENV_FILE"
   ensure_env_key API_LOOPBACK_PORT 18081 "$ENV_FILE"
@@ -260,6 +261,33 @@ validate_env_secrets() {
   [ "$failed" -eq 0 ] || die "unsafe production secrets detected"
 }
 
+validate_gateway_body_size() {
+  value="$(env_value LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE)"
+  case "$value" in
+    [1-9]*|[1-9]*[kKmMgG])
+      ;;
+    *)
+      die "LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE must match ^[1-9][0-9]*(k|K|m|M|g|G)?$"
+      ;;
+  esac
+  case "$value" in
+    *[!0-9kKmMgG]*|*[kKmMgG]*[kKmMgG]*|*[kKmMgG][0-9]*)
+      die "LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE must match ^[1-9][0-9]*(k|K|m|M|g|G)?$"
+      ;;
+  esac
+  number="$(printf '%s' "$value" | sed 's/[kKmMgG]$//')"
+  unit="$(printf '%s' "$value" | sed 's/^[0-9]*//')"
+  case "$unit" in
+    ""|[kK]|[mM]|[gG])
+      bytes="$(awk -v n="$number" -v u="$unit" 'BEGIN { mul=1; if (u ~ /^[kK]$/) mul=1024; else if (u ~ /^[mM]$/) mul=1024*1024; else if (u ~ /^[gG]$/) mul=1024*1024*1024; printf "%.0f", n*mul }')"
+      awk -v b="$bytes" 'BEGIN { exit !(b <= 1073741824) }' || die "LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE must be at most 1g"
+      ;;
+    *)
+      die "LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE must match ^[1-9][0-9]*(k|K|m|M|g|G)?$"
+      ;;
+  esac
+}
+
 validate() {
   need_cmd docker
   docker --version
@@ -268,6 +296,7 @@ validate() {
 
   ensure_env
   validate_env_secrets
+  validate_gateway_body_size
 
   df -h . || true
   ulimit -n || true

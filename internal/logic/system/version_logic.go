@@ -22,8 +22,9 @@ func NewVersionLogic(ctx context.Context, svcCtx *svc.ServiceContext) *VersionLo
 
 func (l *VersionLogic) Version() types.VersionResp {
 	return types.VersionResp{
-		Name:    l.svcCtx.Config.AppName,
-		Version: app.Version,
-		Env:     l.svcCtx.Config.Env,
+		Name:                     l.svcCtx.Config.AppName,
+		Version:                  app.Version,
+		Env:                      l.svcCtx.Config.Env,
+		GatewayClientMaxBodySize: l.svcCtx.Config.NormalizedGatewayClientMaxBodySize(),
 	}
 }

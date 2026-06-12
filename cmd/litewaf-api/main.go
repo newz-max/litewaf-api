@@ -24,6 +24,10 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: cfg.LogLevel,
 	}))
+	if err := cfg.Validate(); err != nil {
+		logger.Error("configuration validation failed", "error", err)
+		os.Exit(1)
+	}
 	if err := cfg.ValidateProduction(); err != nil {
 		logger.Error("production configuration validation failed", "error", err)
 		os.Exit(1)

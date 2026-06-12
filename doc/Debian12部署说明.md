@@ -97,6 +97,7 @@ METRICS_ENABLED=false
 LITEWAF_METRICS_ENABLED=false
 GATEWAY_LISTENER_MODE=host-network
 GATEWAY_BRIDGE_PORT_RANGE=
+LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE=50m
 API_LOOPBACK_ADDR=127.0.0.1
 API_LOOPBACK_PORT=18081
 LITEWAF_REAL_IP_TRUSTED_CIDRS=
@@ -105,6 +106,8 @@ LITEWAF_REAL_IP_RECURSIVE=on
 ```
 
 `LITEWAF_IMAGE_TAG` 建议使用不可变版本标签，不建议生产长期使用 `latest`。
+
+`LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE` 控制 OpenResty `client_max_body_size`，默认 `50m`。它是请求进入 WAF 规则前的网关硬限制，超限请求会返回 Nginx/OpenResty 原生 413，不会被归类为上传防护规则命中。允许值使用 Nginx 大小格式，例如 `1m`、`50m`、`512m`、`1g`，最大建议不超过 `1g`。
 
 生产 Compose 默认让 Gateway 使用 host network。防护应用发布后，Gateway 直接按应用监听配置绑定宿主机端口，例如 `80/http`、`443/https`、`9981/http`。HTTPS 监听使用后台上传并绑定的证书文件；首版不包含 ACME 自动签发和续期，但普通应用入口不再要求用户手工维护宿主机 Nginx 或额外反向代理。
 

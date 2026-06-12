@@ -58,9 +58,10 @@ func (h handlers) healthz(w http.ResponseWriter, r *http.Request) {
 
 func (h handlers) version(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, envelope{
-		"name":    h.app.Config.AppName,
-		"version": app.Version,
-		"env":     h.app.Config.Env,
+		"name":                         h.app.Config.AppName,
+		"version":                      app.Version,
+		"env":                          h.app.Config.Env,
+		"gateway_client_max_body_size": h.app.Config.NormalizedGatewayClientMaxBodySize(),
 	})
 }
 
@@ -421,6 +422,7 @@ func publishActivationSummary(applications []model.Application, artifacts publis
 		Applications:       countEnabledApplications(applications),
 		ListenerCount:      artifacts.ListenerCount,
 		HTTPSListenerCount: artifacts.HTTPSListenerCount,
+		ClientMaxBodySize:  artifacts.ClientMaxBodySize,
 		CertificateIDs:     append([]int64(nil), artifacts.CertificateIDs...),
 		ReloadStatus:       "not-configured",
 		ReloadMessage:      "gateway reload coordination is pending",
@@ -435,8 +437,8 @@ func applyReloadResult(activation *model.PublishActivationSummary, result gatewa
 }
 
 func activationAuditSummary(activation model.PublishActivationSummary) string {
-	return boundedSummary(fmt.Sprintf("applications=%d listeners=%d https_listeners=%d certificates=%v reload_status=%s reload_message=%s rollback_target=%s validation_errors=%d",
-		activation.Applications, activation.ListenerCount, activation.HTTPSListenerCount, activation.CertificateIDs,
+	return boundedSummary(fmt.Sprintf("applications=%d listeners=%d https_listeners=%d client_max_body_size=%s certificates=%v reload_status=%s reload_message=%s rollback_target=%s validation_errors=%d",
+		activation.Applications, activation.ListenerCount, activation.HTTPSListenerCount, activation.ClientMaxBodySize, activation.CertificateIDs,
 		activation.ReloadStatus, activation.ReloadMessage, activation.RollbackTarget, len(activation.ValidationErrors)), 512)
 }
 
@@ -538,7 +540,7 @@ func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 		h.writeServerError(w, err)
 		return
 	}
-	artifacts, err := publish.WriteRuntimeArtifacts(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath)
+	artifacts, err := publish.WriteRuntimeArtifactsWithClientMaxBodySize(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize)
 	if err != nil {
 		h.audit(r, "publish", "release", 0, "failure", err)
 		h.writeServerError(w, err)
@@ -623,6 +625,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"enabled_upstreams":         countEnabledApplicationUpstreams(applications),
 			"application_validation":    applicationValidationSummary(applicationIssues, publishValidationErrors),
 			"listener_deployment_mode":  listenerDeploymentModeSummary(h.app.Config.GatewayListenerMode, h.app.Config.GatewayBridgePortRange),
+			"gateway":                   gatewayRuntimeSummary(h.app.Config.NormalizedGatewayClientMaxBodySize()),
 			"rules":                     len(rules),
 			"policies":                  len(policies),
 			"ip_access_list":            ipAccessSummary,
@@ -860,6 +863,12 @@ func listenerDeploymentModeSummary(mode string, rangeValue string) envelope {
 		"port_range":          ports,
 		"raw_port_range":      strings.TrimSpace(rangeValue),
 		"warnings":            warnings,
+	}
+}
+
+func gatewayRuntimeSummary(clientMaxBodySize string) envelope {
+	return envelope{
+		"client_max_body_size": clientMaxBodySize,
 	}
 }
 
@@ -1694,7 +1703,7 @@ func (h handlers) rollbackRelease(w http.ResponseWriter, r *http.Request) {
 		h.writeServerError(w, err)
 		return
 	}
-	artifacts, err := publish.WriteRuntimeArtifactsFromConfig(r.Context(), h.app.Store, []byte(record.ConfigJSON), h.app.Config.GatewayConfigPath)
+	artifacts, err := publish.WriteRuntimeArtifactsFromConfigWithClientMaxBodySize(r.Context(), h.app.Store, []byte(record.ConfigJSON), h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize)
 	if err != nil {
 		h.audit(r, "rollback", "release", record.ID, "failure", err)
 		h.writeServerError(w, err)

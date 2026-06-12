@@ -44,6 +44,7 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-litewaf}:${POSTGRES_PASSWORD:-litewaf_dev_password}@postgres:5432/${POSTGRES_DB:-litewaf}?sslmode=disable
       REDIS_ADDR: redis:6379
       GATEWAY_CONFIG_PATH: /var/lib/litewaf/gateway/active.json
+      LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE: ${LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE:-50m}
       PUBLISH_OPERATOR: ${PUBLISH_OPERATOR:-compose}
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET:-dev-litewaf-change-me}
       GATEWAY_INGESTION_TOKEN: ${GATEWAY_INGESTION_TOKEN:-dev-gateway-change-me}

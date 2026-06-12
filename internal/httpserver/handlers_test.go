@@ -2628,6 +2628,13 @@ func TestProtectionOverviewAndPublishPreviewModuleMatrix(t *testing.T) {
 	if !ok || gatewayLimit["stage"] != "before_waf" || gatewayLimit["event_visible"] != false {
 		t.Fatalf("unexpected gateway upload limit layer: %+v", uploadLimits)
 	}
+	bodyLimit, ok := uploadLimits["body_inspection_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("preview missing body inspection limit layer: %+v", uploadLimits)
+	}
+	if _, ok := bodyLimit["policy_limits"]; ok {
+		t.Fatalf("preview must omit policy_limits when no policy detail exists: %+v", bodyLimit)
+	}
 	uploadWarnings, ok := uploadLimits["warnings"].([]any)
 	if !ok || len(uploadWarnings) != 0 {
 		t.Fatalf("empty publish preview must not fabricate upload limit warnings: %+v", uploadLimits)
@@ -2704,6 +2711,18 @@ func TestUploadLimitSummaryReportsPolicyAndUploadRuleConflicts(t *testing.T) {
 	if !ok || bodyLimit["value"] != "policy-derived" || int(bodyLimit["enabled_policies"].(float64)) != 1 || int(bodyLimit["min_bytes"].(float64)) != 65536 {
 		t.Fatalf("unexpected body inspection summary: %+v", bodyLimit)
 	}
+	policyLimits, ok := bodyLimit["policy_limits"].([]any)
+	if !ok || len(policyLimits) != 1 {
+		t.Fatalf("expected one policy limit summary: %+v", bodyLimit)
+	}
+	policyLimit, ok := policyLimits[0].(map[string]any)
+	if !ok ||
+		policyLimit["policy_name"] != "Body inspection" ||
+		int(policyLimit["max_bytes"].(float64)) != 65536 ||
+		int(policyLimit["applications"].(float64)) != 1 ||
+		int(policyLimit["rules"].(float64)) != 1 {
+		t.Fatalf("unexpected policy limit summary: %+v", policyLimits[0])
+	}
 	uploadProtection, ok := uploadLimits["upload_protection"].(map[string]any)
 	if !ok || int(uploadProtection["enabled_rules"].(float64)) != 1 || int(uploadProtection["size_rules"].(float64)) != 1 || int(uploadProtection["max_bytes"].(float64)) != 2097152 {
 		t.Fatalf("unexpected upload protection summary: %+v", uploadProtection)
@@ -2723,11 +2742,110 @@ func TestUploadLimitSummaryReportsPolicyAndUploadRuleConflicts(t *testing.T) {
 		if strings.Contains(message, "上传防护命中") {
 			t.Fatalf("native 413 warning must not be represented as upload protection hit: %s", message)
 		}
+		if warning["code"] == "body_inspection_smaller_than_upload_rule" &&
+			(!strings.Contains(message, "Body inspection") || !strings.Contains(message, "绑定应用 1 个，规则 1 条")) {
+			t.Fatalf("body inspection warning missing policy context: %s", message)
+		}
 	}
 	for _, code := range []string{"gateway_smaller_than_upload_rule", "body_inspection_smaller_than_upload_rule", "gateway_limit_small"} {
 		if !codes[code] {
 			t.Fatalf("missing upload limit warning %s in %+v", code, warnings)
 		}
+	}
+}
+
+func TestUploadLimitSummaryReportsMultiplePolicyLimitsAndIgnoresDisabledPolicies(t *testing.T) {
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayClientMaxBodySize = "20m"
+	})
+	token := adminToken(t, handler)
+
+	appBody := bytes.NewBufferString(`{"name":"Policy targets","mode":"protect","hosts":[{"host":"policy.example.test","is_primary":true}],"listeners":[{"port":80,"protocol":"http","enabled":true}],"upstreams":[{"name":"primary","url":"http://127.0.0.1:9000","weight":1,"enabled":true}]}`)
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", appBody), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create application status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var appResponse struct {
+		Item model.Application `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&appResponse); err != nil {
+		t.Fatalf("decode application: %v", err)
+	}
+
+	ruleBody := bytes.NewBufferString(`{"name":"Body JSON","type":"custom","target":"body_json","action":"block","expression":"evil","score":100}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/rules", ruleBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create rule status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var ruleResponse struct {
+		Item model.Rule `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&ruleResponse); err != nil {
+		t.Fatalf("decode rule: %v", err)
+	}
+
+	policyBodies := []string{
+		`{"name":"Small body","application_ids":[` + strconv.FormatInt(appResponse.Item.ID, 10) + `],"rule_ids":[` + strconv.FormatInt(ruleResponse.Item.ID, 10) + `],"body_inspection_enabled":true,"body_inspection_max_bytes":65536}`,
+		`{"name":"Large body","application_ids":[` + strconv.FormatInt(appResponse.Item.ID, 10) + `],"rule_ids":[` + strconv.FormatInt(ruleResponse.Item.ID, 10) + `],"body_inspection_enabled":true,"body_inspection_max_bytes":1048576}`,
+		`{"name":"Disabled body","application_ids":[` + strconv.FormatInt(appResponse.Item.ID, 10) + `],"rule_ids":[` + strconv.FormatInt(ruleResponse.Item.ID, 10) + `],"body_inspection_enabled":true,"body_inspection_max_bytes":32768,"enabled":false}`,
+	}
+	for _, body := range policyBodies {
+		req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewBufferString(body)), token)
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create policy status = %d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	uploadBody := bytes.NewBufferString(`{"name":"Large upload","match":{"path":"/upload","path_match":"prefix","methods":["POST"]},"upload":{"max_bytes":2097152},"action":{"type":"log-only"},"enabled":true}`)
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/upload-protection/rules", uploadBody), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create upload protection status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/releases/preview", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Summary struct {
+			UploadLimits model.UploadLimitSummary `json:"upload_limits"`
+		} `json:"summary"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode publish preview: %v", err)
+	}
+	bodyLimit := response.Summary.UploadLimits.BodyInspectionLimit
+	if bodyLimit.EnabledPolicies != 2 || bodyLimit.MinBytes != 65536 || bodyLimit.MaxBytes != 1048576 {
+		t.Fatalf("unexpected body inspection aggregate: %+v", bodyLimit)
+	}
+	if len(bodyLimit.PolicyLimits) != 2 {
+		t.Fatalf("disabled policy should not be included in policy_limits: %+v", bodyLimit.PolicyLimits)
+	}
+	for _, policy := range bodyLimit.PolicyLimits {
+		if policy.PolicyName == "Disabled body" || !policy.Enabled {
+			t.Fatalf("disabled policy leaked into policy_limits: %+v", bodyLimit.PolicyLimits)
+		}
+	}
+	warnings := response.Summary.UploadLimits.Warnings
+	var bodyWarning *model.UploadLimitWarning
+	for i := range warnings {
+		if warnings[i].Code == "body_inspection_smaller_than_upload_rule" {
+			bodyWarning = &warnings[i]
+			break
+		}
+	}
+	if bodyWarning == nil || !strings.Contains(bodyWarning.Message, "Small body") || strings.Contains(bodyWarning.Message, "Disabled body") {
+		t.Fatalf("body inspection warning did not identify enabled min policy: %+v", warnings)
 	}
 }
 
@@ -2747,7 +2865,8 @@ func TestVersionUploadLimitSummaryUsesGatewayEnvSource(t *testing.T) {
 		GatewayClientMaxBodySize string                   `json:"gateway_client_max_body_size"`
 		UploadLimits             model.UploadLimitSummary `json:"upload_limits"`
 	}
-	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+	rawBody := rec.Body.Bytes()
+	if err := json.Unmarshal(rawBody, &response); err != nil {
 		t.Fatalf("decode version: %v", err)
 	}
 	if response.GatewayClientMaxBodySize != "512k" {
@@ -2758,6 +2877,21 @@ func TestVersionUploadLimitSummaryUsesGatewayEnvSource(t *testing.T) {
 	}
 	if response.UploadLimits.UploadProtection.EnabledRules != 0 || len(response.UploadLimits.Warnings) == 0 {
 		t.Fatalf("expected empty rules and small gateway warning, got %+v", response.UploadLimits)
+	}
+	var rawResponse map[string]any
+	if err := json.Unmarshal(rawBody, &rawResponse); err != nil {
+		t.Fatalf("decode raw version: %v", err)
+	}
+	uploadLimits, ok := rawResponse["upload_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("version missing upload_limits: %+v", rawResponse)
+	}
+	bodyLimit, ok := uploadLimits["body_inspection_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("version missing body inspection limit layer: %+v", uploadLimits)
+	}
+	if _, ok := bodyLimit["policy_limits"]; ok {
+		t.Fatalf("version must omit policy_limits when no policy detail exists: %+v", bodyLimit)
 	}
 }
 

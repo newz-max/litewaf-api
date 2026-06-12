@@ -944,6 +944,14 @@ func bodyInspectionLimitLayer(policies []model.Policy) model.UploadLimitLayer {
 		if value <= 0 {
 			continue
 		}
+		layer.PolicyLimits = append(layer.PolicyLimits, model.BodyInspectionPolicyLimitSummary{
+			PolicyID:     policy.ID,
+			PolicyName:   policy.Name,
+			Enabled:      policy.Enabled,
+			MaxBytes:     value,
+			Applications: len(policy.SiteIDs),
+			Rules:        len(policy.RuleIDs),
+		})
 		if layer.MinBytes == 0 || value < layer.MinBytes {
 			layer.MinBytes = value
 		}
@@ -993,12 +1001,19 @@ func uploadLimitWarnings(summary model.UploadLimitSummary) []model.UploadLimitWa
 		})
 	}
 	if summary.BodyInspectionLimit.EnabledPolicies > 0 && summary.BodyInspectionLimit.MinBytes > 0 && summary.UploadProtection.MaxBytes > summary.BodyInspectionLimit.MinBytes {
+		policySource := minimumBodyInspectionPolicy(summary.BodyInspectionLimit)
+		message := fmt.Sprintf("请求体检测读取上限最小值为 %d 字节，上传防护大小规则最大值为 %d 字节。上传大小规则可能依赖元数据，而不是完整请求体内容。", summary.BodyInspectionLimit.MinBytes, summary.UploadProtection.MaxBytes)
+		impact := "不同策略下的请求体检测范围不一致，上传规则语义可能不完整。"
+		if policySource != nil {
+			message = fmt.Sprintf("请求体检测读取上限最小值为 %d 字节，来自策略「%s」（绑定应用 %d 个，规则 %d 条）；上传防护大小规则最大值为 %d 字节。上传大小规则可能依赖元数据，而不是完整请求体内容。", policySource.MaxBytes, policySource.PolicyName, policySource.Applications, policySource.Rules, summary.UploadProtection.MaxBytes)
+			impact = fmt.Sprintf("策略「%s」下的请求体检测范围小于上传防护大小规则，上传规则语义可能不完整。", policySource.PolicyName)
+		}
 		warnings = append(warnings, model.UploadLimitWarning{
 			Code:           "body_inspection_smaller_than_upload_rule",
 			Layer:          "L2",
 			Severity:       "warning",
-			Message:        fmt.Sprintf("请求体检测读取上限最小值为 %d 字节，上传防护大小规则最大值为 %d 字节。上传大小规则可能依赖元数据，而不是完整请求体内容。", summary.BodyInspectionLimit.MinBytes, summary.UploadProtection.MaxBytes),
-			Impact:         "不同策略下的请求体检测范围不一致，上传规则语义可能不完整。",
+			Message:        message,
+			Impact:         impact,
 			Recommendation: "检查启用策略的 body_inspection_max_bytes，并确认上传大小规则依赖的检测范围符合预期。",
 		})
 	}
@@ -1013,6 +1028,16 @@ func uploadLimitWarnings(summary model.UploadLimitSummary) []model.UploadLimitWa
 		})
 	}
 	return warnings
+}
+
+func minimumBodyInspectionPolicy(layer model.UploadLimitLayer) *model.BodyInspectionPolicyLimitSummary {
+	for i := range layer.PolicyLimits {
+		policy := &layer.PolicyLimits[i]
+		if policy.Enabled && policy.MaxBytes == layer.MinBytes {
+			return policy
+		}
+	}
+	return nil
 }
 
 func listenerDeploymentPorts(value string) []int {

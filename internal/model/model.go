@@ -664,17 +664,27 @@ type UploadLimitSummary struct {
 }
 
 type UploadLimitLayer struct {
-	Layer           string `json:"layer"`
-	Name            string `json:"name"`
-	Value           string `json:"value"`
-	Source          string `json:"source"`
-	Stage           string `json:"stage"`
-	EventVisible    bool   `json:"event_visible"`
-	ValueBytes      int64  `json:"value_bytes,omitempty"`
-	TotalPolicies   int    `json:"total_policies,omitempty"`
-	EnabledPolicies int    `json:"enabled_policies,omitempty"`
-	MinBytes        int    `json:"min_bytes,omitempty"`
-	MaxBytes        int    `json:"max_bytes,omitempty"`
+	Layer           string                             `json:"layer"`
+	Name            string                             `json:"name"`
+	Value           string                             `json:"value"`
+	Source          string                             `json:"source"`
+	Stage           string                             `json:"stage"`
+	EventVisible    bool                               `json:"event_visible"`
+	ValueBytes      int64                              `json:"value_bytes,omitempty"`
+	TotalPolicies   int                                `json:"total_policies,omitempty"`
+	EnabledPolicies int                                `json:"enabled_policies,omitempty"`
+	MinBytes        int                                `json:"min_bytes,omitempty"`
+	MaxBytes        int                                `json:"max_bytes,omitempty"`
+	PolicyLimits    []BodyInspectionPolicyLimitSummary `json:"policy_limits,omitempty"`
+}
+
+type BodyInspectionPolicyLimitSummary struct {
+	PolicyID     int64  `json:"policy_id"`
+	PolicyName   string `json:"policy_name"`
+	Enabled      bool   `json:"enabled"`
+	MaxBytes     int    `json:"max_bytes"`
+	Applications int    `json:"applications"`
+	Rules        int    `json:"rules"`
 }
 
 type UploadProtectionLimitSummary struct {

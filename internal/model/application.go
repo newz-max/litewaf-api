@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"litewaf-api/internal/pathmatch"
 )
 
 const (
@@ -39,6 +41,7 @@ type Application struct {
 	Hosts       []ApplicationHost       `json:"hosts"`
 	Listeners   []ApplicationListener   `json:"listeners"`
 	Upstreams   []ApplicationUpstream   `json:"upstreams"`
+	Routes      []ApplicationRoute      `json:"routes,omitempty"`
 	ProxyConfig *ApplicationProxyConfig `json:"proxy_config,omitempty"`
 	CreatedAt   time.Time               `json:"created_at"`
 	UpdatedAt   time.Time               `json:"updated_at"`
@@ -67,6 +70,18 @@ type ApplicationUpstream struct {
 	URL           string `json:"url"`
 	Weight        int    `json:"weight"`
 	Enabled       bool   `json:"enabled"`
+}
+
+type ApplicationRoute struct {
+	ID            int64                   `json:"id"`
+	ApplicationID int64                   `json:"application_id"`
+	Name          string                  `json:"name"`
+	Path          string                  `json:"path"`
+	PathMatch     string                  `json:"path_match"`
+	UpstreamName  string                  `json:"upstream_name"`
+	Priority      int                     `json:"priority"`
+	Enabled       bool                    `json:"enabled"`
+	ProxyConfig   *ApplicationProxyConfig `json:"proxy_config,omitempty"`
 }
 
 type ApplicationProxyConfig struct {
@@ -116,6 +131,33 @@ func NormalizeApplication(app *Application) {
 		app.Upstreams[i].URL = strings.TrimSpace(app.Upstreams[i].URL)
 		if app.Upstreams[i].Weight <= 0 {
 			app.Upstreams[i].Weight = 1
+		}
+	}
+	if len(app.Upstreams) == 1 && app.Upstreams[0].Name == "" {
+		app.Upstreams[0].Name = "primary"
+	}
+	for i := range app.Routes {
+		app.Routes[i].Name = strings.TrimSpace(app.Routes[i].Name)
+		app.Routes[i].Path = strings.TrimSpace(app.Routes[i].Path)
+		if app.Routes[i].Path == "" {
+			app.Routes[i].Path = "/"
+		}
+		app.Routes[i].PathMatch = strings.ToLower(strings.TrimSpace(app.Routes[i].PathMatch))
+		if app.Routes[i].PathMatch == "" {
+			app.Routes[i].PathMatch = pathmatch.Prefix
+		}
+		app.Routes[i].UpstreamName = strings.TrimSpace(app.Routes[i].UpstreamName)
+		if app.Routes[i].UpstreamName == "" && len(app.Upstreams) == 1 {
+			app.Routes[i].UpstreamName = app.Upstreams[0].Name
+		}
+		if app.Routes[i].Priority <= 0 {
+			app.Routes[i].Priority = i + 1
+		}
+		if app.Routes[i].ProxyConfig != nil {
+			NormalizeApplicationProxyConfig(app.Routes[i].ProxyConfig)
+			if isEmptyApplicationProxyConfig(*app.Routes[i].ProxyConfig) {
+				app.Routes[i].ProxyConfig = nil
+			}
 		}
 	}
 	if app.ProxyConfig != nil {
@@ -182,10 +224,25 @@ func ValidateApplication(app Application, certificateExists func(int64) bool) er
 		return errors.New("at least one application upstream is required")
 	}
 	enabledUpstreams := 0
-	for _, upstream := range app.Upstreams {
+	upstreamByName := map[string]ApplicationUpstream{}
+	singleUnnamedUpstream := len(app.Upstreams) == 1 && app.Upstreams[0].Name == ""
+	for i, upstream := range app.Upstreams {
 		if upstream.URL == "" {
 			return errors.New("upstream URL is required")
 		}
+		upstreamName := upstream.Name
+		if upstreamName == "" && singleUnnamedUpstream {
+			upstreamName = "primary"
+		}
+		if upstreamName == "" {
+			return errors.New("upstream name is required")
+		}
+		if _, exists := upstreamByName[upstreamName]; exists {
+			return fmt.Errorf("duplicate upstream name %q", upstreamName)
+		}
+		upstream.Name = upstreamName
+		upstreamByName[upstream.Name] = upstream
+		app.Upstreams[i].Name = upstreamName
 		parsed, err := url.Parse(upstream.URL)
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			return fmt.Errorf("invalid upstream URL %q", upstream.URL)
@@ -203,6 +260,44 @@ func ValidateApplication(app Application, certificateExists func(int64) bool) er
 	if app.ProxyConfig != nil {
 		if err := ValidateApplicationProxyConfig(*app.ProxyConfig); err != nil {
 			return err
+		}
+	}
+	if err := ValidateApplicationRoutes(app.Routes, upstreamByName); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ValidateApplicationRoutes(routes []ApplicationRoute, upstreamByName map[string]ApplicationUpstream) error {
+	seenPriorities := map[int]bool{}
+	for _, route := range routes {
+		if strings.TrimSpace(route.Name) == "" {
+			return errors.New("route name is required")
+		}
+		if route.Priority <= 0 {
+			return fmt.Errorf("route %q priority must be greater than 0", route.Name)
+		}
+		if seenPriorities[route.Priority] {
+			return fmt.Errorf("duplicate route priority %d", route.Priority)
+		}
+		seenPriorities[route.Priority] = true
+		if err := pathmatch.Validate("route "+route.Name, route.PathMatch, route.Path); err != nil {
+			return err
+		}
+		if route.UpstreamName == "" {
+			return fmt.Errorf("route %q upstream_name is required", route.Name)
+		}
+		upstream, ok := upstreamByName[route.UpstreamName]
+		if !ok {
+			return fmt.Errorf("route %q references missing upstream %q", route.Name, route.UpstreamName)
+		}
+		if route.Enabled && !upstream.Enabled {
+			return fmt.Errorf("route %q references disabled upstream %q", route.Name, route.UpstreamName)
+		}
+		if route.ProxyConfig != nil {
+			if err := ValidateApplicationProxyConfig(*route.ProxyConfig); err != nil {
+				return fmt.Errorf("route %q proxy config: %w", route.Name, err)
+			}
 		}
 	}
 	return nil

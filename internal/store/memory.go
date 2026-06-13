@@ -22,6 +22,7 @@ type MemoryStore struct {
 	nextApplicationHostID     int64
 	nextApplicationListenerID int64
 	nextApplicationUpstreamID int64
+	nextApplicationRouteID    int64
 	nextCertificateID         int64
 	nextRuleID                int64
 	nextPolicyID              int64
@@ -91,6 +92,7 @@ func NewMemoryStore() *MemoryStore {
 		nextApplicationHostID:     1,
 		nextApplicationListenerID: 1,
 		nextApplicationUpstreamID: 1,
+		nextApplicationRouteID:    1,
 		nextCertificateID:         1,
 		nextRuleID:                1,
 		nextPolicyID:              1,
@@ -2415,12 +2417,27 @@ func (s *MemoryStore) assignApplicationChildIDsLocked(app *model.Application) {
 			s.nextApplicationUpstreamID++
 		}
 	}
+	for i := range app.Routes {
+		app.Routes[i].ApplicationID = app.ID
+		if app.Routes[i].ID == 0 {
+			app.Routes[i].ID = s.nextApplicationRouteID
+			s.nextApplicationRouteID++
+		}
+	}
 }
 
 func cloneApplication(item model.Application) model.Application {
 	item.Hosts = append([]model.ApplicationHost(nil), item.Hosts...)
 	item.Listeners = append([]model.ApplicationListener(nil), item.Listeners...)
 	item.Upstreams = append([]model.ApplicationUpstream(nil), item.Upstreams...)
+	item.Routes = append([]model.ApplicationRoute(nil), item.Routes...)
+	for i := range item.Routes {
+		if item.Routes[i].ProxyConfig != nil {
+			proxy := *item.Routes[i].ProxyConfig
+			proxy.Headers = append([]model.ApplicationProxyHeader(nil), item.Routes[i].ProxyConfig.Headers...)
+			item.Routes[i].ProxyConfig = &proxy
+		}
+	}
 	if item.ProxyConfig != nil {
 		proxy := *item.ProxyConfig
 		proxy.Headers = append([]model.ApplicationProxyHeader(nil), item.ProxyConfig.Headers...)

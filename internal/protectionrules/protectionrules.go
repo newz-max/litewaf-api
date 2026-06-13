@@ -3,11 +3,11 @@ package protectionrules
 import (
 	"fmt"
 	"net"
-	"path"
 	"strings"
 
 	"litewaf-api/internal/attackmeta"
 	"litewaf-api/internal/model"
+	"litewaf-api/internal/pathmatch"
 )
 
 const (
@@ -30,9 +30,9 @@ const (
 )
 
 const (
-	PathMatchExact  = "exact"
-	PathMatchPrefix = "prefix"
-	PathMatchGlob   = "glob"
+	PathMatchExact  = pathmatch.Exact
+	PathMatchPrefix = pathmatch.Prefix
+	PathMatchGlob   = pathmatch.Glob
 )
 
 const (
@@ -62,31 +62,15 @@ func IsCCPathMatch(value string) bool {
 }
 
 func IsPathMatch(value string) bool {
-	return oneOf(value, PathMatchExact, PathMatchPrefix, PathMatchGlob)
+	return pathmatch.Is(value)
 }
 
 func IsGlobPathValid(value string) bool {
-	if value == "" || !strings.HasPrefix(value, "/") {
-		return false
-	}
-	if strings.Contains(value, "**") || strings.Contains(value, "\\") || strings.ContainsAny(value, "[]{}") {
-		return false
-	}
-	_, err := path.Match(value, value)
-	return err == nil
+	return pathmatch.IsGlobValid(value)
 }
 
 func ValidatePathMatch(scope string, value string, path string) error {
-	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("%s path must start with /", scope)
-	}
-	if !IsPathMatch(value) {
-		return fmt.Errorf("%s path_match must be exact, prefix, or glob", scope)
-	}
-	if value == PathMatchGlob && !IsGlobPathValid(path) {
-		return fmt.Errorf("%s glob path is invalid", scope)
-	}
-	return nil
+	return pathmatch.Validate(scope, value, path)
 }
 
 func LegacyRef(kind string, id int64) string {

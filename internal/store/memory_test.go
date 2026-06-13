@@ -103,6 +103,73 @@ func TestMemoryStoreApplicationAndCertificateCRUD(t *testing.T) {
 	}
 }
 
+func TestMemoryStoreApplicationRoutesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dataStore := NewMemoryStore()
+	preserveHost := false
+
+	created, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Routes App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts:   []model.ApplicationHost{{Host: "routes.example.test", IsPrimary: true}},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+			{Name: "admin", URL: "http://127.0.0.1:9001", Weight: 1, Enabled: true},
+		},
+		Routes: []model.ApplicationRoute{
+			{
+				Name:         "API",
+				Path:         "/api",
+				PathMatch:    "prefix",
+				UpstreamName: "primary",
+				Priority:     10,
+				Enabled:      true,
+			},
+			{
+				Name:         "Admin",
+				Path:         "/admin/*",
+				PathMatch:    "glob",
+				UpstreamName: "admin",
+				Priority:     20,
+				Enabled:      true,
+				ProxyConfig: &model.ApplicationProxyConfig{
+					Headers:          []model.ApplicationProxyHeader{{Name: "X-Route", Value: "admin"}},
+					ReadTimeout:      "30s",
+					PreserveHost:     &preserveHost,
+					RequestBuffering: "off",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create routed application: %v", err)
+	}
+	if len(created.Routes) != 2 || created.Routes[0].ID == 0 || created.Routes[0].ApplicationID != created.ID {
+		t.Fatalf("route IDs were not assigned: %+v", created.Routes)
+	}
+
+	loaded, err := dataStore.GetApplication(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("get application: %v", err)
+	}
+	if len(loaded.Routes) != 2 || loaded.Routes[1].ProxyConfig == nil {
+		t.Fatalf("expected routes to round-trip: %+v", loaded.Routes)
+	}
+	loaded.Routes[1].ProxyConfig.Headers[0].Value = "mutated"
+
+	reloaded, err := dataStore.GetApplication(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("reload application: %v", err)
+	}
+	if reloaded.Routes[1].ProxyConfig.Headers[0].Value != "admin" {
+		t.Fatalf("expected cloned route proxy headers, got %+v", reloaded.Routes[1].ProxyConfig.Headers)
+	}
+}
+
 func TestMemoryStoreApplicationValidation(t *testing.T) {
 	ctx := context.Background()
 	dataStore := NewMemoryStore()

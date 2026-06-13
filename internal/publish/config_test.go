@@ -152,6 +152,109 @@ func TestGenerateExtendedGatewayConfigIncludesAdvancedProtection(t *testing.T) {
 	}
 }
 
+func TestGenerateExtendedGatewayConfigIncludesApplicationRoutes(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	preserveHost := false
+	_, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Routed",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts:   []model.ApplicationHost{{Host: "routed.local", IsPrimary: true}},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+			{Name: "api", URL: "http://127.0.0.1:9001", Weight: 1, Enabled: true},
+		},
+		Routes: []model.ApplicationRoute{
+			{Name: "Later", Path: "/later", PathMatch: "prefix", UpstreamName: "primary", Priority: 20, Enabled: true},
+			{
+				Name:         "API",
+				Path:         "/api/*",
+				PathMatch:    "glob",
+				UpstreamName: "api",
+				Priority:     10,
+				Enabled:      true,
+				ProxyConfig: &model.ApplicationProxyConfig{
+					Headers:      []model.ApplicationProxyHeader{{Name: "X-Route", Value: "api"}},
+					PreserveHost: &preserveHost,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create routed application: %v", err)
+	}
+
+	config, payload, _, err := GenerateExtended(ctx, dataStore, "ruleset-routes")
+	if err != nil {
+		t.Fatalf("generate extended: %v", err)
+	}
+	routes := config.Applications[0].Routes
+	if len(routes) != 2 || routes[0].Name != "API" || routes[0].ProxyConfig == nil || routes[0].ProxyConfig.Headers[0].Value != "api" {
+		t.Fatalf("unexpected published routes: %+v", routes)
+	}
+	if !bytes.Contains(payload, []byte(`"routes"`)) || !bytes.Contains(payload, []byte(`"upstream_name": "api"`)) {
+		t.Fatalf("gateway payload missing routes: %s", payload)
+	}
+}
+
+func TestValidateApplicationReadinessReportsRouteIssues(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	application, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Routed",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts:   []model.ApplicationHost{{Host: "routed.local", IsPrimary: true}},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+			{Name: "old", URL: "http://127.0.0.1:9001", Weight: 1, Enabled: false},
+		},
+		Routes: []model.ApplicationRoute{
+			{Name: "Default", Path: "/", PathMatch: "prefix", UpstreamName: "primary", Priority: 10, Enabled: true},
+			{Name: "Old", Path: "/old", PathMatch: "prefix", UpstreamName: "old", Priority: 20, Enabled: false},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create application: %v", err)
+	}
+	application.Routes[1].Enabled = true
+	if _, err := dataStore.UpdateApplication(ctx, application.ID, application); err == nil {
+		t.Fatal("expected save validation to reject enabled route targeting disabled upstream")
+	}
+
+	application.Routes[1].Enabled = false
+	application.Routes[1].Priority = 10
+	duplicateIssues := applicationRouteReadinessIssues(application)
+	duplicateFound := false
+	for _, issue := range duplicateIssues {
+		if issue.Category == "duplicate-route-priority" && issue.Severity == "error" {
+			duplicateFound = true
+		}
+	}
+	if !duplicateFound {
+		t.Fatalf("expected duplicate route priority issue, got %+v", duplicateIssues)
+	}
+	application.Routes[1].Priority = 20
+	application.Routes[1].UpstreamName = "missing"
+	issues := applicationRouteReadinessIssues(application)
+	found := false
+	for _, issue := range issues {
+		if issue.Category == "missing-route-upstream" && issue.Severity == "error" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected missing route upstream issue, got %+v", issues)
+	}
+}
+
 func TestGenerateExtendedGatewayConfigIncludesAttackProtectionMetadata(t *testing.T) {
 	ctx := context.Background()
 	dataStore := store.NewMemoryStore()

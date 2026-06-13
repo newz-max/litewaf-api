@@ -665,6 +665,8 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"certificates":              len(certificates),
 			"upstreams":                 countApplicationUpstreams(applications),
 			"enabled_upstreams":         countEnabledApplicationUpstreams(applications),
+			"routes":                    countApplicationRoutes(applications),
+			"enabled_routes":            countEnabledApplicationRoutes(applications),
 			"application_validation":    applicationValidationSummary(applicationIssues, publishValidationErrors),
 			"listener_deployment_mode":  listenerDeploymentModeSummary(h.app.Config.GatewayListenerMode, h.app.Config.GatewayBridgePortRange),
 			"gateway":                   gatewayRuntimeSummary(h.app.Config.NormalizedGatewayClientMaxBodySize()),
@@ -855,6 +857,26 @@ func countEnabledApplicationUpstreams(applications []model.Application) int {
 	for _, application := range applications {
 		for _, upstream := range application.Upstreams {
 			if upstream.Enabled {
+				total++
+			}
+		}
+	}
+	return total
+}
+
+func countApplicationRoutes(applications []model.Application) int {
+	total := 0
+	for _, application := range applications {
+		total += len(application.Routes)
+	}
+	return total
+}
+
+func countEnabledApplicationRoutes(applications []model.Application) int {
+	total := 0
+	for _, application := range applications {
+		for _, route := range application.Routes {
+			if route.Enabled {
 				total++
 			}
 		}

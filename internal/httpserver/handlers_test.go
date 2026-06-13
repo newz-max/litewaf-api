@@ -139,8 +139,28 @@ func TestApplicationCRUD(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	body := bytes.NewBufferString(`{"name":"Example","mode":"protect","hosts":[{"host":"example.test","is_primary":true}],"listeners":[{"port":80,"protocol":"http","enabled":true}],"upstreams":[{"name":"primary","url":"http://upstream:8080","weight":1,"enabled":true}]}`)
-	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", body), token)
+	payload, _ := json.Marshal(map[string]any{
+		"name": "Example",
+		"mode": "protect",
+		"hosts": []map[string]any{
+			{"host": "example.test", "is_primary": true},
+		},
+		"listeners": []map[string]any{
+			{"port": 80, "protocol": "http", "enabled": true},
+		},
+		"upstreams": []map[string]any{
+			{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true},
+			{"name": "admin", "url": "http://admin:8080", "weight": 1, "enabled": true},
+		},
+		"routes": []map[string]any{
+			{"name": "API", "path": "/api", "path_match": "prefix", "upstream_name": "primary", "priority": 10, "enabled": true},
+			{
+				"name": "Admin", "path": "/admin/*", "path_match": "glob", "upstream_name": "admin", "priority": 20, "enabled": true,
+				"proxy_config": map[string]any{"headers": []map[string]string{{"name": "X-Route", "value": "admin"}}, "read_timeout": "30s"},
+			},
+		},
+	})
+	req := withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(payload)), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -161,6 +181,10 @@ func TestApplicationCRUD(t *testing.T) {
 	}
 	if len(response.Items) != 1 {
 		t.Fatalf("expected 1 application, got %d", len(response.Items))
+	}
+	routes, ok := response.Items[0]["routes"].([]any)
+	if !ok || len(routes) != 2 {
+		t.Fatalf("expected routed application response, got %+v", response.Items[0])
 	}
 }
 
@@ -331,6 +355,10 @@ func TestPublishPreviewSummarizesApplicationsAndCertificateRisks(t *testing.T) {
 		},
 		"upstreams": []map[string]any{
 			{"name": "primary", "url": "http://upstream:8080", "weight": 1, "enabled": true},
+			{"name": "api", "url": "http://api:8080", "weight": 1, "enabled": true},
+		},
+		"routes": []map[string]any{
+			{"name": "API", "path": "/api", "path_match": "prefix", "upstream_name": "api", "priority": 10, "enabled": true},
 		},
 	})
 	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewReader(appPayload)), token)
@@ -357,7 +385,9 @@ func TestPublishPreviewSummarizesApplicationsAndCertificateRisks(t *testing.T) {
 		int(response.Summary["application_listeners"].(float64)) != 2 ||
 		int(response.Summary["https_listeners"].(float64)) != 1 ||
 		int(response.Summary["certificates"].(float64)) != 1 ||
-		int(response.Summary["enabled_upstreams"].(float64)) != 1 {
+		int(response.Summary["enabled_upstreams"].(float64)) != 2 ||
+		int(response.Summary["routes"].(float64)) != 1 ||
+		int(response.Summary["enabled_routes"].(float64)) != 1 {
 		t.Fatalf("unexpected application preview summary: %+v", response.Summary)
 	}
 	if _, ok := response.Summary["sites"]; ok {

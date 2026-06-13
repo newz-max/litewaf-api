@@ -16,6 +16,7 @@ type applicationRequest struct {
 	Hosts       []model.ApplicationHost       `json:"hosts"`
 	Listeners   []model.ApplicationListener   `json:"listeners"`
 	Upstreams   []model.ApplicationUpstream   `json:"upstreams"`
+	Routes      []model.ApplicationRoute      `json:"routes,omitempty"`
 	ProxyConfig *model.ApplicationProxyConfig `json:"proxy_config,omitempty"`
 }
 
@@ -28,10 +29,19 @@ func (r applicationRequest) toModel() model.Application {
 		Hosts:       append([]model.ApplicationHost(nil), r.Hosts...),
 		Listeners:   append([]model.ApplicationListener(nil), r.Listeners...),
 		Upstreams:   append([]model.ApplicationUpstream(nil), r.Upstreams...),
+		Routes:      cloneApplicationRoutes(r.Routes),
 		ProxyConfig: cloneApplicationProxyConfig(r.ProxyConfig),
 	}
 	model.NormalizeApplication(&item)
 	return item
+}
+
+func cloneApplicationRoutes(input []model.ApplicationRoute) []model.ApplicationRoute {
+	out := append([]model.ApplicationRoute(nil), input...)
+	for i := range out {
+		out[i].ProxyConfig = cloneApplicationProxyConfig(out[i].ProxyConfig)
+	}
+	return out
 }
 
 func cloneApplicationProxyConfig(input *model.ApplicationProxyConfig) *model.ApplicationProxyConfig {

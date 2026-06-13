@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS application_upstreams (
 	enabled BOOLEAN NOT NULL DEFAULT true
 );
 
+CREATE TABLE IF NOT EXISTS application_routes (
+	id BIGSERIAL PRIMARY KEY,
+	application_id BIGINT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	path TEXT NOT NULL DEFAULT '/',
+	path_match TEXT NOT NULL DEFAULT 'prefix',
+	upstream_name TEXT NOT NULL,
+	priority INTEGER NOT NULL DEFAULT 100,
+	enabled BOOLEAN NOT NULL DEFAULT true,
+	proxy_config_json TEXT NOT NULL DEFAULT '',
+	UNIQUE (application_id, priority)
+);
+
 CREATE TABLE IF NOT EXISTS rules (
 	id BIGSERIAL PRIMARY KEY,
 	name TEXT NOT NULL,

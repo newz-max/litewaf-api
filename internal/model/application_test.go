@@ -61,6 +61,75 @@ func TestValidateApplicationRequiresCertificateForHTTPS(t *testing.T) {
 	}
 }
 
+func TestNormalizeApplicationBackfillsSingleUpstreamName(t *testing.T) {
+	app := Application{
+		Name:    "App",
+		Mode:    ApplicationModeProtect,
+		Enabled: true,
+		Hosts:   []ApplicationHost{{Host: "app.example.test", IsPrimary: true}},
+		Listeners: []ApplicationListener{
+			{Port: 80, Protocol: ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []ApplicationUpstream{
+			{URL: "http://127.0.0.1:9000", Enabled: true},
+		},
+	}
+	NormalizeApplication(&app)
+	if app.Upstreams[0].Name != "primary" {
+		t.Fatalf("expected default upstream name, got %+v", app.Upstreams[0])
+	}
+	if err := ValidateApplication(app, nil); err != nil {
+		t.Fatalf("expected legacy single-upstream application to remain valid: %v", err)
+	}
+}
+
+func TestValidateApplicationRoutes(t *testing.T) {
+	upstreams := map[string]ApplicationUpstream{
+		"primary": {Name: "primary", URL: "http://127.0.0.1:9000", Enabled: true},
+		"admin":   {Name: "admin", URL: "http://127.0.0.1:9001", Enabled: true},
+		"old":     {Name: "old", URL: "http://127.0.0.1:9002", Enabled: false},
+	}
+	valid := []ApplicationRoute{
+		{Name: "API", Path: "/api/*", PathMatch: "glob", UpstreamName: "primary", Priority: 10, Enabled: true},
+		{Name: "Admin", Path: "/admin", PathMatch: "prefix", UpstreamName: "admin", Priority: 20, Enabled: true},
+	}
+	if err := ValidateApplicationRoutes(valid, upstreams); err != nil {
+		t.Fatalf("expected valid routes: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		routes []ApplicationRoute
+	}{
+		{
+			name:   "missing upstream",
+			routes: []ApplicationRoute{{Name: "Missing", Path: "/", PathMatch: "prefix", UpstreamName: "missing", Priority: 1, Enabled: true}},
+		},
+		{
+			name:   "disabled upstream",
+			routes: []ApplicationRoute{{Name: "Old", Path: "/", PathMatch: "prefix", UpstreamName: "old", Priority: 1, Enabled: true}},
+		},
+		{
+			name: "duplicate priority",
+			routes: []ApplicationRoute{
+				{Name: "A", Path: "/a", PathMatch: "prefix", UpstreamName: "primary", Priority: 1, Enabled: true},
+				{Name: "B", Path: "/b", PathMatch: "prefix", UpstreamName: "primary", Priority: 1, Enabled: true},
+			},
+		},
+		{
+			name:   "invalid path match",
+			routes: []ApplicationRoute{{Name: "Bad", Path: "/api/**", PathMatch: "glob", UpstreamName: "primary", Priority: 1, Enabled: true}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateApplicationRoutes(tc.routes, upstreams); err == nil {
+				t.Fatal("expected route validation to fail")
+			}
+		})
+	}
+}
+
 func TestValidateApplicationProxyConfig(t *testing.T) {
 	preserveHost := false
 	config := ApplicationProxyConfig{

@@ -38,6 +38,7 @@ type GatewayApplication struct {
 	Hosts       []string                      `json:"hosts"`
 	Listeners   []GatewayApplicationListener  `json:"listeners"`
 	Upstreams   []GatewayApplicationUpstream  `json:"upstreams"`
+	Routes      []GatewayApplicationRoute     `json:"routes,omitempty"`
 	ProxyConfig *model.ApplicationProxyConfig `json:"proxy_config,omitempty"`
 	Rules       []GatewayRule                 `json:"rules"`
 	Policy      GatewayPolicy                 `json:"policy"`
@@ -55,6 +56,17 @@ type GatewayApplicationUpstream struct {
 	URL     string `json:"url"`
 	Weight  int    `json:"weight"`
 	Enabled bool   `json:"enabled"`
+}
+
+type GatewayApplicationRoute struct {
+	ID           int64                         `json:"id,omitempty"`
+	Name         string                        `json:"name"`
+	Path         string                        `json:"path"`
+	PathMatch    string                        `json:"path_match"`
+	UpstreamName string                        `json:"upstream_name"`
+	Priority     int                           `json:"priority"`
+	Enabled      bool                          `json:"enabled"`
+	ProxyConfig  *model.ApplicationProxyConfig `json:"proxy_config,omitempty"`
 }
 
 type GatewayRule struct {
@@ -314,6 +326,7 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			Hosts:       gatewayHosts(application.Hosts),
 			Listeners:   gatewayListeners(application.Listeners),
 			Upstreams:   gatewayUpstreams(application.Upstreams),
+			Routes:      gatewayRoutes(application.Routes),
 			ProxyConfig: cloneApplicationProxyConfig(application.ProxyConfig),
 			Rules:       []GatewayRule{},
 			Policy:      gatewayPolicy(sitePolicies[application.ID]),
@@ -496,6 +509,29 @@ func gatewayUpstreams(upstreams []model.ApplicationUpstream) []GatewayApplicatio
 			Enabled: upstream.Enabled,
 		})
 	}
+	return out
+}
+
+func gatewayRoutes(routes []model.ApplicationRoute) []GatewayApplicationRoute {
+	out := make([]GatewayApplicationRoute, 0, len(routes))
+	for _, route := range routes {
+		out = append(out, GatewayApplicationRoute{
+			ID:           route.ID,
+			Name:         route.Name,
+			Path:         route.Path,
+			PathMatch:    route.PathMatch,
+			UpstreamName: route.UpstreamName,
+			Priority:     route.Priority,
+			Enabled:      route.Enabled,
+			ProxyConfig:  cloneApplicationProxyConfig(route.ProxyConfig),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Priority == out[j].Priority {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Priority < out[j].Priority
+	})
 	return out
 }
 
@@ -720,6 +756,7 @@ func ValidateApplicationReadinessWithDeployment(ctx context.Context, dataStore s
 				Message:         fmt.Sprintf("application %d has no enabled upstream", application.ID),
 			})
 		}
+		issues = append(issues, applicationRouteReadinessIssues(application)...)
 		if err := model.ValidateApplication(application, certificateExists); err != nil {
 			issues = append(issues, ApplicationValidationIssue{
 				Severity:        "error",
@@ -795,6 +832,56 @@ func ValidateApplicationReadinessWithDeployment(ctx context.Context, dataStore s
 		}
 	}
 	return issues, nil
+}
+
+func applicationRouteReadinessIssues(application model.Application) []ApplicationValidationIssue {
+	upstreamByName := map[string]model.ApplicationUpstream{}
+	for _, upstream := range application.Upstreams {
+		if upstream.Name != "" {
+			upstreamByName[upstream.Name] = upstream
+		}
+	}
+	seenPriorities := map[int]model.ApplicationRoute{}
+	var issues []ApplicationValidationIssue
+	for _, route := range application.Routes {
+		if err := model.ValidateApplicationRoutes([]model.ApplicationRoute{route}, upstreamByName); err != nil {
+			issues = append(issues, ApplicationValidationIssue{
+				Severity:        "error",
+				Category:        routeValidationCategory(route, upstreamByName, seenPriorities),
+				ApplicationID:   application.ID,
+				ApplicationName: application.Name,
+				Message:         fmt.Sprintf("application %d route %q is invalid: %v", application.ID, route.Name, err),
+			})
+		}
+		if previous, exists := seenPriorities[route.Priority]; exists {
+			issues = append(issues, ApplicationValidationIssue{
+				Severity:        "error",
+				Category:        "duplicate-route-priority",
+				ApplicationID:   application.ID,
+				ApplicationName: application.Name,
+				Message:         fmt.Sprintf("application %d routes %q and %q share priority %d", application.ID, previous.Name, route.Name, route.Priority),
+			})
+		}
+		seenPriorities[route.Priority] = route
+	}
+	return issues
+}
+
+func routeValidationCategory(route model.ApplicationRoute, upstreamByName map[string]model.ApplicationUpstream, seenPriorities map[int]model.ApplicationRoute) string {
+	if route.Priority <= 0 {
+		return "invalid-route-priority"
+	}
+	if _, exists := seenPriorities[route.Priority]; exists {
+		return "duplicate-route-priority"
+	}
+	upstream, exists := upstreamByName[route.UpstreamName]
+	if !exists {
+		return "missing-route-upstream"
+	}
+	if route.Enabled && !upstream.Enabled {
+		return "disabled-route-upstream"
+	}
+	return "invalid-route"
 }
 
 type listenerOwner struct {

@@ -220,6 +220,9 @@ func (s *PostgresStore) UpdateApplication(ctx context.Context, id int64, item mo
 	if _, err := tx.ExecContext(ctx, `DELETE FROM application_upstreams WHERE application_id = $1`, id); err != nil {
 		return model.Application{}, err
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM application_routes WHERE application_id = $1`, id); err != nil {
+		return model.Application{}, err
+	}
 	if err := replaceApplicationChildren(ctx, tx, &item); err != nil {
 		return model.Application{}, err
 	}
@@ -2432,7 +2435,32 @@ func (s *PostgresStore) loadApplicationChildren(ctx context.Context, item *model
 		}
 		item.Upstreams = append(item.Upstreams, upstream)
 	}
-	return upstreamRows.Err()
+	if err := upstreamRows.Err(); err != nil {
+		return err
+	}
+
+	routeRows, err := s.db.QueryContext(ctx, `
+		SELECT id, application_id, name, path, path_match, upstream_name, priority, enabled, proxy_config_json
+		FROM application_routes
+		WHERE application_id = $1
+		ORDER BY priority, id`, item.ID)
+	if err != nil {
+		return err
+	}
+	defer routeRows.Close()
+	for routeRows.Next() {
+		var route model.ApplicationRoute
+		var proxyConfigJSON string
+		if err := routeRows.Scan(&route.ID, &route.ApplicationID, &route.Name, &route.Path, &route.PathMatch, &route.UpstreamName, &route.Priority, &route.Enabled, &proxyConfigJSON); err != nil {
+			return err
+		}
+		var err error
+		if route.ProxyConfig, err = decodeApplicationProxyConfig(proxyConfigJSON); err != nil {
+			return err
+		}
+		item.Routes = append(item.Routes, route)
+	}
+	return routeRows.Err()
 }
 
 func replaceApplicationChildren(ctx context.Context, tx *sql.Tx, item *model.Application) error {
@@ -2457,6 +2485,18 @@ func replaceApplicationChildren(ctx context.Context, tx *sql.Tx, item *model.App
 			INSERT INTO application_upstreams (application_id, name, url, weight, enabled)
 			VALUES ($1, $2, $3, $4, $5)
 			RETURNING id`, item.ID, upstream.Name, upstream.URL, upstream.Weight, upstream.Enabled).Scan(&upstream.ID); err != nil {
+			return err
+		}
+	}
+	for _, route := range item.Routes {
+		proxyConfigJSON, err := encodeApplicationProxyConfig(route.ProxyConfig)
+		if err != nil {
+			return err
+		}
+		if err := tx.QueryRowContext(ctx, `
+			INSERT INTO application_routes (application_id, name, path, path_match, upstream_name, priority, enabled, proxy_config_json)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			RETURNING id`, item.ID, route.Name, route.Path, route.PathMatch, route.UpstreamName, route.Priority, route.Enabled, proxyConfigJSON).Scan(&route.ID); err != nil {
 			return err
 		}
 	}

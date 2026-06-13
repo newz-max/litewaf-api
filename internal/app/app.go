@@ -6,7 +6,7 @@ import (
 	"litewaf-api/internal/store"
 )
 
-var Version = "0.6.5"
+var Version = "0.7.0"
 
 type App struct {
 	Config        config.Config

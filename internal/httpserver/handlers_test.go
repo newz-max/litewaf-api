@@ -704,6 +704,143 @@ func TestAdvancedNginxDraftAndPublishConfirmationGate(t *testing.T) {
 	}
 }
 
+func TestGetNginxConfigDraftFallsBackToRuntimeFullConfig(t *testing.T) {
+	runtimeDir := t.TempDir()
+	fullConfig := "events {}\nhttp { include /etc/litewaf/listeners/*.conf; }\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "nginx.conf"), []byte(fullConfig), 0o600); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayConfigPath = filepath.Join(runtimeDir, "active.json")
+	})
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.NginxConfigDraft `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode nginx config: %v", err)
+	}
+	if response.Item.Mode != model.NginxConfigModeFull || response.Item.FullConfig != strings.TrimSpace(fullConfig) {
+		t.Fatalf("unexpected runtime full config draft: %+v", response.Item)
+	}
+}
+
+func TestGetNginxConfigDraftFallsBackToRuntimeSnippets(t *testing.T) {
+	runtimeDir := t.TempDir()
+	snippetDir := filepath.Join(runtimeDir, "listeners", "snippets")
+	if err := os.MkdirAll(snippetDir, 0o755); err != nil {
+		t.Fatalf("make snippet dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snippetDir, "http.conf"), []byte("# generated from LiteWaf advanced nginx snippet draft\nmap $http_upgrade $litewaf_connection_upgrade { default upgrade; }\n"), 0o600); err != nil {
+		t.Fatalf("write http snippet: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snippetDir, "location.conf"), []byte("proxy_hide_header X-Origin-Debug;\n"), 0o600); err != nil {
+		t.Fatalf("write location snippet: %v", err)
+	}
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayConfigPath = filepath.Join(runtimeDir, "active.json")
+	})
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.NginxConfigDraft `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode nginx config: %v", err)
+	}
+	if response.Item.Mode != model.NginxConfigModeSnippets {
+		t.Fatalf("expected snippets mode, got %+v", response.Item)
+	}
+	snippets := map[string]string{}
+	for _, snippet := range response.Item.Snippets {
+		snippets[snippet.IncludePoint] = snippet.Content
+	}
+	if strings.HasPrefix(snippets[model.NginxSnippetPointHTTP], "# generated") {
+		t.Fatalf("generated snippet header was not stripped: %q", snippets[model.NginxSnippetPointHTTP])
+	}
+	if !strings.Contains(snippets[model.NginxSnippetPointHTTP], "map $http_upgrade") {
+		t.Fatalf("missing http snippet: %+v", snippets)
+	}
+	if snippets[model.NginxSnippetPointServer] != "" {
+		t.Fatalf("expected empty server snippet: %+v", snippets)
+	}
+	if !strings.Contains(snippets[model.NginxSnippetPointLocation], "proxy_hide_header X-Origin-Debug;") {
+		t.Fatalf("missing location snippet: %+v", snippets)
+	}
+}
+
+func TestGetNginxConfigDraftPrefersSavedDraftOverRuntimeConfig(t *testing.T) {
+	runtimeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(runtimeDir, "nginx.conf"), []byte("events {}\nhttp {}\n"), 0o600); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayConfigPath = filepath.Join(runtimeDir, "active.json")
+	})
+	token := adminToken(t, handler)
+
+	draftBody := bytes.NewBufferString(`{"mode":"snippets","snippets":[{"include_point":"location","content":"proxy_hide_header X-Saved-Draft;"}]}`)
+	req := withToken(httptest.NewRequest(http.MethodPut, "/api/v1/nginx-config", draftBody), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save nginx draft status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.NginxConfigDraft `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode nginx config: %v", err)
+	}
+	if response.Item.Mode != model.NginxConfigModeSnippets || strings.Contains(response.Item.FullConfig, "events {}") {
+		t.Fatalf("runtime config should not override saved draft: %+v", response.Item)
+	}
+	if len(response.Item.Snippets) != 1 || response.Item.Snippets[0].Content != "proxy_hide_header X-Saved-Draft;" {
+		t.Fatalf("unexpected saved draft snippets: %+v", response.Item.Snippets)
+	}
+}
+
+func TestGetNginxConfigDraftIgnoresMissingRuntimeConfig(t *testing.T) {
+	handler := testServer(t)
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.NginxConfigDraft `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode nginx config: %v", err)
+	}
+	if response.Item.Mode != model.NginxConfigModeSnippets || len(response.Item.Snippets) != 0 || response.Item.FullConfig != "" {
+		t.Fatalf("expected empty nginx draft, got %+v", response.Item)
+	}
+}
+
 func testGatewayConfigPathFromBody(t *testing.T, body []byte) string {
 	t.Helper()
 	var response struct {

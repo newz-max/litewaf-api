@@ -97,7 +97,7 @@ func (s *PostgresStore) DeleteSite(ctx context.Context, id int64) error {
 
 func (s *PostgresStore) ListApplications(ctx context.Context) ([]model.Application, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, mode, enabled, description, created_at, updated_at
+		SELECT id, name, mode, enabled, description, proxy_config_json, created_at, updated_at
 		FROM applications
 		ORDER BY id`)
 	if err != nil {
@@ -107,7 +107,11 @@ func (s *PostgresStore) ListApplications(ctx context.Context) ([]model.Applicati
 	var items []model.Application
 	for rows.Next() {
 		var item model.Application
-		if err := rows.Scan(&item.ID, &item.Name, &item.Mode, &item.Enabled, &item.Description, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var proxyConfigJSON string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Mode, &item.Enabled, &item.Description, &proxyConfigJSON, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if item.ProxyConfig, err = decodeApplicationProxyConfig(proxyConfigJSON); err != nil {
 			return nil, err
 		}
 		if err := s.loadApplicationChildren(ctx, &item); err != nil {
@@ -120,15 +124,19 @@ func (s *PostgresStore) ListApplications(ctx context.Context) ([]model.Applicati
 
 func (s *PostgresStore) GetApplication(ctx context.Context, id int64) (model.Application, error) {
 	var item model.Application
+	var proxyConfigJSON string
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, name, mode, enabled, description, created_at, updated_at
+		SELECT id, name, mode, enabled, description, proxy_config_json, created_at, updated_at
 		FROM applications
 		WHERE id = $1`, id).
-		Scan(&item.ID, &item.Name, &item.Mode, &item.Enabled, &item.Description, &item.CreatedAt, &item.UpdatedAt)
+		Scan(&item.ID, &item.Name, &item.Mode, &item.Enabled, &item.Description, &proxyConfigJSON, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Application{}, ErrNotFound
 	}
 	if err != nil {
+		return model.Application{}, err
+	}
+	if item.ProxyConfig, err = decodeApplicationProxyConfig(proxyConfigJSON); err != nil {
 		return model.Application{}, err
 	}
 	if err := s.loadApplicationChildren(ctx, &item); err != nil {
@@ -150,11 +158,15 @@ func (s *PostgresStore) CreateApplication(ctx context.Context, item model.Applic
 		return model.Application{}, err
 	}
 	defer tx.Rollback()
+	proxyConfigJSON, err := encodeApplicationProxyConfig(item.ProxyConfig)
+	if err != nil {
+		return model.Application{}, err
+	}
 	err = tx.QueryRowContext(ctx, `
-		INSERT INTO applications (name, mode, enabled, description)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO applications (name, mode, enabled, description, proxy_config_json)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, created_at, updated_at`,
-		item.Name, item.Mode, item.Enabled, item.Description).
+		item.Name, item.Mode, item.Enabled, item.Description, proxyConfigJSON).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if err != nil {
 		return model.Application{}, err
@@ -181,12 +193,16 @@ func (s *PostgresStore) UpdateApplication(ctx context.Context, id int64, item mo
 		return model.Application{}, err
 	}
 	defer tx.Rollback()
+	proxyConfigJSON, err := encodeApplicationProxyConfig(item.ProxyConfig)
+	if err != nil {
+		return model.Application{}, err
+	}
 	err = tx.QueryRowContext(ctx, `
 		UPDATE applications
-		SET name = $2, mode = $3, enabled = $4, description = $5, updated_at = now()
+		SET name = $2, mode = $3, enabled = $4, description = $5, proxy_config_json = $6, updated_at = now()
 		WHERE id = $1
 		RETURNING id, created_at, updated_at`,
-		id, item.Name, item.Mode, item.Enabled, item.Description).
+		id, item.Name, item.Mode, item.Enabled, item.Description, proxyConfigJSON).
 		Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Application{}, ErrNotFound
@@ -591,7 +607,7 @@ func (s *PostgresStore) DeletePolicy(ctx context.Context, id int64) error {
 
 func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.PublishRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, version, operator, status, config_path, checksum, note, config_json, created_at
+		SELECT id, version, operator, status, config_path, checksum, note, config_json, runtime_artifacts_json, created_at
 		FROM publish_records
 		ORDER BY id DESC`)
 	if err != nil {
@@ -602,7 +618,7 @@ func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.Publish
 	var items []model.PublishRecord
 	for rows.Next() {
 		var item model.PublishRecord
-		if err := rows.Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.ConfigJSON, &item.CreatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.ConfigJSON, &item.RuntimeArtifactsJSON, &item.CreatedAt); err != nil {
 			return nil, err
 		}
 		item.Time = item.CreatedAt.Format(time.RFC3339)
@@ -613,10 +629,10 @@ func (s *PostgresStore) ListPublishRecords(ctx context.Context) ([]model.Publish
 
 func (s *PostgresStore) CreatePublishRecord(ctx context.Context, record model.PublishRecord) (model.PublishRecord, error) {
 	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO publish_records (version, operator, status, config_path, checksum, note, config_json)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO publish_records (version, operator, status, config_path, checksum, note, config_json, runtime_artifacts_json)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at`,
-		record.Version, record.Operator, record.Status, record.ConfigPath, record.Checksum, record.Note, record.ConfigJSON).
+		record.Version, record.Operator, record.Status, record.ConfigPath, record.Checksum, record.Note, record.ConfigJSON, record.RuntimeArtifactsJSON).
 		Scan(&record.ID, &record.CreatedAt)
 	record.Time = record.CreatedAt.Format(time.RFC3339)
 	record = model.AttachPublishActivation(record)
@@ -632,15 +648,81 @@ func (s *PostgresStore) NextPublishVersion(ctx context.Context) (int64, error) {
 func (s *PostgresStore) GetPublishRecordByVersion(ctx context.Context, version string) (model.PublishRecord, error) {
 	var item model.PublishRecord
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, version, operator, status, config_path, checksum, note, config_json, created_at
+		SELECT id, version, operator, status, config_path, checksum, note, config_json, runtime_artifacts_json, created_at
 		FROM publish_records
 		WHERE version = $1`, version).
-		Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.ConfigJSON, &item.CreatedAt)
+		Scan(&item.ID, &item.Version, &item.Operator, &item.Status, &item.ConfigPath, &item.Checksum, &item.Note, &item.ConfigJSON, &item.RuntimeArtifactsJSON, &item.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.PublishRecord{}, ErrNotFound
 	}
 	item.Time = item.CreatedAt.Format(time.RFC3339)
 	return model.AttachPublishActivation(item), err
+}
+
+func (s *PostgresStore) GetNginxConfigDraft(ctx context.Context) (model.NginxConfigDraft, error) {
+	var draft model.NginxConfigDraft
+	var snippetsJSON string
+	var validationJSON string
+	var publishedAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, `
+		SELECT mode, snippets_json, full_config, validation_json, updated_by, updated_at, published_at
+		FROM nginx_config_drafts
+		WHERE id = 1`).
+		Scan(&draft.Mode, &snippetsJSON, &draft.FullConfig, &validationJSON, &draft.UpdatedBy, &draft.UpdatedAt, &publishedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.EmptyNginxConfigDraft(), nil
+	}
+	if err != nil {
+		return model.NginxConfigDraft{}, err
+	}
+	if snippetsJSON != "" {
+		if err := json.Unmarshal([]byte(snippetsJSON), &draft.Snippets); err != nil {
+			return model.NginxConfigDraft{}, err
+		}
+	}
+	if validationJSON != "" {
+		if err := json.Unmarshal([]byte(validationJSON), &draft.Validation); err != nil {
+			return model.NginxConfigDraft{}, err
+		}
+	}
+	if publishedAt.Valid {
+		draft.PublishedAt = &publishedAt.Time
+	}
+	model.NormalizeNginxConfigDraft(&draft)
+	return draft, nil
+}
+
+func (s *PostgresStore) SaveNginxConfigDraft(ctx context.Context, draft model.NginxConfigDraft) (model.NginxConfigDraft, error) {
+	model.NormalizeNginxConfigDraft(&draft)
+	if err := model.ValidateNginxConfigDraft(draft); err != nil {
+		return model.NginxConfigDraft{}, err
+	}
+	snippetsJSON, err := json.Marshal(draft.Snippets)
+	if err != nil {
+		return model.NginxConfigDraft{}, err
+	}
+	validationJSON, err := json.Marshal(draft.Validation)
+	if err != nil {
+		return model.NginxConfigDraft{}, err
+	}
+	err = s.db.QueryRowContext(ctx, `
+		INSERT INTO nginx_config_drafts (id, mode, snippets_json, full_config, validation_json, updated_by, updated_at, published_at)
+		VALUES (1, $1, $2, $3, $4, $5, now(), $6)
+		ON CONFLICT (id) DO UPDATE
+		SET mode = EXCLUDED.mode,
+			snippets_json = EXCLUDED.snippets_json,
+			full_config = EXCLUDED.full_config,
+			validation_json = EXCLUDED.validation_json,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = now(),
+			published_at = EXCLUDED.published_at
+		RETURNING updated_at`,
+		draft.Mode, string(snippetsJSON), draft.FullConfig, string(validationJSON), draft.UpdatedBy, draft.PublishedAt).
+		Scan(&draft.UpdatedAt)
+	if err != nil {
+		return model.NginxConfigDraft{}, err
+	}
+	return draft, nil
 }
 
 func (s *PostgresStore) GetUserByUsername(ctx context.Context, username string) (model.User, error) {
@@ -2258,6 +2340,33 @@ func scanCertificate(row certificateScanner) (model.Certificate, error) {
 	err := row.Scan(&item.ID, &item.Name, &domains, &item.CertPEM, &item.KeyPEM, &item.NotBefore, &item.NotAfter, &item.Fingerprint, &item.CreatedAt, &item.UpdatedAt)
 	item.Domains = splitCSV(domains)
 	return item, err
+}
+
+func encodeApplicationProxyConfig(config *model.ApplicationProxyConfig) (string, error) {
+	if config == nil {
+		return "", nil
+	}
+	payload, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func decodeApplicationProxyConfig(value string) (*model.ApplicationProxyConfig, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	var config model.ApplicationProxyConfig
+	if err := json.Unmarshal([]byte(value), &config); err != nil {
+		return nil, err
+	}
+	model.NormalizeApplicationProxyConfig(&config)
+	if err := model.ValidateApplicationProxyConfig(config); err != nil {
+		return nil, err
+	}
+	return &config, nil
 }
 
 func (s *PostgresStore) certificateExists(ctx context.Context, id int64) (bool, error) {

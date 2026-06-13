@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -893,6 +894,152 @@ func TestWriteRuntimeArtifactsWritesListenersAndCertificates(t *testing.T) {
 	if string(keyPEM) != "PRIVATE-KEY-PEM\n" {
 		t.Fatalf("unexpected key material written: %q", keyPEM)
 	}
+}
+
+func TestWriteRuntimeArtifactsRendersProxyConfigAndSnippets(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	preserveHost := false
+	if _, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Proxy App",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts: []model.ApplicationHost{
+			{Host: "proxy.example.test", IsPrimary: true},
+		},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{
+			{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true},
+		},
+		ProxyConfig: &model.ApplicationProxyConfig{
+			Headers:          []model.ApplicationProxyHeader{{Name: "X-App-Trace", Value: "$litewaf_request_id"}},
+			ConnectTimeout:   "500ms",
+			ReadTimeout:      "30s",
+			WebSocketEnabled: true,
+			PreserveHost:     &preserveHost,
+			ProxyBuffering:   "off",
+		},
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	if _, err := dataStore.SaveNginxConfigDraft(ctx, model.NginxConfigDraft{
+		Mode: model.NginxConfigModeSnippets,
+		Snippets: []model.NginxConfigSnippet{
+			{IncludePoint: model.NginxSnippetPointHTTP, Content: "map $http_upgrade $litewaf_connection_upgrade { default upgrade; '' close; }"},
+			{IncludePoint: model.NginxSnippetPointServer, Content: "client_header_timeout 30s;"},
+			{IncludePoint: model.NginxSnippetPointLocation, Content: "proxy_hide_header X-Origin-Debug;"},
+		},
+		Validation: model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked},
+	}); err != nil {
+		t.Fatalf("save nginx draft: %v", err)
+	}
+
+	base := t.TempDir()
+	artifacts, err := WriteRuntimeArtifactsWithAdvancedNginx(ctx, dataStore, filepath.Join(base, "active.json"), "50m", writeExitScript(t, "nginx-ok", 0))
+	if err != nil {
+		t.Fatalf("write artifacts: %v", err)
+	}
+	if !artifacts.AdvancedConfig || artifacts.Validation.Status != model.NginxValidationStatusPassed {
+		t.Fatalf("expected validated advanced artifacts: %+v", artifacts)
+	}
+	listenerConf, err := os.ReadFile(filepath.Join(base, "listeners", "applications.conf"))
+	if err != nil {
+		t.Fatalf("read listener conf: %v", err)
+	}
+	for _, want := range []string{
+		"proxy_set_header Host $proxy_host;",
+		"proxy_set_header Upgrade $http_upgrade;",
+		"proxy_connect_timeout 500ms;",
+		"proxy_read_timeout 30s;",
+		"proxy_buffering off;",
+		"proxy_set_header X-App-Trace $litewaf_request_id;",
+		"client_header_timeout 30s;",
+		"proxy_hide_header X-Origin-Debug;",
+		"map $http_upgrade $litewaf_connection_upgrade",
+	} {
+		if !bytes.Contains(listenerConf, []byte(want)) {
+			t.Fatalf("listener config missing %q:\n%s", want, listenerConf)
+		}
+	}
+}
+
+func TestWriteRuntimeArtifactsFullOverrideAndValidationGate(t *testing.T) {
+	ctx := context.Background()
+	dataStore := store.NewMemoryStore()
+	if _, err := dataStore.CreateApplication(ctx, model.Application{
+		Name:    "Full",
+		Mode:    model.ApplicationModeProtect,
+		Enabled: true,
+		Hosts:   []model.ApplicationHost{{Host: "full.example.test", IsPrimary: true}},
+		Listeners: []model.ApplicationListener{
+			{Port: 80, Protocol: model.ListenerProtocolHTTP, Enabled: true},
+		},
+		Upstreams: []model.ApplicationUpstream{{Name: "primary", URL: "http://127.0.0.1:9000", Weight: 1, Enabled: true}},
+	}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	fullConfig := `events {}
+http {
+    include /etc/litewaf/listeners/*.conf;
+    init_by_lua_block { litewaf = require "litewaf" }
+    init_worker_by_lua_block { litewaf.init_worker() }
+    server {
+        listen 80;
+        location = /healthz { return 200 "ok"; }
+        location = /metrics { content_by_lua_block { litewaf.metrics() } }
+        location / {
+            set $litewaf_upstream "";
+            access_by_lua_block { litewaf.access() }
+            header_filter_by_lua_block { litewaf.header_filter() }
+            body_filter_by_lua_block { litewaf.body_filter() }
+            log_by_lua_block { litewaf.log() }
+            proxy_pass $litewaf_upstream;
+        }
+    }
+}`
+	if _, err := dataStore.SaveNginxConfigDraft(ctx, model.NginxConfigDraft{
+		Mode:       model.NginxConfigModeFull,
+		FullConfig: fullConfig,
+		Validation: model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked},
+	}); err != nil {
+		t.Fatalf("save full draft: %v", err)
+	}
+	base := t.TempDir()
+	if _, err := WriteRuntimeArtifactsWithAdvancedNginx(ctx, dataStore, filepath.Join(base, "active.json"), "50m", ""); err == nil {
+		t.Fatal("expected unavailable validation to block full override")
+	}
+	artifacts, err := WriteRuntimeArtifactsWithAdvancedNginx(ctx, dataStore, filepath.Join(base, "active.json"), "50m", writeExitScript(t, "nginx-ok", 0))
+	if err != nil {
+		t.Fatalf("write full override: %v", err)
+	}
+	if !artifacts.FullOverrideActive {
+		t.Fatalf("expected full override artifact: %+v", artifacts)
+	}
+	written, err := os.ReadFile(filepath.Join(base, "nginx.conf"))
+	if err != nil {
+		t.Fatalf("read nginx.conf: %v", err)
+	}
+	if !bytes.Contains(written, []byte("include /etc/litewaf/listeners/*.conf;")) {
+		t.Fatalf("full override was not written: %s", written)
+	}
+}
+
+func writeExitScript(t *testing.T, name string, exitCode int) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(t.TempDir(), name+".bat")
+		if err := os.WriteFile(path, []byte("@echo off\necho ok\nexit /b "+strconv.Itoa(exitCode)+"\n"), 0o600); err != nil {
+			t.Fatalf("write script: %v", err)
+		}
+		return path
+	}
+	path := filepath.Join(t.TempDir(), name+".sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho ok\nexit "+strconv.Itoa(exitCode)+"\n"), 0o700); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	return path
 }
 
 func TestWriteRuntimeArtifactsFromConfigRestoresHistoricalListeners(t *testing.T) {

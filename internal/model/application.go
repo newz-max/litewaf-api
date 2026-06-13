@@ -31,16 +31,17 @@ const (
 var hostPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
 
 type Application struct {
-	ID          int64                 `json:"id"`
-	Name        string                `json:"name"`
-	Mode        string                `json:"mode"`
-	Enabled     bool                  `json:"enabled"`
-	Description string                `json:"description"`
-	Hosts       []ApplicationHost     `json:"hosts"`
-	Listeners   []ApplicationListener `json:"listeners"`
-	Upstreams   []ApplicationUpstream `json:"upstreams"`
-	CreatedAt   time.Time             `json:"created_at"`
-	UpdatedAt   time.Time             `json:"updated_at"`
+	ID          int64                   `json:"id"`
+	Name        string                  `json:"name"`
+	Mode        string                  `json:"mode"`
+	Enabled     bool                    `json:"enabled"`
+	Description string                  `json:"description"`
+	Hosts       []ApplicationHost       `json:"hosts"`
+	Listeners   []ApplicationListener   `json:"listeners"`
+	Upstreams   []ApplicationUpstream   `json:"upstreams"`
+	ProxyConfig *ApplicationProxyConfig `json:"proxy_config,omitempty"`
+	CreatedAt   time.Time               `json:"created_at"`
+	UpdatedAt   time.Time               `json:"updated_at"`
 }
 
 type ApplicationHost struct {
@@ -66,6 +67,22 @@ type ApplicationUpstream struct {
 	URL           string `json:"url"`
 	Weight        int    `json:"weight"`
 	Enabled       bool   `json:"enabled"`
+}
+
+type ApplicationProxyConfig struct {
+	Headers          []ApplicationProxyHeader `json:"headers,omitempty"`
+	ConnectTimeout   string                   `json:"connect_timeout,omitempty"`
+	ReadTimeout      string                   `json:"read_timeout,omitempty"`
+	SendTimeout      string                   `json:"send_timeout,omitempty"`
+	WebSocketEnabled bool                     `json:"websocket_enabled,omitempty"`
+	PreserveHost     *bool                    `json:"preserve_host,omitempty"`
+	ProxyBuffering   string                   `json:"proxy_buffering,omitempty"`
+	RequestBuffering string                   `json:"request_buffering,omitempty"`
+}
+
+type ApplicationProxyHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 type Certificate struct {
@@ -99,6 +116,12 @@ func NormalizeApplication(app *Application) {
 		app.Upstreams[i].URL = strings.TrimSpace(app.Upstreams[i].URL)
 		if app.Upstreams[i].Weight <= 0 {
 			app.Upstreams[i].Weight = 1
+		}
+	}
+	if app.ProxyConfig != nil {
+		NormalizeApplicationProxyConfig(app.ProxyConfig)
+		if isEmptyApplicationProxyConfig(*app.ProxyConfig) {
+			app.ProxyConfig = nil
 		}
 	}
 }
@@ -177,7 +200,91 @@ func ValidateApplication(app Application, certificateExists func(int64) bool) er
 	if enabledUpstreams == 0 {
 		return errors.New("at least one upstream must be enabled")
 	}
+	if app.ProxyConfig != nil {
+		if err := ValidateApplicationProxyConfig(*app.ProxyConfig); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+var (
+	proxyHeaderNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+	proxyTimeoutPattern    = regexp.MustCompile(`^[1-9][0-9]{0,5}(ms|s|m|h)$`)
+)
+
+func NormalizeApplicationProxyConfig(config *ApplicationProxyConfig) {
+	for i := range config.Headers {
+		config.Headers[i].Name = strings.TrimSpace(config.Headers[i].Name)
+		config.Headers[i].Value = strings.TrimSpace(config.Headers[i].Value)
+	}
+	filteredHeaders := make([]ApplicationProxyHeader, 0, len(config.Headers))
+	for _, header := range config.Headers {
+		if header.Name != "" || header.Value != "" {
+			filteredHeaders = append(filteredHeaders, header)
+		}
+	}
+	config.Headers = filteredHeaders
+	config.ConnectTimeout = strings.ToLower(strings.TrimSpace(config.ConnectTimeout))
+	config.ReadTimeout = strings.ToLower(strings.TrimSpace(config.ReadTimeout))
+	config.SendTimeout = strings.ToLower(strings.TrimSpace(config.SendTimeout))
+	config.ProxyBuffering = normalizeNginxOnOffDefault(config.ProxyBuffering)
+	config.RequestBuffering = normalizeNginxOnOffDefault(config.RequestBuffering)
+}
+
+func ValidateApplicationProxyConfig(config ApplicationProxyConfig) error {
+	for _, header := range config.Headers {
+		if !proxyHeaderNamePattern.MatchString(header.Name) {
+			return fmt.Errorf("invalid proxy header name %q", header.Name)
+		}
+		if strings.ContainsAny(header.Value, "\r\n") {
+			return fmt.Errorf("proxy header %q contains an invalid value", header.Name)
+		}
+	}
+	for name, value := range map[string]string{
+		"proxy connect timeout": config.ConnectTimeout,
+		"proxy read timeout":    config.ReadTimeout,
+		"proxy send timeout":    config.SendTimeout,
+	} {
+		if value != "" && !proxyTimeoutPattern.MatchString(value) {
+			return fmt.Errorf("%s must use nginx time syntax such as 30s, 5m, or 500ms", name)
+		}
+	}
+	if !validNginxOnOffDefault(config.ProxyBuffering) {
+		return errors.New("proxy buffering must be default, on, or off")
+	}
+	if !validNginxOnOffDefault(config.RequestBuffering) {
+		return errors.New("proxy request buffering must be default, on, or off")
+	}
+	return nil
+}
+
+func isEmptyApplicationProxyConfig(config ApplicationProxyConfig) bool {
+	return len(config.Headers) == 0 &&
+		config.ConnectTimeout == "" &&
+		config.ReadTimeout == "" &&
+		config.SendTimeout == "" &&
+		!config.WebSocketEnabled &&
+		config.PreserveHost == nil &&
+		config.ProxyBuffering == "" &&
+		config.RequestBuffering == ""
+}
+
+func normalizeNginxOnOffDefault(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "true", "1", "yes":
+		return "on"
+	case "off", "false", "0", "no":
+		return "off"
+	case "default", "":
+		return ""
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func validNginxOnOffDefault(value string) bool {
+	return value == "" || value == "on" || value == "off"
 }
 
 func ParseCertificate(name, certPEM, keyPEM string) (Certificate, error) {

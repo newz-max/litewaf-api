@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,15 +31,16 @@ type GatewayConfig struct {
 }
 
 type GatewayApplication struct {
-	ID        int64                        `json:"id"`
-	Name      string                       `json:"name"`
-	Mode      string                       `json:"mode"`
-	Enabled   bool                         `json:"enabled"`
-	Hosts     []string                     `json:"hosts"`
-	Listeners []GatewayApplicationListener `json:"listeners"`
-	Upstreams []GatewayApplicationUpstream `json:"upstreams"`
-	Rules     []GatewayRule                `json:"rules"`
-	Policy    GatewayPolicy                `json:"policy"`
+	ID          int64                         `json:"id"`
+	Name        string                        `json:"name"`
+	Mode        string                        `json:"mode"`
+	Enabled     bool                          `json:"enabled"`
+	Hosts       []string                      `json:"hosts"`
+	Listeners   []GatewayApplicationListener  `json:"listeners"`
+	Upstreams   []GatewayApplicationUpstream  `json:"upstreams"`
+	ProxyConfig *model.ApplicationProxyConfig `json:"proxy_config,omitempty"`
+	Rules       []GatewayRule                 `json:"rules"`
+	Policy      GatewayPolicy                 `json:"policy"`
 }
 
 type GatewayApplicationListener struct {
@@ -139,13 +142,37 @@ type GatewayListenerDeployment struct {
 }
 
 type RuntimeArtifacts struct {
-	ListenerConfigPath string  `json:"listener_config_path"`
-	BodySizeConfigPath string  `json:"body_size_config_path"`
-	ClientMaxBodySize  string  `json:"client_max_body_size"`
-	CertificateDir     string  `json:"certificate_dir"`
-	ListenerCount      int     `json:"listener_count"`
-	HTTPSListenerCount int     `json:"https_listener_count"`
-	CertificateIDs     []int64 `json:"certificate_ids"`
+	ListenerConfigPath  string                      `json:"listener_config_path"`
+	BodySizeConfigPath  string                      `json:"body_size_config_path"`
+	SnippetConfigDir    string                      `json:"snippet_config_dir,omitempty"`
+	NginxConfigPath     string                      `json:"nginx_config_path,omitempty"`
+	ClientMaxBodySize   string                      `json:"client_max_body_size"`
+	CertificateDir      string                      `json:"certificate_dir"`
+	ListenerCount       int                         `json:"listener_count"`
+	HTTPSListenerCount  int                         `json:"https_listener_count"`
+	CertificateIDs      []int64                     `json:"certificate_ids"`
+	AdvancedConfig      bool                        `json:"advanced_config"`
+	FullOverrideActive  bool                        `json:"full_override_active"`
+	Validation          model.NginxValidationResult `json:"validation,omitempty"`
+	RuntimeArtifactJSON string                      `json:"-"`
+}
+
+type RuntimeArtifactSnapshot struct {
+	Files []RuntimeArtifactFile `json:"files"`
+}
+
+type RuntimeArtifactFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    uint32 `json:"mode,omitempty"`
+}
+
+type AdvancedNginxReview struct {
+	HasAdvancedChanges bool                        `json:"has_advanced_changes"`
+	Mode               string                      `json:"mode"`
+	Warnings           []string                    `json:"warnings"`
+	Validation         model.NginxValidationResult `json:"validation"`
+	Diff               string                      `json:"diff"`
 }
 
 type GatewayIPAccessEntry struct {
@@ -280,15 +307,16 @@ func GenerateExtended(ctx context.Context, dataStore store.Store, version string
 			continue
 		}
 		gatewayApplication := GatewayApplication{
-			ID:        application.ID,
-			Name:      application.Name,
-			Mode:      application.Mode,
-			Enabled:   application.Enabled,
-			Hosts:     gatewayHosts(application.Hosts),
-			Listeners: gatewayListeners(application.Listeners),
-			Upstreams: gatewayUpstreams(application.Upstreams),
-			Rules:     []GatewayRule{},
-			Policy:    gatewayPolicy(sitePolicies[application.ID]),
+			ID:          application.ID,
+			Name:        application.Name,
+			Mode:        application.Mode,
+			Enabled:     application.Enabled,
+			Hosts:       gatewayHosts(application.Hosts),
+			Listeners:   gatewayListeners(application.Listeners),
+			Upstreams:   gatewayUpstreams(application.Upstreams),
+			ProxyConfig: cloneApplicationProxyConfig(application.ProxyConfig),
+			Rules:       []GatewayRule{},
+			Policy:      gatewayPolicy(sitePolicies[application.ID]),
 		}
 		for _, rule := range siteRules[application.ID] {
 			gatewayApplication.Rules = append(gatewayApplication.Rules, GatewayRule{
@@ -1368,26 +1396,141 @@ func ApplicationsFromConfigJSON(configJSON []byte) ([]model.Application, error) 
 	applications := make([]model.Application, 0, len(config.Applications))
 	for _, application := range config.Applications {
 		applications = append(applications, model.Application{
-			ID:        application.ID,
-			Name:      application.Name,
-			Mode:      application.Mode,
-			Enabled:   application.Enabled,
-			Hosts:     applicationHostsFromGateway(application.ID, application.Hosts),
-			Listeners: applicationListenersFromGateway(application.ID, application.Listeners),
-			Upstreams: applicationUpstreamsFromGateway(application.ID, application.Upstreams),
+			ID:          application.ID,
+			Name:        application.Name,
+			Mode:        application.Mode,
+			Enabled:     application.Enabled,
+			Hosts:       applicationHostsFromGateway(application.ID, application.Hosts),
+			Listeners:   applicationListenersFromGateway(application.ID, application.Listeners),
+			Upstreams:   applicationUpstreamsFromGateway(application.ID, application.Upstreams),
+			ProxyConfig: cloneApplicationProxyConfig(application.ProxyConfig),
 		})
 	}
 	return applications, nil
 }
 
+func cloneApplicationProxyConfig(input *model.ApplicationProxyConfig) *model.ApplicationProxyConfig {
+	if input == nil {
+		return nil
+	}
+	out := *input
+	out.Headers = append([]model.ApplicationProxyHeader(nil), input.Headers...)
+	return &out
+}
+
 func writeRuntimeArtifactsForApplications(ctx context.Context, dataStore store.Store, applications []model.Application, gatewayConfigPath string, clientMaxBodySize string) (RuntimeArtifacts, error) {
-	normalizedClientMaxBodySize, err := gatewayconfig.NormalizeClientMaxBodySize(clientMaxBodySize)
+	artifacts, snapshot, _, err := buildRuntimeArtifactSnapshot(ctx, dataStore, applications, gatewayConfigPath, clientMaxBodySize, model.EmptyNginxConfigDraft(), model.NginxValidationResult{})
 	if err != nil {
 		return RuntimeArtifacts{}, err
 	}
-	certificates, err := dataStore.ListCertificates(ctx)
+	if err := WriteRuntimeArtifactSnapshot(snapshot); err != nil {
+		return RuntimeArtifacts{}, err
+	}
+	artifacts.RuntimeArtifactJSON = encodeRuntimeArtifactSnapshot(snapshot)
+	return artifacts, nil
+}
+
+func WriteRuntimeArtifactsWithAdvancedNginx(ctx context.Context, dataStore store.Store, gatewayConfigPath string, clientMaxBodySize string, validationCommand string) (RuntimeArtifacts, error) {
+	applications, err := dataStore.ListApplications(ctx)
 	if err != nil {
 		return RuntimeArtifacts{}, err
+	}
+	if len(applications) == 0 {
+		sites, err := dataStore.ListSites(ctx)
+		if err != nil {
+			return RuntimeArtifacts{}, err
+		}
+		applications = ApplicationsFromSites(sites)
+	}
+	draft, err := dataStore.GetNginxConfigDraft(ctx)
+	if err != nil {
+		return RuntimeArtifacts{}, err
+	}
+	review, snapshot, artifacts, err := buildAdvancedNginxReview(ctx, dataStore, applications, gatewayConfigPath, clientMaxBodySize, validationCommand, draft)
+	if err != nil {
+		return RuntimeArtifacts{}, err
+	}
+	if review.HasAdvancedChanges && review.Validation.Status != model.NginxValidationStatusPassed {
+		return RuntimeArtifacts{}, fmt.Errorf("advanced nginx config validation %s: %s", review.Validation.Status, review.Validation.Message)
+	}
+	if err := WriteRuntimeArtifactSnapshot(snapshot); err != nil {
+		return RuntimeArtifacts{}, err
+	}
+	artifacts.Validation = review.Validation
+	artifacts.RuntimeArtifactJSON = encodeRuntimeArtifactSnapshot(snapshot)
+	return artifacts, nil
+}
+
+func BuildAdvancedNginxReview(ctx context.Context, dataStore store.Store, gatewayConfigPath string, clientMaxBodySize string, validationCommand string) (AdvancedNginxReview, error) {
+	applications, err := dataStore.ListApplications(ctx)
+	if err != nil {
+		return AdvancedNginxReview{}, err
+	}
+	if len(applications) == 0 {
+		sites, err := dataStore.ListSites(ctx)
+		if err != nil {
+			return AdvancedNginxReview{}, err
+		}
+		applications = ApplicationsFromSites(sites)
+	}
+	draft, err := dataStore.GetNginxConfigDraft(ctx)
+	if err != nil {
+		return AdvancedNginxReview{}, err
+	}
+	review, _, _, err := buildAdvancedNginxReview(ctx, dataStore, applications, gatewayConfigPath, clientMaxBodySize, validationCommand, draft)
+	return review, err
+}
+
+func buildAdvancedNginxReview(ctx context.Context, dataStore store.Store, applications []model.Application, gatewayConfigPath string, clientMaxBodySize string, validationCommand string, draft model.NginxConfigDraft) (AdvancedNginxReview, RuntimeArtifactSnapshot, RuntimeArtifacts, error) {
+	hasAdvanced := model.NginxConfigDraftHasAdvancedChanges(draft)
+	review := AdvancedNginxReview{
+		HasAdvancedChanges: hasAdvanced,
+		Mode:               draft.Mode,
+		Warnings:           advancedNginxWarnings(draft),
+		Validation:         model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked},
+	}
+	if draft.Mode == model.NginxConfigModeFull && strings.TrimSpace(draft.FullConfig) != "" {
+		if issues := ValidateFullNginxConfigInvariants(draft.FullConfig); len(issues) > 0 {
+			review.Validation = model.NginxValidationResult{
+				Status:      model.NginxValidationStatusFailed,
+				Message:     "full nginx.conf override is missing LiteWaf invariants",
+				Diagnostics: issues,
+				ValidatedAt: time.Now().UTC().Format(time.RFC3339),
+			}
+			artifacts, snapshot, _, err := buildRuntimeArtifactSnapshot(ctx, dataStore, applications, gatewayConfigPath, clientMaxBodySize, draft, review.Validation)
+			if err != nil {
+				return review, RuntimeArtifactSnapshot{}, RuntimeArtifacts{}, err
+			}
+			review.Diff = buildRuntimeDiff(snapshot)
+			return review, snapshot, artifacts, nil
+		}
+	}
+	validation := model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked}
+	artifacts, snapshot, effectiveConfigPath, err := buildRuntimeArtifactSnapshot(ctx, dataStore, applications, gatewayConfigPath, clientMaxBodySize, draft, validation)
+	if err != nil {
+		return review, RuntimeArtifactSnapshot{}, RuntimeArtifacts{}, err
+	}
+	if hasAdvanced {
+		validation = ValidateEffectiveNginxConfig(ctx, validationCommand, snapshotWithEffectiveConfig(snapshot, effectiveConfigPath, effectiveNginxConfig(snapshot, effectiveConfigPath)), effectiveConfigPath)
+		artifacts.Validation = validation
+		review.Validation = validation
+	} else {
+		review.Validation = validation
+	}
+	if hasAdvanced {
+		review.Diff = buildRuntimeDiff(snapshot)
+	}
+	return review, snapshot, artifacts, nil
+}
+
+func buildRuntimeArtifactSnapshot(ctx context.Context, dataStore store.Store, applications []model.Application, gatewayConfigPath string, clientMaxBodySize string, draft model.NginxConfigDraft, validation model.NginxValidationResult) (RuntimeArtifacts, RuntimeArtifactSnapshot, string, error) {
+	normalizedClientMaxBodySize, err := gatewayconfig.NormalizeClientMaxBodySize(clientMaxBodySize)
+	if err != nil {
+		return RuntimeArtifacts{}, RuntimeArtifactSnapshot{}, "", err
+	}
+	certificates, err := dataStore.ListCertificates(ctx)
+	if err != nil {
+		return RuntimeArtifacts{}, RuntimeArtifactSnapshot{}, "", err
 	}
 	certificateByID := map[int64]model.Certificate{}
 	for _, cert := range certificates {
@@ -1397,56 +1540,403 @@ func writeRuntimeArtifactsForApplications(ctx context.Context, dataStore store.S
 	baseDir := filepath.Dir(gatewayConfigPath)
 	listenerDir := filepath.Join(baseDir, "listeners")
 	certificateDir := filepath.Join(baseDir, "certificates")
-	if err := os.MkdirAll(listenerDir, 0o755); err != nil {
-		return RuntimeArtifacts{}, err
-	}
-	if err := os.MkdirAll(certificateDir, 0o700); err != nil {
-		return RuntimeArtifacts{}, err
-	}
+	snippetDir := filepath.Join(listenerDir, "snippets")
 
 	usedCertificates := map[int64]bool{}
-	listenerConfig, listenerCount, httpsCount := buildListenerConfig(applications, "/etc/litewaf/certificates", usedCertificates)
+	snippets := snippetsByPoint(draft)
+	listenerConfig, listenerCount, httpsCount := buildListenerConfigWithSnippets(applications, "/etc/litewaf/certificates", usedCertificates, snippets)
 	listenerConfigPath := filepath.Join(listenerDir, "applications.conf")
-	if err := WriteAtomic(listenerConfigPath, []byte(listenerConfig)); err != nil {
-		return RuntimeArtifacts{}, err
-	}
 	bodySizeConfigPath := filepath.Join(listenerDir, "body-size.conf")
-	if err := WriteAtomic(bodySizeConfigPath, []byte(buildBodySizeConfig(normalizedClientMaxBodySize))); err != nil {
-		return RuntimeArtifacts{}, err
+	snapshot := RuntimeArtifactSnapshot{Files: []RuntimeArtifactFile{
+		{Path: listenerConfigPath, Content: listenerConfig, Mode: 0o644},
+		{Path: bodySizeConfigPath, Content: buildBodySizeConfig(normalizedClientMaxBodySize), Mode: 0o644},
+	}}
+	for _, point := range []string{model.NginxSnippetPointHTTP, model.NginxSnippetPointServer, model.NginxSnippetPointLocation} {
+		content := strings.TrimSpace(snippets[point])
+		if content == "" {
+			continue
+		}
+		snapshot.Files = append(snapshot.Files, RuntimeArtifactFile{
+			Path:    filepath.Join(snippetDir, point+".conf"),
+			Content: "# generated from LiteWaf advanced nginx snippet draft\n" + content + "\n",
+			Mode:    0o644,
+		})
 	}
 	certificateIDs := make([]int64, 0, len(usedCertificates))
 	for id := range usedCertificates {
 		cert, ok := certificateByID[id]
 		if !ok {
-			return RuntimeArtifacts{}, fmt.Errorf("certificate %d does not exist", id)
+			return RuntimeArtifacts{}, RuntimeArtifactSnapshot{}, "", fmt.Errorf("certificate %d does not exist", id)
 		}
 		crtPath := filepath.Join(certificateDir, fmt.Sprintf("%d.crt", id))
 		keyPath := filepath.Join(certificateDir, fmt.Sprintf("%d.key", id))
-		if err := WriteAtomic(crtPath, []byte(cert.CertPEM+"\n")); err != nil {
-			return RuntimeArtifacts{}, err
-		}
-		if err := WriteAtomic(keyPath, []byte(cert.KeyPEM+"\n")); err != nil {
-			return RuntimeArtifacts{}, err
-		}
-		if err := os.Chmod(keyPath, 0o600); err != nil {
-			return RuntimeArtifacts{}, err
-		}
+		snapshot.Files = append(snapshot.Files,
+			RuntimeArtifactFile{Path: crtPath, Content: cert.CertPEM + "\n", Mode: 0o644},
+			RuntimeArtifactFile{Path: keyPath, Content: cert.KeyPEM + "\n", Mode: 0o600},
+		)
 		certificateIDs = append(certificateIDs, id)
 	}
 	sort.Slice(certificateIDs, func(i, j int) bool { return certificateIDs[i] < certificateIDs[j] })
+	nginxConfigPath := filepath.Join(baseDir, "nginx.conf")
+	effectiveConfig := buildDefaultNginxConfig(listenerDir)
+	fullOverrideActive := draft.Mode == model.NginxConfigModeFull && strings.TrimSpace(draft.FullConfig) != ""
+	if fullOverrideActive {
+		effectiveConfig = strings.TrimSpace(draft.FullConfig) + "\n"
+		snapshot.Files = append(snapshot.Files, RuntimeArtifactFile{Path: nginxConfigPath, Content: effectiveConfig, Mode: 0o644})
+	}
 	return RuntimeArtifacts{
 		ListenerConfigPath: listenerConfigPath,
 		BodySizeConfigPath: bodySizeConfigPath,
+		SnippetConfigDir:   snippetDir,
+		NginxConfigPath:    nginxConfigPath,
 		ClientMaxBodySize:  normalizedClientMaxBodySize,
 		CertificateDir:     certificateDir,
 		ListenerCount:      listenerCount,
 		HTTPSListenerCount: httpsCount,
 		CertificateIDs:     certificateIDs,
-	}, nil
+		AdvancedConfig:     model.NginxConfigDraftHasAdvancedChanges(draft),
+		FullOverrideActive: fullOverrideActive,
+		Validation:         validation,
+	}, snapshot, nginxConfigPath, nil
 }
 
 func buildBodySizeConfig(clientMaxBodySize string) string {
 	return fmt.Sprintf("# generated by litewaf publish; do not edit\nclient_max_body_size %s;\n", clientMaxBodySize)
+}
+
+func WriteRuntimeArtifactSnapshot(snapshot RuntimeArtifactSnapshot) error {
+	for _, file := range snapshot.Files {
+		if strings.TrimSpace(file.Path) == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(file.Path), 0o755); err != nil {
+			return err
+		}
+		if err := WriteAtomic(file.Path, []byte(file.Content)); err != nil {
+			return err
+		}
+		if file.Mode != 0 {
+			if err := os.Chmod(file.Path, os.FileMode(file.Mode)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func RuntimeArtifactSnapshotFromJSON(value string) (RuntimeArtifactSnapshot, error) {
+	var snapshot RuntimeArtifactSnapshot
+	if strings.TrimSpace(value) == "" {
+		return snapshot, nil
+	}
+	if err := json.Unmarshal([]byte(value), &snapshot); err != nil {
+		return RuntimeArtifactSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func RuntimeArtifactsFromSnapshot(snapshot RuntimeArtifactSnapshot, gatewayConfigPath string, clientMaxBodySize string, applications []model.Application) RuntimeArtifacts {
+	bodySize, err := gatewayconfig.NormalizeClientMaxBodySize(clientMaxBodySize)
+	if err != nil {
+		bodySize = gatewayconfig.DefaultClientMaxBodySize
+	}
+	baseDir := filepath.Dir(gatewayConfigPath)
+	listenerDir := filepath.Join(baseDir, "listeners")
+	certificateDir := filepath.Join(baseDir, "certificates")
+	certificateIDs := []int64{}
+	certificateSeen := map[int64]bool{}
+	listenerCount := 0
+	httpsCount := 0
+	for _, app := range applications {
+		if !app.Enabled {
+			continue
+		}
+		for _, listener := range app.Listeners {
+			if !listener.Enabled {
+				continue
+			}
+			listenerCount++
+			if listener.Protocol == model.ListenerProtocolHTTPS {
+				httpsCount++
+				if listener.CertificateID > 0 && !certificateSeen[listener.CertificateID] {
+					certificateIDs = append(certificateIDs, listener.CertificateID)
+					certificateSeen[listener.CertificateID] = true
+				}
+			}
+		}
+	}
+	sort.Slice(certificateIDs, func(i, j int) bool { return certificateIDs[i] < certificateIDs[j] })
+	fullOverride := false
+	for _, file := range snapshot.Files {
+		if filepath.Clean(file.Path) == filepath.Clean(filepath.Join(baseDir, "nginx.conf")) {
+			fullOverride = true
+			break
+		}
+	}
+	return RuntimeArtifacts{
+		ListenerConfigPath:  filepath.Join(listenerDir, "applications.conf"),
+		BodySizeConfigPath:  filepath.Join(listenerDir, "body-size.conf"),
+		SnippetConfigDir:    filepath.Join(listenerDir, "snippets"),
+		NginxConfigPath:     filepath.Join(baseDir, "nginx.conf"),
+		ClientMaxBodySize:   bodySize,
+		CertificateDir:      certificateDir,
+		ListenerCount:       listenerCount,
+		HTTPSListenerCount:  httpsCount,
+		CertificateIDs:      certificateIDs,
+		AdvancedConfig:      fullOverride,
+		FullOverrideActive:  fullOverride,
+		RuntimeArtifactJSON: encodeRuntimeArtifactSnapshot(snapshot),
+	}
+}
+
+func encodeRuntimeArtifactSnapshot(snapshot RuntimeArtifactSnapshot) string {
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return ""
+	}
+	return string(payload)
+}
+
+func snapshotWithEffectiveConfig(snapshot RuntimeArtifactSnapshot, nginxConfigPath string, effectiveConfig string) RuntimeArtifactSnapshot {
+	for i := range snapshot.Files {
+		if filepath.Clean(snapshot.Files[i].Path) == filepath.Clean(nginxConfigPath) {
+			snapshot.Files[i].Content = effectiveConfig
+			return snapshot
+		}
+	}
+	snapshot.Files = append(snapshot.Files, RuntimeArtifactFile{Path: nginxConfigPath, Content: effectiveConfig, Mode: 0o644})
+	return snapshot
+}
+
+func effectiveNginxConfig(snapshot RuntimeArtifactSnapshot, nginxConfigPath string) string {
+	for _, file := range snapshot.Files {
+		if filepath.Clean(file.Path) == filepath.Clean(nginxConfigPath) {
+			return file.Content
+		}
+	}
+	return buildDefaultNginxConfig(filepath.Join(filepath.Dir(nginxConfigPath), "listeners"))
+}
+
+func ValidateEffectiveNginxConfig(ctx context.Context, command string, snapshot RuntimeArtifactSnapshot, configPath string) model.NginxValidationResult {
+	command = strings.TrimSpace(command)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if command == "" {
+		return model.NginxValidationResult{
+			Status:      model.NginxValidationStatusUnavailable,
+			Message:     "nginx validation command is not configured",
+			ValidatedAt: now,
+		}
+	}
+	stageDir, err := os.MkdirTemp("", "litewaf-nginx-validate-*")
+	if err != nil {
+		return model.NginxValidationResult{Status: model.NginxValidationStatusUnavailable, Message: err.Error(), ValidatedAt: now}
+	}
+	defer os.RemoveAll(stageDir)
+	baseDir := filepath.Dir(configPath)
+	stageSnapshot := RuntimeArtifactSnapshot{Files: make([]RuntimeArtifactFile, 0, len(snapshot.Files))}
+	for _, file := range snapshot.Files {
+		rel, err := filepath.Rel(baseDir, file.Path)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			rel = filepath.Base(file.Path)
+		}
+		stagePath := filepath.Join(stageDir, rel)
+		content := strings.ReplaceAll(file.Content, filepath.ToSlash(baseDir), filepath.ToSlash(stageDir))
+		content = strings.ReplaceAll(content, baseDir, stageDir)
+		stageSnapshot.Files = append(stageSnapshot.Files, RuntimeArtifactFile{Path: stagePath, Content: content, Mode: file.Mode})
+	}
+	if err := WriteRuntimeArtifactSnapshot(stageSnapshot); err != nil {
+		return model.NginxValidationResult{Status: model.NginxValidationStatusUnavailable, Message: err.Error(), ValidatedAt: now}
+	}
+	stageConfigPath := filepath.Join(stageDir, filepath.Base(configPath))
+	renderedCommand := strings.ReplaceAll(command, "{config}", shellQuote(stageConfigPath))
+	renderedCommand = strings.ReplaceAll(renderedCommand, "{prefix}", shellQuote(stageDir))
+	cmd := shellCommand(ctx, renderedCommand)
+	output, err := cmd.CombinedOutput()
+	message := boundedValidationMessage(string(output))
+	if err != nil {
+		if message == "" {
+			message = err.Error()
+		}
+		return model.NginxValidationResult{
+			Status:      model.NginxValidationStatusFailed,
+			Command:     renderedCommand,
+			Message:     message,
+			Diagnostics: splitValidationDiagnostics(message),
+			ValidatedAt: now,
+		}
+	}
+	if message == "" {
+		message = "nginx config validation passed"
+	}
+	return model.NginxValidationResult{
+		Status:      model.NginxValidationStatusPassed,
+		Command:     renderedCommand,
+		Message:     message,
+		Diagnostics: splitValidationDiagnostics(message),
+		ValidatedAt: now,
+	}
+}
+
+func shellCommand(ctx context.Context, command string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd", "/C", command)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", command)
+}
+
+func shellQuote(value string) string {
+	if runtime.GOOS == "windows" {
+		return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func boundedValidationMessage(message string) string {
+	message = strings.TrimSpace(message)
+	const maxLen = 4000
+	if len(message) > maxLen {
+		return message[:maxLen]
+	}
+	return message
+}
+
+func splitValidationDiagnostics(message string) []string {
+	lines := strings.Split(strings.ReplaceAll(message, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func buildRuntimeDiff(snapshot RuntimeArtifactSnapshot) string {
+	var builder strings.Builder
+	for _, file := range snapshot.Files {
+		if isSensitiveRuntimeArtifact(file.Path) {
+			continue
+		}
+		current, err := os.ReadFile(file.Path)
+		if err == nil && string(current) == file.Content {
+			continue
+		}
+		builder.WriteString("--- ")
+		builder.WriteString(file.Path)
+		builder.WriteString("\n+++ staged\n")
+		if err == nil && len(current) > 0 {
+			builder.WriteString("@@ current @@\n")
+			builder.WriteString(limitDiffContent(string(current)))
+			if !strings.HasSuffix(builder.String(), "\n") {
+				builder.WriteString("\n")
+			}
+		}
+		builder.WriteString("@@ staged @@\n")
+		builder.WriteString(limitDiffContent(file.Content))
+		if !strings.HasSuffix(builder.String(), "\n") {
+			builder.WriteString("\n")
+		}
+	}
+	return builder.String()
+}
+
+func isSensitiveRuntimeArtifact(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".key" || ext == ".crt" || ext == ".pem"
+}
+
+func limitDiffContent(value string) string {
+	const maxLen = 6000
+	if len(value) > maxLen {
+		return value[:maxLen] + "\n... truncated ..."
+	}
+	return value
+}
+
+func advancedNginxWarnings(draft model.NginxConfigDraft) []string {
+	if !model.NginxConfigDraftHasAdvancedChanges(draft) {
+		return []string{}
+	}
+	warnings := []string{
+		"Advanced nginx changes can stop the gateway or bypass LiteWaf request handling if published incorrectly.",
+		"Publishing requires effective nginx validation and explicit confirmation.",
+	}
+	if draft.Mode == model.NginxConfigModeFull && strings.TrimSpace(draft.FullConfig) != "" {
+		warnings = append(warnings, "Full nginx.conf override is the highest-risk mode and must preserve LiteWaf Lua hooks, health checks, listener includes, and proxy execution.")
+	}
+	return warnings
+}
+
+func ValidateFullNginxConfigInvariants(config string) []string {
+	required := map[string]string{
+		"health endpoint":           "location = /healthz",
+		"metrics endpoint":          "litewaf.metrics()",
+		"LiteWaf module loading":    `require "litewaf"`,
+		"LiteWaf worker init":       "litewaf.init_worker()",
+		"LiteWaf access hook":       "litewaf.access()",
+		"LiteWaf header hook":       "litewaf.header_filter()",
+		"LiteWaf body hook":         "litewaf.body_filter()",
+		"LiteWaf log hook":          "litewaf.log()",
+		"runtime listener include":  "/etc/litewaf/listeners/*.conf",
+		"selected upstream proxy":   "proxy_pass $litewaf_upstream",
+		"runtime upstream variable": "$litewaf_upstream",
+	}
+	issues := []string{}
+	for label, needle := range required {
+		if !strings.Contains(config, needle) {
+			issues = append(issues, fmt.Sprintf("missing %s (%s)", label, needle))
+		}
+	}
+	sort.Strings(issues)
+	return issues
+}
+
+func snippetsByPoint(draft model.NginxConfigDraft) map[string]string {
+	out := map[string]string{}
+	if draft.Mode != model.NginxConfigModeSnippets {
+		return out
+	}
+	for _, snippet := range draft.Snippets {
+		content := strings.TrimSpace(snippet.Content)
+		if content == "" {
+			continue
+		}
+		out[snippet.IncludePoint] = strings.TrimSpace(out[snippet.IncludePoint] + "\n" + content)
+	}
+	return out
+}
+
+func buildDefaultNginxConfig(listenerDir string) string {
+	listenerInclude := filepath.ToSlash(filepath.Join(listenerDir, "*.conf"))
+	return fmt.Sprintf(`worker_processes auto;
+error_log /dev/stderr warn;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    lua_package_path "/usr/local/openresty/nginx/lua/?.lua;;";
+    lua_shared_dict litewaf_rate_limit 10m;
+    lua_shared_dict litewaf_dynamic_ban 10m;
+    lua_shared_dict litewaf_dynamic_ban_clear 1m;
+    lua_shared_dict litewaf_dynamic_protection 10m;
+    lua_shared_dict litewaf_metrics 10m;
+    include /usr/local/openresty/nginx/conf/litewaf-realip.conf;
+    include %s;
+
+    resolver 127.0.0.11 ipv6=off valid=10s;
+
+    init_by_lua_block {
+        litewaf = require "litewaf"
+    }
+
+    init_worker_by_lua_block {
+        litewaf.init_worker()
+    }
+}
+`, listenerInclude)
 }
 
 func applicationHostsFromGateway(applicationID int64, hosts []string) []model.ApplicationHost {
@@ -1490,8 +1980,17 @@ func applicationUpstreamsFromGateway(applicationID int64, upstreams []GatewayApp
 }
 
 func buildListenerConfig(applications []model.Application, certificateDir string, usedCertificates map[int64]bool) (string, int, int) {
+	return buildListenerConfigWithSnippets(applications, certificateDir, usedCertificates, map[string]string{})
+}
+
+func buildListenerConfigWithSnippets(applications []model.Application, certificateDir string, usedCertificates map[int64]bool, snippets map[string]string) (string, int, int) {
 	var builder strings.Builder
 	builder.WriteString("# generated by litewaf publish; do not edit\n")
+	if content := strings.TrimSpace(snippets[model.NginxSnippetPointHTTP]); content != "" {
+		builder.WriteString("\n# LiteWaf controlled http snippet\n")
+		builder.WriteString(content)
+		builder.WriteString("\n")
+	}
 	listenerCount := 0
 	httpsCount := 0
 	for _, application := range applications {
@@ -1507,13 +2006,13 @@ func buildListenerConfig(applications []model.Application, certificateDir string
 				httpsCount++
 				usedCertificates[listener.CertificateID] = true
 			}
-			writeListenerServer(&builder, application, listener, certificateDir)
+			writeListenerServer(&builder, application, listener, certificateDir, snippets)
 		}
 	}
 	return builder.String(), listenerCount, httpsCount
 }
 
-func writeListenerServer(builder *strings.Builder, application model.Application, listener model.ApplicationListener, certificateDir string) {
+func writeListenerServer(builder *strings.Builder, application model.Application, listener model.ApplicationListener, certificateDir string, snippets map[string]string) {
 	listenSuffix := ""
 	if listener.Protocol == model.ListenerProtocolHTTPS {
 		listenSuffix = " ssl"
@@ -1535,6 +2034,11 @@ func writeListenerServer(builder *strings.Builder, application model.Application
 	builder.WriteString("    location = /metrics {\n")
 	builder.WriteString("        content_by_lua_block { litewaf.metrics() }\n")
 	builder.WriteString("    }\n\n")
+	if content := strings.TrimSpace(snippets[model.NginxSnippetPointServer]); content != "" {
+		builder.WriteString("    # LiteWaf controlled server snippet\n")
+		writeIndentedSnippet(builder, content, "    ")
+		builder.WriteString("\n")
+	}
 	builder.WriteString("    location / {\n")
 	builder.WriteString("        set $litewaf_upstream \"\";\n")
 	builder.WriteString("        set $litewaf_request_id \"\";\n")
@@ -1544,14 +2048,80 @@ func writeListenerServer(builder *strings.Builder, application model.Application
 	builder.WriteString("        body_filter_by_lua_block { litewaf.body_filter() }\n")
 	builder.WriteString("        log_by_lua_block { litewaf.log() }\n\n")
 	builder.WriteString("        proxy_http_version 1.1;\n")
-	builder.WriteString("        proxy_set_header Host $host;\n")
+	writeApplicationProxyDirectives(builder, application.ProxyConfig)
+	if content := strings.TrimSpace(snippets[model.NginxSnippetPointLocation]); content != "" {
+		builder.WriteString("\n        # LiteWaf controlled location snippet\n")
+		writeIndentedSnippet(builder, content, "        ")
+	}
+	builder.WriteString("        proxy_pass $litewaf_upstream;\n")
+	builder.WriteString("    }\n")
+	builder.WriteString("}\n")
+}
+
+func writeApplicationProxyDirectives(builder *strings.Builder, config *model.ApplicationProxyConfig) {
+	preserveHost := true
+	if config != nil && config.PreserveHost != nil {
+		preserveHost = *config.PreserveHost
+	}
+	if preserveHost {
+		builder.WriteString("        proxy_set_header Host $host;\n")
+	} else {
+		builder.WriteString("        proxy_set_header Host $proxy_host;\n")
+	}
 	builder.WriteString("        proxy_set_header X-Real-IP $litewaf_client_ip;\n")
 	builder.WriteString("        proxy_set_header X-Request-ID $litewaf_request_id;\n")
 	builder.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 	builder.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
-	builder.WriteString("        proxy_pass $litewaf_upstream;\n")
-	builder.WriteString("    }\n")
-	builder.WriteString("}\n")
+	if config == nil {
+		return
+	}
+	if config.WebSocketEnabled {
+		builder.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
+		builder.WriteString("        proxy_set_header Connection \"upgrade\";\n")
+	}
+	if config.ConnectTimeout != "" {
+		builder.WriteString(fmt.Sprintf("        proxy_connect_timeout %s;\n", config.ConnectTimeout))
+	}
+	if config.ReadTimeout != "" {
+		builder.WriteString(fmt.Sprintf("        proxy_read_timeout %s;\n", config.ReadTimeout))
+	}
+	if config.SendTimeout != "" {
+		builder.WriteString(fmt.Sprintf("        proxy_send_timeout %s;\n", config.SendTimeout))
+	}
+	if config.ProxyBuffering != "" {
+		builder.WriteString(fmt.Sprintf("        proxy_buffering %s;\n", config.ProxyBuffering))
+	}
+	if config.RequestBuffering != "" {
+		builder.WriteString(fmt.Sprintf("        proxy_request_buffering %s;\n", config.RequestBuffering))
+	}
+	for _, header := range config.Headers {
+		builder.WriteString(fmt.Sprintf("        proxy_set_header %s %s;\n", header.Name, escapeNginxHeaderValue(header.Value)))
+	}
+}
+
+func escapeNginxHeaderValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return `""`
+	}
+	if strings.HasPrefix(value, "$") && !strings.ContainsAny(value, " ;{}") {
+		return value
+	}
+	escaped := strings.ReplaceAll(value, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	return `"` + escaped + `"`
+}
+
+func writeIndentedSnippet(builder *strings.Builder, content string, indent string) {
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			builder.WriteString("\n")
+			continue
+		}
+		builder.WriteString(indent)
+		builder.WriteString(line)
+		builder.WriteString("\n")
+	}
 }
 
 func nginxServerNames(hosts []model.ApplicationHost) string {

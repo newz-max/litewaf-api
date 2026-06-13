@@ -61,6 +61,39 @@ func TestValidateApplicationRequiresCertificateForHTTPS(t *testing.T) {
 	}
 }
 
+func TestValidateApplicationProxyConfig(t *testing.T) {
+	preserveHost := false
+	config := ApplicationProxyConfig{
+		Headers: []ApplicationProxyHeader{
+			{Name: "X-App-Trace", Value: "$request_id"},
+		},
+		ConnectTimeout:   "500ms",
+		ReadTimeout:      "30s",
+		SendTimeout:      "1m",
+		WebSocketEnabled: true,
+		PreserveHost:     &preserveHost,
+		ProxyBuffering:   "off",
+		RequestBuffering: "on",
+	}
+	if err := ValidateApplicationProxyConfig(config); err != nil {
+		t.Fatalf("expected valid proxy config: %v", err)
+	}
+	config.Headers[0].Name = "Bad Header"
+	if err := ValidateApplicationProxyConfig(config); err == nil {
+		t.Fatal("expected invalid proxy header name to fail")
+	}
+	config.Headers[0].Name = "X-App-Trace"
+	config.Headers[0].Value = "ok\nproxy_pass http://evil"
+	if err := ValidateApplicationProxyConfig(config); err == nil {
+		t.Fatal("expected newline in proxy header value to fail")
+	}
+	config.Headers[0].Value = "ok"
+	config.ReadTimeout = "30 seconds"
+	if err := ValidateApplicationProxyConfig(config); err == nil {
+		t.Fatal("expected invalid timeout to fail")
+	}
+}
+
 func testCertificatePEM(t *testing.T, dnsName string) (string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

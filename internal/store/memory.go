@@ -81,6 +81,7 @@ type MemoryStore struct {
 	wafEvents                 map[int64]model.WAFEvent
 	dynamicBans               map[string]model.DynamicBan
 	dynamicBanClears          map[string]model.DynamicBanClearResult
+	nginxConfigDraft          model.NginxConfigDraft
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -149,6 +150,7 @@ func NewMemoryStore() *MemoryStore {
 		wafEvents:                 map[int64]model.WAFEvent{},
 		dynamicBans:               map[string]model.DynamicBan{},
 		dynamicBanClears:          map[string]model.DynamicBanClearResult{},
+		nginxConfigDraft:          model.EmptyNginxConfigDraft(),
 	}
 	store.seedRules()
 	return store
@@ -517,6 +519,27 @@ func (s *MemoryStore) GetPublishRecordByVersion(_ context.Context, version strin
 		}
 	}
 	return model.PublishRecord{}, ErrNotFound
+}
+
+func (s *MemoryStore) GetNginxConfigDraft(context.Context) (model.NginxConfigDraft, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneNginxConfigDraft(s.nginxConfigDraft), nil
+}
+
+func (s *MemoryStore) SaveNginxConfigDraft(_ context.Context, draft model.NginxConfigDraft) (model.NginxConfigDraft, error) {
+	model.NormalizeNginxConfigDraft(&draft)
+	if err := model.ValidateNginxConfigDraft(draft); err != nil {
+		return model.NginxConfigDraft{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	draft.UpdatedAt = time.Now().UTC()
+	if draft.Validation.Status == "" {
+		draft.Validation = model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked}
+	}
+	s.nginxConfigDraft = cloneNginxConfigDraft(draft)
+	return cloneNginxConfigDraft(s.nginxConfigDraft), nil
 }
 
 func (s *MemoryStore) GetUserByUsername(_ context.Context, username string) (model.User, error) {
@@ -2398,6 +2421,21 @@ func cloneApplication(item model.Application) model.Application {
 	item.Hosts = append([]model.ApplicationHost(nil), item.Hosts...)
 	item.Listeners = append([]model.ApplicationListener(nil), item.Listeners...)
 	item.Upstreams = append([]model.ApplicationUpstream(nil), item.Upstreams...)
+	if item.ProxyConfig != nil {
+		proxy := *item.ProxyConfig
+		proxy.Headers = append([]model.ApplicationProxyHeader(nil), item.ProxyConfig.Headers...)
+		item.ProxyConfig = &proxy
+	}
+	return item
+}
+
+func cloneNginxConfigDraft(item model.NginxConfigDraft) model.NginxConfigDraft {
+	item.Snippets = append([]model.NginxConfigSnippet(nil), item.Snippets...)
+	item.Validation.Diagnostics = cloneStrings(item.Validation.Diagnostics)
+	if item.PublishedAt != nil {
+		publishedAt := *item.PublishedAt
+		item.PublishedAt = &publishedAt
+	}
 	return item
 }
 

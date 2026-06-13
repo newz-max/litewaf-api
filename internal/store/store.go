@@ -52,6 +52,9 @@ type Store interface {
 	NextPublishVersion(context.Context) (int64, error)
 	GetPublishRecordByVersion(context.Context, string) (model.PublishRecord, error)
 
+	GetNginxConfigDraft(context.Context) (model.NginxConfigDraft, error)
+	SaveNginxConfigDraft(context.Context, model.NginxConfigDraft) (model.NginxConfigDraft, error)
+
 	GetUserByUsername(context.Context, string) (model.User, error)
 	EnsureUser(context.Context, model.User) (model.User, error)
 

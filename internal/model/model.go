@@ -80,17 +80,18 @@ type Policy struct {
 }
 
 type PublishRecord struct {
-	ID         int64                     `json:"id"`
-	Version    string                    `json:"version"`
-	Operator   string                    `json:"operator"`
-	Status     string                    `json:"status"`
-	ConfigPath string                    `json:"config_path"`
-	Checksum   string                    `json:"checksum"`
-	Note       string                    `json:"note"`
-	ConfigJSON string                    `json:"-"`
-	Activation *PublishActivationSummary `json:"activation,omitempty"`
-	CreatedAt  time.Time                 `json:"created_at"`
-	Time       string                    `json:"time"`
+	ID                   int64                     `json:"id"`
+	Version              string                    `json:"version"`
+	Operator             string                    `json:"operator"`
+	Status               string                    `json:"status"`
+	ConfigPath           string                    `json:"config_path"`
+	Checksum             string                    `json:"checksum"`
+	Note                 string                    `json:"note"`
+	ConfigJSON           string                    `json:"-"`
+	RuntimeArtifactsJSON string                    `json:"-"`
+	Activation           *PublishActivationSummary `json:"activation,omitempty"`
+	CreatedAt            time.Time                 `json:"created_at"`
+	Time                 string                    `json:"time"`
 }
 
 type PublishActivationSummary struct {

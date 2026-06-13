@@ -660,6 +660,61 @@ func TestReleaseRecordIncludesGatewayReloadResult(t *testing.T) {
 	}
 }
 
+func TestAdvancedNginxDraftAndPublishConfirmationGate(t *testing.T) {
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.NginxValidationCommand = writeReloadScript(t, "nginx-validate", "nginx ok", 0)
+	})
+	token := adminToken(t, handler)
+	createApplicationForRelease(t, handler, token)
+
+	draftBody := bytes.NewBufferString(`{"mode":"snippets","snippets":[{"include_point":"location","content":"proxy_hide_header X-Origin-Debug;"}]}`)
+	req := withToken(httptest.NewRequest(http.MethodPut, "/api/v1/nginx-config", draftBody), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save nginx draft status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/nginx-config/validate", nil), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"status":"passed"`) {
+		t.Fatalf("validate nginx draft status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", bytes.NewBufferString(`{"note":"missing confirmation"}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "explicit confirmation") {
+		t.Fatalf("expected confirmation gate, status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = withToken(httptest.NewRequest(http.MethodPost, "/api/v1/releases", bytes.NewBufferString(`{"note":"confirmed","confirm_advanced_nginx":true}`)), token)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("publish with confirmation status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	listenerConf, err := os.ReadFile(filepath.Join(filepath.Dir(testGatewayConfigPathFromBody(t, rec.Body.Bytes())), "listeners", "applications.conf"))
+	if err != nil {
+		t.Fatalf("read listener conf: %v", err)
+	}
+	if !bytes.Contains(listenerConf, []byte("proxy_hide_header X-Origin-Debug;")) {
+		t.Fatalf("publish did not write nginx snippet: %s", listenerConf)
+	}
+}
+
+func testGatewayConfigPathFromBody(t *testing.T, body []byte) string {
+	t.Helper()
+	var response struct {
+		Item model.PublishRecord `json:"item"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatalf("decode publish response: %v", err)
+	}
+	return response.Item.ConfigPath
+}
+
 func TestReleaseRecordBoundsGatewayReloadFailure(t *testing.T) {
 	longMessage := strings.Repeat("reload failed ", 80)
 	failureScript := writeReloadScript(t, "reload-fail", longMessage, 1)

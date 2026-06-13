@@ -31,9 +31,12 @@ CREATE TABLE IF NOT EXISTS applications (
 	mode TEXT NOT NULL DEFAULT 'monitor',
 	enabled BOOLEAN NOT NULL DEFAULT true,
 	description TEXT NOT NULL DEFAULT '',
+	proxy_config_json TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE applications ADD COLUMN IF NOT EXISTS proxy_config_json TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS application_hosts (
 	id BIGSERIAL PRIMARY KEY,
@@ -181,10 +184,24 @@ CREATE TABLE IF NOT EXISTS publish_records (
 	checksum TEXT NOT NULL,
 	note TEXT NOT NULL DEFAULT '',
 	config_json TEXT NOT NULL DEFAULT '',
+	runtime_artifacts_json TEXT NOT NULL DEFAULT '',
 	created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS config_json TEXT NOT NULL DEFAULT '';
+ALTER TABLE publish_records ADD COLUMN IF NOT EXISTS runtime_artifacts_json TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE IF NOT EXISTS nginx_config_drafts (
+	id INTEGER PRIMARY KEY DEFAULT 1,
+	mode TEXT NOT NULL DEFAULT 'snippets',
+	snippets_json TEXT NOT NULL DEFAULT '[]',
+	full_config TEXT NOT NULL DEFAULT '',
+	validation_json TEXT NOT NULL DEFAULT '{}',
+	updated_by TEXT NOT NULL DEFAULT '',
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+	published_at TIMESTAMPTZ NULL,
+	CONSTRAINT nginx_config_drafts_singleton CHECK (id = 1)
+);
 
 CREATE TABLE IF NOT EXISTS users (
 	id BIGSERIAL PRIMARY KEY,

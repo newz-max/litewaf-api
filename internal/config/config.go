@@ -21,6 +21,7 @@ type Config struct {
 	RedisAddr                string
 	GatewayConfigPath        string
 	GatewayReloadCommand     string
+	NginxValidationCommand   string
 	GatewayListenerMode      string
 	GatewayBridgePortRange   string
 	GatewayClientMaxBodySize string
@@ -50,6 +51,7 @@ func Load() Config {
 			"/var/lib/litewaf/gateway/active.json",
 		),
 		GatewayReloadCommand:   getEnv("GATEWAY_RELOAD_COMMAND", ""),
+		NginxValidationCommand: getEnv("LITEWAF_NGINX_VALIDATE_COMMAND", ""),
 		GatewayListenerMode:    normalizeGatewayListenerMode(getEnv("GATEWAY_LISTENER_MODE", "host-network")),
 		GatewayBridgePortRange: getEnv("GATEWAY_BRIDGE_PORT_RANGE", ""),
 		GatewayClientMaxBodySize: getEnv(

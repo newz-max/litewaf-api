@@ -98,6 +98,7 @@ LITEWAF_METRICS_ENABLED=false
 GATEWAY_LISTENER_MODE=host-network
 GATEWAY_BRIDGE_PORT_RANGE=
 LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE=50m
+LITEWAF_NGINX_VALIDATE_COMMAND=nginx -t -p {prefix} -c {config}
 API_LOOPBACK_ADDR=127.0.0.1
 API_LOOPBACK_PORT=18081
 LITEWAF_REAL_IP_TRUSTED_CIDRS=
@@ -108,6 +109,8 @@ LITEWAF_REAL_IP_RECURSIVE=on
 `LITEWAF_IMAGE_TAG` 建议使用不可变版本标签，不建议生产长期使用 `latest`。
 
 `LITEWAF_GATEWAY_CLIENT_MAX_BODY_SIZE` 控制 OpenResty `client_max_body_size`，默认 `50m`。它是 L1 网关请求体硬上限，在请求进入 WAF 规则前生效；超限请求会返回 Nginx/OpenResty 原生 413，不会被归类为 L3 上传防护规则命中。允许值使用 Nginx 大小格式，例如 `1m`、`50m`、`512m`、`1g`，最大建议不超过 `1g`。
+
+`LITEWAF_NGINX_VALIDATE_COMMAND` 用于高级 nginx 配置发布前校验。命令中的 `{prefix}` 会替换为后端构造的 staging 目录，`{config}` 会替换为 staging 中的有效 `nginx.conf`。当系统设置中存在受控 nginx 片段或完整 `nginx.conf` 覆盖草稿时，如果该命令未配置、无法执行或返回失败，发布会被阻断，不会改写活动 runtime artifacts。完整覆盖模式还必须保留 LiteWaf 健康检查、metrics、Lua WAF hook、listener include 和 `proxy_pass $litewaf_upstream` 等关键不变量。
 
 上传大小限制按层级排查：L0 是 CDN、负载均衡、宿主机 Nginx 等 LiteWaf 前置代理限制，LiteWaf 不接管；L1 是本环境变量控制的网关硬上限；L2 是策略里的请求体检测读取上限；L3 是上传防护大小规则。Dashboard“系统设置 / 上传限制”和发布预览会展示 LiteWaf 可控的 L1/L2/L3 摘要和冲突提示。
 

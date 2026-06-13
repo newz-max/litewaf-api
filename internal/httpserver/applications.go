@@ -9,13 +9,14 @@ import (
 )
 
 type applicationRequest struct {
-	Name        string                      `json:"name"`
-	Mode        string                      `json:"mode"`
-	Enabled     *bool                       `json:"enabled"`
-	Description string                      `json:"description"`
-	Hosts       []model.ApplicationHost     `json:"hosts"`
-	Listeners   []model.ApplicationListener `json:"listeners"`
-	Upstreams   []model.ApplicationUpstream `json:"upstreams"`
+	Name        string                        `json:"name"`
+	Mode        string                        `json:"mode"`
+	Enabled     *bool                         `json:"enabled"`
+	Description string                        `json:"description"`
+	Hosts       []model.ApplicationHost       `json:"hosts"`
+	Listeners   []model.ApplicationListener   `json:"listeners"`
+	Upstreams   []model.ApplicationUpstream   `json:"upstreams"`
+	ProxyConfig *model.ApplicationProxyConfig `json:"proxy_config,omitempty"`
 }
 
 func (r applicationRequest) toModel() model.Application {
@@ -27,9 +28,19 @@ func (r applicationRequest) toModel() model.Application {
 		Hosts:       append([]model.ApplicationHost(nil), r.Hosts...),
 		Listeners:   append([]model.ApplicationListener(nil), r.Listeners...),
 		Upstreams:   append([]model.ApplicationUpstream(nil), r.Upstreams...),
+		ProxyConfig: cloneApplicationProxyConfig(r.ProxyConfig),
 	}
 	model.NormalizeApplication(&item)
 	return item
+}
+
+func cloneApplicationProxyConfig(input *model.ApplicationProxyConfig) *model.ApplicationProxyConfig {
+	if input == nil {
+		return nil
+	}
+	out := *input
+	out.Headers = append([]model.ApplicationProxyHeader(nil), input.Headers...)
+	return &out
 }
 
 func (h handlers) listApplications(w http.ResponseWriter, r *http.Request) {

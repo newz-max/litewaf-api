@@ -507,8 +507,9 @@ func countEnabledApplications(applications []model.Application) int {
 
 func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Operator string `json:"operator"`
-		Note     string `json:"note"`
+		Operator             string `json:"operator"`
+		Note                 string `json:"note"`
+		ConfirmAdvancedNginx bool   `json:"confirm_advanced_nginx"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if !decodeJSON(w, r, &input) {
@@ -540,6 +541,24 @@ func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	advancedReview, err := publish.BuildAdvancedNginxReview(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize, h.app.Config.NginxValidationCommand)
+	if err != nil {
+		h.audit(r, "publish", "release", 0, "failure", err)
+		h.writeServerError(w, err)
+		return
+	}
+	if advancedReview.HasAdvancedChanges && !input.ConfirmAdvancedNginx {
+		err := fmt.Errorf("advanced nginx changes require explicit confirmation")
+		h.audit(r, "publish", "release", 0, "failure", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if advancedReview.HasAdvancedChanges && advancedReview.Validation.Status != model.NginxValidationStatusPassed {
+		err := fmt.Errorf("advanced nginx config validation %s: %s", advancedReview.Validation.Status, advancedReview.Validation.Message)
+		h.audit(r, "publish", "release", 0, "failure", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	_, payload, checksum, err := publish.GenerateExtended(r.Context(), h.app.Store, version)
 	if err != nil {
 		h.audit(r, "publish", "release", 0, "failure", err)
@@ -551,7 +570,7 @@ func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 		h.writeServerError(w, err)
 		return
 	}
-	artifacts, err := publish.WriteRuntimeArtifactsWithClientMaxBodySize(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize)
+	artifacts, err := publish.WriteRuntimeArtifactsWithAdvancedNginx(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize, h.app.Config.NginxValidationCommand)
 	if err != nil {
 		h.audit(r, "publish", "release", 0, "failure", err)
 		h.writeServerError(w, err)
@@ -560,14 +579,15 @@ func (h handlers) createRelease(w http.ResponseWriter, r *http.Request) {
 	activation := publishActivationSummary(applications, artifacts, []string{}, "")
 	applyReloadResult(&activation, runGatewayReload(r.Context(), h.app.Config.GatewayReloadCommand))
 	record, err := h.app.Store.CreatePublishRecord(r.Context(), model.PublishRecord{
-		Version:    version,
-		Operator:   operator,
-		Status:     "success",
-		ConfigPath: h.app.Config.GatewayConfigPath,
-		Checksum:   checksum,
-		Note:       model.FormatPublishNote(input.Note, activation),
-		ConfigJSON: string(payload),
-		Activation: &activation,
+		Version:              version,
+		Operator:             operator,
+		Status:               "success",
+		ConfigPath:           h.app.Config.GatewayConfigPath,
+		Checksum:             checksum,
+		Note:                 model.FormatPublishNote(input.Note, activation),
+		ConfigJSON:           string(payload),
+		RuntimeArtifactsJSON: artifacts.RuntimeArtifactJSON,
+		Activation:           &activation,
 	})
 	h.auditMessage(r, "publish", "release", record.ID, resultFromErr(err), activationAuditSummary(activation), err)
 	h.writeCreated(w, record, err)
@@ -617,6 +637,11 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 	dynamicSummary := dynamicProtectionSummary(mergedDynamicProtectionRules(protectionRules, dynamicRules))
 	ecosystemSummary := ruleEcosystemSummary(rules, catalogs, catalogPackages, trustKeys, providers, providerPackages)
 	compatibilityDiagnostics := buildPublishCompatibilityDiagnostics(protectionRules, rateLimits, uploadRules, botRules, dynamicRules)
+	advancedReview, err := publish.BuildAdvancedNginxReview(r.Context(), h.app.Store, h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize, h.app.Config.NginxValidationCommand)
+	if err != nil {
+		h.writeServerError(w, err)
+		return
+	}
 	modules := protectionModuleMatrix(
 		ccSummary,
 		attackSummary,
@@ -659,6 +684,7 @@ func (h handlers) previewRelease(w http.ResponseWriter, r *http.Request) {
 			"module_matrix":             modules,
 			"risk_warnings":             protectionRisks(modules),
 			"compatibility_diagnostics": compatibilityDiagnostics,
+			"advanced_nginx":            advancedReview,
 		},
 	})
 }
@@ -1871,29 +1897,46 @@ func (h handlers) rollbackRelease(w http.ResponseWriter, r *http.Request) {
 		h.writeServerError(w, err)
 		return
 	}
-	artifacts, err := publish.WriteRuntimeArtifactsFromConfigWithClientMaxBodySize(r.Context(), h.app.Store, []byte(record.ConfigJSON), h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize)
-	if err != nil {
-		h.audit(r, "rollback", "release", record.ID, "failure", err)
-		h.writeServerError(w, err)
-		return
-	}
 	applications, err := publish.ApplicationsFromConfigJSON([]byte(record.ConfigJSON))
 	if err != nil {
 		h.audit(r, "rollback", "release", record.ID, "failure", err)
 		h.writeServerError(w, err)
 		return
 	}
+	var artifacts publish.RuntimeArtifacts
+	if record.RuntimeArtifactsJSON != "" {
+		snapshot, err := publish.RuntimeArtifactSnapshotFromJSON(record.RuntimeArtifactsJSON)
+		if err != nil {
+			h.audit(r, "rollback", "release", record.ID, "failure", err)
+			h.writeServerError(w, err)
+			return
+		}
+		if err := publish.WriteRuntimeArtifactSnapshot(snapshot); err != nil {
+			h.audit(r, "rollback", "release", record.ID, "failure", err)
+			h.writeServerError(w, err)
+			return
+		}
+		artifacts = publish.RuntimeArtifactsFromSnapshot(snapshot, h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize, applications)
+	} else {
+		artifacts, err = publish.WriteRuntimeArtifactsFromConfigWithClientMaxBodySize(r.Context(), h.app.Store, []byte(record.ConfigJSON), h.app.Config.GatewayConfigPath, h.app.Config.GatewayClientMaxBodySize)
+		if err != nil {
+			h.audit(r, "rollback", "release", record.ID, "failure", err)
+			h.writeServerError(w, err)
+			return
+		}
+	}
 	activation := publishActivationSummary(applications, artifacts, []string{}, record.Version)
 	applyReloadResult(&activation, runGatewayReload(r.Context(), h.app.Config.GatewayReloadCommand))
 	rollback, err := h.app.Store.CreatePublishRecord(r.Context(), model.PublishRecord{
-		Version:    fmt.Sprintf("%s-rollback-%d", record.Version, time.Now().UTC().Unix()),
-		Operator:   currentActor(r).Username,
-		Status:     "success",
-		ConfigPath: h.app.Config.GatewayConfigPath,
-		Checksum:   record.Checksum,
-		Note:       model.FormatPublishNote("rollback to "+record.Version, activation),
-		ConfigJSON: record.ConfigJSON,
-		Activation: &activation,
+		Version:              fmt.Sprintf("%s-rollback-%d", record.Version, time.Now().UTC().Unix()),
+		Operator:             currentActor(r).Username,
+		Status:               "success",
+		ConfigPath:           h.app.Config.GatewayConfigPath,
+		Checksum:             record.Checksum,
+		Note:                 model.FormatPublishNote("rollback to "+record.Version, activation),
+		ConfigJSON:           record.ConfigJSON,
+		RuntimeArtifactsJSON: record.RuntimeArtifactsJSON,
+		Activation:           &activation,
 	})
 	h.auditMessage(r, "rollback", "release", rollback.ID, resultFromErr(err), activationAuditSummary(activation), err)
 	h.writeCreated(w, rollback, err)

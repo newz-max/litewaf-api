@@ -65,6 +65,7 @@ func nginxConfigAuditSummary(item model.NginxConfigDraft) string {
 }
 
 func nginxConfigDraftFromRuntime(runtimeDir string, fallback model.NginxConfigDraft) model.NginxConfigDraft {
+	listenerDir := filepath.Join(runtimeDir, "listeners")
 	if content := readRuntimeNginxConfig(filepath.Join(runtimeDir, "nginx.conf")); content != "" {
 		fallback.Mode = model.NginxConfigModeFull
 		fallback.FullConfig = content
@@ -75,13 +76,18 @@ func nginxConfigDraftFromRuntime(runtimeDir string, fallback model.NginxConfigDr
 		return fallback
 	}
 
-	snippets := readRuntimeNginxSnippets(filepath.Join(runtimeDir, "listeners", "snippets"))
-	if !nginxSnippetsHaveContent(snippets) {
+	snippets := readRuntimeNginxSnippets(filepath.Join(listenerDir, "snippets"))
+	if nginxSnippetsHaveContent(snippets) {
+		fallback.Mode = model.NginxConfigModeSnippets
+		fallback.Snippets = snippets
+		fallback.FullConfig = ""
+	} else if runtimeListenerConfigExists(listenerDir) {
+		fallback.Mode = model.NginxConfigModeFull
+		fallback.FullConfig = strings.TrimSpace(publish.DefaultNginxConfig(listenerDir))
+		fallback.Snippets = []model.NginxConfigSnippet{}
+	} else {
 		return fallback
 	}
-	fallback.Mode = model.NginxConfigModeSnippets
-	fallback.Snippets = snippets
-	fallback.FullConfig = ""
 	if fallback.Validation.Status == "" {
 		fallback.Validation = model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked}
 	}
@@ -94,6 +100,15 @@ func readRuntimeNginxConfig(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func runtimeListenerConfigExists(listenerDir string) bool {
+	for _, name := range []string{"applications.conf", "body-size.conf"} {
+		if content := readRuntimeNginxConfig(filepath.Join(listenerDir, name)); content != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func readRuntimeNginxSnippets(snippetDir string) []model.NginxConfigSnippet {

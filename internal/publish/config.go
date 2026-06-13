@@ -1939,6 +1939,10 @@ http {
 `, listenerInclude)
 }
 
+func DefaultNginxConfig(listenerDir string) string {
+	return buildDefaultNginxConfig(listenerDir)
+}
+
 func applicationHostsFromGateway(applicationID int64, hosts []string) []model.ApplicationHost {
 	out := make([]model.ApplicationHost, 0, len(hosts))
 	for i, host := range hosts {

@@ -106,6 +106,7 @@ func registerRoutes(mux *http.ServeMux, logger *slog.Logger, application *app.Ap
 	mux.HandleFunc("GET /api/v1/releases/preview", handlers.require(permissionPublish, handlers.previewRelease))
 	mux.HandleFunc("POST /api/v1/releases/{version}/rollback", handlers.require(permissionPublish, handlers.rollbackRelease))
 	mux.HandleFunc("GET /api/v1/nginx-config", handlers.require(permissionRead, handlers.getNginxConfigDraft))
+	mux.HandleFunc("GET /api/v1/nginx-config/effective", handlers.require(permissionRead, handlers.getNginxEffectiveConfig))
 	mux.HandleFunc("PUT /api/v1/nginx-config", handlers.require(permissionWrite, handlers.updateNginxConfigDraft))
 	mux.HandleFunc("POST /api/v1/nginx-config/validate", handlers.require(permissionWrite, handlers.validateNginxConfigDraft))
 

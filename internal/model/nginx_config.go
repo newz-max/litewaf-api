@@ -31,6 +31,15 @@ type NginxConfigDraft struct {
 	PublishedAt *time.Time            `json:"published_at,omitempty"`
 }
 
+type NginxEffectiveConfig struct {
+	Source     string               `json:"source"`
+	Mode       string               `json:"mode"`
+	Snippets   []NginxConfigSnippet `json:"snippets"`
+	FullConfig string               `json:"full_config,omitempty"`
+	RuntimeDir string               `json:"runtime_dir,omitempty"`
+	ConfigPath string               `json:"config_path,omitempty"`
+}
+
 type NginxConfigSnippet struct {
 	IncludePoint string `json:"include_point"`
 	Content      string `json:"content"`

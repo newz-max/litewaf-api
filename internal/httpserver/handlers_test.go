@@ -704,7 +704,7 @@ func TestAdvancedNginxDraftAndPublishConfirmationGate(t *testing.T) {
 	}
 }
 
-func TestGetNginxConfigDraftFallsBackToRuntimeFullConfig(t *testing.T) {
+func TestGetNginxConfigDraftReturnsStoredDraftOnly(t *testing.T) {
 	runtimeDir := t.TempDir()
 	fullConfig := "events {}\nhttp { include /etc/litewaf/listeners/*.conf; }\n"
 	if err := os.WriteFile(filepath.Join(runtimeDir, "nginx.conf"), []byte(fullConfig), 0o600); err != nil {
@@ -727,12 +727,40 @@ func TestGetNginxConfigDraftFallsBackToRuntimeFullConfig(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
 		t.Fatalf("decode nginx config: %v", err)
 	}
-	if response.Item.Mode != model.NginxConfigModeFull || response.Item.FullConfig != strings.TrimSpace(fullConfig) {
-		t.Fatalf("unexpected runtime full config draft: %+v", response.Item)
+	if response.Item.Mode != model.NginxConfigModeSnippets || response.Item.FullConfig != "" || len(response.Item.Snippets) != 0 {
+		t.Fatalf("draft endpoint should not return runtime config: %+v", response.Item)
 	}
 }
 
-func TestGetNginxConfigDraftFallsBackToRuntimeSnippets(t *testing.T) {
+func TestGetNginxEffectiveConfigReturnsRuntimeFullConfig(t *testing.T) {
+	runtimeDir := t.TempDir()
+	fullConfig := "events {}\nhttp { include /etc/litewaf/listeners/*.conf; }\n"
+	if err := os.WriteFile(filepath.Join(runtimeDir, "nginx.conf"), []byte(fullConfig), 0o600); err != nil {
+		t.Fatalf("write nginx.conf: %v", err)
+	}
+	handler := testServerWithConfig(t, func(cfg *config.Config) {
+		cfg.GatewayConfigPath = filepath.Join(runtimeDir, "active.json")
+	})
+	token := adminToken(t, handler)
+
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config/effective", nil), token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get effective nginx config status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Item model.NginxEffectiveConfig `json:"item"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode effective nginx config: %v", err)
+	}
+	if response.Item.Source != "runtime_full" || response.Item.Mode != model.NginxConfigModeFull || response.Item.FullConfig != strings.TrimSpace(fullConfig) {
+		t.Fatalf("unexpected runtime full config: %+v", response.Item)
+	}
+}
+
+func TestGetNginxEffectiveConfigReturnsRuntimeSnippets(t *testing.T) {
 	runtimeDir := t.TempDir()
 	snippetDir := filepath.Join(runtimeDir, "listeners", "snippets")
 	if err := os.MkdirAll(snippetDir, 0o755); err != nil {
@@ -749,20 +777,20 @@ func TestGetNginxConfigDraftFallsBackToRuntimeSnippets(t *testing.T) {
 	})
 	token := adminToken(t, handler)
 
-	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config/effective", nil), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("get effective nginx config status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var response struct {
-		Item model.NginxConfigDraft `json:"item"`
+		Item model.NginxEffectiveConfig `json:"item"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
-		t.Fatalf("decode nginx config: %v", err)
+		t.Fatalf("decode effective nginx config: %v", err)
 	}
-	if response.Item.Mode != model.NginxConfigModeSnippets {
-		t.Fatalf("expected snippets mode, got %+v", response.Item)
+	if response.Item.Source != "runtime_snippets" || response.Item.Mode != model.NginxConfigModeSnippets {
+		t.Fatalf("expected runtime snippets mode, got %+v", response.Item)
 	}
 	snippets := map[string]string{}
 	for _, snippet := range response.Item.Snippets {
@@ -782,7 +810,7 @@ func TestGetNginxConfigDraftFallsBackToRuntimeSnippets(t *testing.T) {
 	}
 }
 
-func TestGetNginxConfigDraftFallsBackToDefaultFullConfigWhenRuntimeListenersExist(t *testing.T) {
+func TestGetNginxEffectiveConfigReturnsDefaultFullConfigWhenRuntimeListenersExist(t *testing.T) {
 	runtimeDir := t.TempDir()
 	listenerDir := filepath.Join(runtimeDir, "listeners")
 	if err := os.MkdirAll(listenerDir, 0o755); err != nil {
@@ -796,19 +824,19 @@ func TestGetNginxConfigDraftFallsBackToDefaultFullConfigWhenRuntimeListenersExis
 	})
 	token := adminToken(t, handler)
 
-	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config/effective", nil), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("get effective nginx config status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var response struct {
-		Item model.NginxConfigDraft `json:"item"`
+		Item model.NginxEffectiveConfig `json:"item"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
-		t.Fatalf("decode nginx config: %v", err)
+		t.Fatalf("decode effective nginx config: %v", err)
 	}
-	if response.Item.Mode != model.NginxConfigModeFull {
+	if response.Item.Source != "generated_default" || response.Item.Mode != model.NginxConfigModeFull {
 		t.Fatalf("expected full mode, got %+v", response.Item)
 	}
 	if !strings.Contains(response.Item.FullConfig, "include "+filepath.ToSlash(filepath.Join(listenerDir, "*.conf"))+";") {
@@ -819,7 +847,7 @@ func TestGetNginxConfigDraftFallsBackToDefaultFullConfigWhenRuntimeListenersExis
 	}
 }
 
-func TestGetNginxConfigDraftPrefersSavedDraftOverRuntimeConfig(t *testing.T) {
+func TestGetNginxConfigDraftReturnsSavedDraftWhenRuntimeConfigExists(t *testing.T) {
 	runtimeDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(runtimeDir, "nginx.conf"), []byte("events {}\nhttp {}\n"), 0o600); err != nil {
 		t.Fatalf("write nginx.conf: %v", err)
@@ -857,24 +885,24 @@ func TestGetNginxConfigDraftPrefersSavedDraftOverRuntimeConfig(t *testing.T) {
 	}
 }
 
-func TestGetNginxConfigDraftIgnoresMissingRuntimeConfig(t *testing.T) {
+func TestGetNginxEffectiveConfigReturnsMissingState(t *testing.T) {
 	handler := testServer(t)
 	token := adminToken(t, handler)
 
-	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config", nil), token)
+	req := withToken(httptest.NewRequest(http.MethodGet, "/api/v1/nginx-config/effective", nil), token)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("get nginx config status = %d body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("get effective nginx config status = %d body=%s", rec.Code, rec.Body.String())
 	}
 	var response struct {
-		Item model.NginxConfigDraft `json:"item"`
+		Item model.NginxEffectiveConfig `json:"item"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
-		t.Fatalf("decode nginx config: %v", err)
+		t.Fatalf("decode effective nginx config: %v", err)
 	}
-	if response.Item.Mode != model.NginxConfigModeSnippets || len(response.Item.Snippets) != 0 || response.Item.FullConfig != "" {
-		t.Fatalf("expected empty nginx draft, got %+v", response.Item)
+	if response.Item.Source != "missing" || response.Item.Mode != model.NginxConfigModeSnippets || len(response.Item.Snippets) != 0 || response.Item.FullConfig != "" {
+		t.Fatalf("expected missing effective nginx config, got %+v", response.Item)
 	}
 }
 

@@ -12,10 +12,12 @@ import (
 
 func (h handlers) getNginxConfigDraft(w http.ResponseWriter, r *http.Request) {
 	item, err := h.app.Store.GetNginxConfigDraft(r.Context())
-	if err == nil && !model.NginxConfigDraftHasAdvancedChanges(item) {
-		item = nginxConfigDraftFromRuntime(filepath.Dir(h.app.Config.GatewayConfigPath), item)
-	}
 	h.writeItem(w, item, err)
+}
+
+func (h handlers) getNginxEffectiveConfig(w http.ResponseWriter, r *http.Request) {
+	item := nginxEffectiveConfigFromRuntime(filepath.Dir(h.app.Config.GatewayConfigPath))
+	h.writeItem(w, item, nil)
 }
 
 func (h handlers) updateNginxConfigDraft(w http.ResponseWriter, r *http.Request) {
@@ -64,34 +66,39 @@ func nginxConfigAuditSummary(item model.NginxConfigDraft) string {
 	return boundedSummary("mode="+item.Mode, 256)
 }
 
-func nginxConfigDraftFromRuntime(runtimeDir string, fallback model.NginxConfigDraft) model.NginxConfigDraft {
+func nginxEffectiveConfigFromRuntime(runtimeDir string) model.NginxEffectiveConfig {
 	listenerDir := filepath.Join(runtimeDir, "listeners")
-	if content := readRuntimeNginxConfig(filepath.Join(runtimeDir, "nginx.conf")); content != "" {
-		fallback.Mode = model.NginxConfigModeFull
-		fallback.FullConfig = content
-		fallback.Snippets = []model.NginxConfigSnippet{}
-		if fallback.Validation.Status == "" {
-			fallback.Validation = model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked}
-		}
-		return fallback
+	configPath := filepath.Join(runtimeDir, "nginx.conf")
+	item := model.NginxEffectiveConfig{
+		Source:     "missing",
+		Mode:       model.NginxConfigModeSnippets,
+		Snippets:   []model.NginxConfigSnippet{},
+		RuntimeDir: runtimeDir,
+		ConfigPath: configPath,
+	}
+	if content := readRuntimeNginxConfig(configPath); content != "" {
+		item.Source = "runtime_full"
+		item.Mode = model.NginxConfigModeFull
+		item.FullConfig = content
+		item.Snippets = []model.NginxConfigSnippet{}
+		return item
 	}
 
 	snippets := readRuntimeNginxSnippets(filepath.Join(listenerDir, "snippets"))
 	if nginxSnippetsHaveContent(snippets) {
-		fallback.Mode = model.NginxConfigModeSnippets
-		fallback.Snippets = snippets
-		fallback.FullConfig = ""
-	} else if runtimeListenerConfigExists(listenerDir) {
-		fallback.Mode = model.NginxConfigModeFull
-		fallback.FullConfig = strings.TrimSpace(publish.DefaultNginxConfig(listenerDir))
-		fallback.Snippets = []model.NginxConfigSnippet{}
-	} else {
-		return fallback
+		item.Source = "runtime_snippets"
+		item.Mode = model.NginxConfigModeSnippets
+		item.Snippets = snippets
+		return item
 	}
-	if fallback.Validation.Status == "" {
-		fallback.Validation = model.NginxValidationResult{Status: model.NginxValidationStatusUnchecked}
+	if runtimeListenerConfigExists(listenerDir) {
+		item.Source = "generated_default"
+		item.Mode = model.NginxConfigModeFull
+		item.FullConfig = strings.TrimSpace(publish.DefaultNginxConfig(listenerDir))
+		item.Snippets = []model.NginxConfigSnippet{}
+		return item
 	}
-	return fallback
+	return item
 }
 
 func readRuntimeNginxConfig(path string) string {
